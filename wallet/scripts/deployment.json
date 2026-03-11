@@ -1,0 +1,26 @@
+{
+  "testToken": {
+    "address": "0x0601ef21219d306faf46dd16a17c947cea324fbd",
+    "name": "Test USDC",
+    "symbol": "TUSDC",
+    "decimals": 18,
+    "blockNumber": 10340583
+  },
+  "privateERC20WithRestrictionList": {
+    "implementation": "0xe7bc1a2a2633a1fa4e361f98c4841cc3c58b94cd",
+    "implementationBlockNumber": 10340584,
+    "factory": "0x82b9ceb1962a9d2e5c3ae0b5c77daa3cd20227d9",
+    "factoryBlockNumber": 10340585
+  },
+  "restrictionListRegistryFactory": {
+    "address": "0x4517eEab18E430a6dee862d706335a08897157a2",
+    "blockNumber": 10340586
+  },
+  "privateToken": {
+    "address": "0xe7bc1a2a2633a1fa4e361f98c4841cc3c58b94cd",
+    "name": "Private TUSDC",
+    "symbol": "pTUSDC",
+    "underlying": "0x0601ef21219d306faf46dd16a17c947cea324fbd",
+    "blockNumber": 10340587
+  }
+}
