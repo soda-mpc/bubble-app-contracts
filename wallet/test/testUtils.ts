@@ -10,6 +10,23 @@ import {
   encrypt
 } from "soda-sdk";
 
+async function getNetworkWithTimeout(timeoutMs: number, timeoutMessage: string) {
+  let timeoutId: NodeJS.Timeout | undefined;
+  try {
+    const network = await Promise.race([
+      hre.ethers.provider.getNetwork(),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+      }),
+    ]);
+    return network as any;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 // Utility function to retry operations with exponential backoff
 async function retryWithBackoff<T>(
   operation: () => Promise<T>,
@@ -70,18 +87,14 @@ export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl
   let chainId: number;
   try {
     console.log(`[getUserKeyViaProxy] Getting network info for address ${userAddress}...`);
-    const network = await Promise.race([
-      hre.ethers.provider.getNetwork(),
-      new Promise((_, reject) => 
-        setTimeout(() => {
-          console.error(`[getUserKeyViaProxy] Network call timeout after 30s for address ${userAddress}`);
-          reject(new Error('Network call timeout'));
-        }, 30000)
-      )
-    ]) as any;
+    const network = await getNetworkWithTimeout(
+      30000,
+      `[getUserKeyViaProxy] Network call timeout after 30s for address ${userAddress}`
+    );
     chainId = Number(network.chainId);
     console.log(`[getUserKeyViaProxy] Got network chainId: ${chainId} for address ${userAddress}`);
   } catch (error) {
+    console.error(error);
     // Fallback to world-mobile-testnet chain ID if network call fails
     console.warn(`[getUserKeyViaProxy] Network call failed, using fallback chainId 323432 for address ${userAddress}`);
     chainId = 323432;
@@ -281,15 +294,10 @@ export async function decryptValueViaProxy(
   let chainId: number;
   try {
     console.log(`[decryptValueViaProxy] Getting network info for handle ${handleHex.substring(0, 20)}...`);
-    const network = await Promise.race([
-      hre.ethers.provider.getNetwork(),
-      new Promise((_, reject) => 
-        setTimeout(() => {
-          console.error(`[decryptValueViaProxy] Network call timeout after 30s for handle ${handleHex.substring(0, 20)}`);
-          reject(new Error('Network call timeout'));
-        }, 30000)
-      )
-    ]) as any;
+    const network = await getNetworkWithTimeout(
+      30000,
+      `[decryptValueViaProxy] Network call timeout after 30s for handle ${handleHex.substring(0, 20)}`
+    );
     chainId = Number(network.chainId);
     console.log(`[decryptValueViaProxy] Got network chainId: ${chainId} for handle ${handleHex.substring(0, 20)}`);
   } catch (error) {
@@ -431,15 +439,10 @@ export async function decryptMultipleValuesViaProxy(
   let chainId: number;
   try {
     console.log(`[decryptMultipleValuesViaProxy] Getting network info for ${handles.length} handle(s)...`);
-    const network = await Promise.race([
-      hre.ethers.provider.getNetwork(),
-      new Promise((_, reject) => 
-        setTimeout(() => {
-          console.error(`[decryptMultipleValuesViaProxy] Network call timeout after 30s for ${handles.length} handle(s)`);
-          reject(new Error('Network call timeout'));
-        }, 30000)
-      )
-    ]) as any;
+    const network = await getNetworkWithTimeout(
+      30000,
+      `[decryptMultipleValuesViaProxy] Network call timeout after 30s for ${handles.length} handle(s)`
+    );
     chainId = Number(network.chainId);
     console.log(`[decryptMultipleValuesViaProxy] Got network chainId: ${chainId} for ${handles.length} handle(s)`);
   } catch (error) {

@@ -44,6 +44,7 @@ async function decryptBalanceViaProxy(
 }
 
 describe("PrivateERC20WithRestrictionList", function () {
+  this.timeout(180000);
   let userAesKey: Buffer;
   let userAddress: string;
   let privateToken: PrivateERC20WithRestrictionList256;
@@ -109,17 +110,32 @@ describe("PrivateERC20WithRestrictionList", function () {
     await waitForDeploymentConfirmation(mockToken);
     await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // Deploy private token with restriction lists
+    // Deploy private token implementation + proxy and initialize through proxy
     const ContractFactory = await hre.ethers.getContractFactory("PrivateERC20WithRestrictionList256", defaultSigner);
-    privateToken = await ContractFactory.deploy(
-      "ssbtUSDC", 
-      "ssbtUSDC", 
-      await mockToken.getAddress(),
-      [await companyRegistry.getAddress(), await govRegistry.getAddress()],
-      userAddress
+    const implementation = await ContractFactory.deploy();
+    await implementation.waitForDeployment();
+    await waitForDeploymentConfirmation(implementation);
+
+    const ProxyFactory = await hre.ethers.getContractFactory(
+      "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy",
+      defaultSigner
     );
-    await privateToken.waitForDeployment();
-    await waitForDeploymentConfirmation(privateToken);
+    const proxy = await ProxyFactory.deploy(await implementation.getAddress(), "0x");
+    await proxy.waitForDeployment();
+    await waitForDeploymentConfirmation(proxy);
+    privateToken = ContractFactory.attach(await proxy.getAddress()) as PrivateERC20WithRestrictionList256;
+
+    await (await (privateToken as any)["initialize(string,string,address,address,address)"](
+      "ssbtUSDC",
+      "ssbtUSDC",
+      await mockToken.getAddress(),
+      userAddress,
+      userAddress
+    )).wait();
+
+    // Configure restriction registries post-initialization through owner-only functions.
+    await (await privateToken.addRestrictionListRegistry(await companyRegistry.getAddress())).wait();
+    await (await privateToken.addRestrictionListRegistry(await govRegistry.getAddress())).wait();
     await new Promise(resolve => setTimeout(resolve, 15000));
 
     const privateTokenCode = await hre.ethers.provider.getCode(await privateToken.getAddress());
@@ -893,6 +909,83 @@ describe("PrivateERC20WithRestrictionList", function () {
       // Try a restricted operation and catch the revert to see if it would emit the event
       await expect(privateToken["transfer(address,uint256)"](restrictedWallet.address, 100))
         .to.be.revertedWithCustomError(privateToken, "AccountIsRestricted");
+    });
+  });
+
+  describe("Pause Functionality", function () {
+    const pauseTestShieldAmount = hre.ethers.parseUnits("20", 18);
+
+    beforeEach(async function () {
+      // Ensure each test starts unpaused even if a prior test left paused state.
+      if (await privateToken.paused()) {
+        await (await privateToken.unpause()).wait();
+      }
+
+      // Ensure user has enough underlying tokens and allowance, then shield once.
+      await (await mockToken.mint(userAddress, pauseTestShieldAmount)).wait();
+      await (await mockToken.approve(await privateToken.getAddress(), pauseTestShieldAmount)).wait();
+      await (await privateToken.shield(pauseTestShieldAmount)).wait();
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    });
+
+    it("should allow owner to pause and emit Paused event", async function () {
+      const tx = await privateToken.pause();
+      const receipt = await tx.wait();
+      expect(receipt).to.not.be.null;
+
+      const pausedEvent = receipt?.logs
+        .map((log: any) => {
+          try {
+            return privateToken.interface.parseLog(log);
+          } catch {
+            return undefined;
+          }
+        })
+        .find((decoded: any) => decoded?.name === "Paused");
+
+      expect(pausedEvent).to.not.be.undefined;
+      if (pausedEvent) {
+        expect(pausedEvent.args.account).to.equal(userAddress);
+      }
+    });
+
+    it("should allow owner to unpause and emit Unpaused event", async function () {
+      await (await privateToken.pause()).wait();
+      const tx = await privateToken.unpause();
+      const receipt = await tx.wait();
+      expect(receipt).to.not.be.null;
+
+      const unpausedEvent = receipt?.logs
+        .map((log: any) => {
+          try {
+            return privateToken.interface.parseLog(log);
+          } catch {
+            return undefined;
+          }
+        })
+        .find((decoded: any) => decoded?.name === "Unpaused");
+
+      expect(unpausedEvent).to.not.be.undefined;
+      if (unpausedEvent) {
+        expect(unpausedEvent.args.account).to.equal(userAddress);
+      }
+    });
+
+    it("should revert token operations while paused", async function () {
+      await (await privateToken.pause()).wait();
+
+      await expect(
+        privateToken["transfer(address,uint256)"](otherWallet.address, hre.ethers.parseUnits("1", 18))
+      ).to.be.revertedWithCustomError(privateToken, "EnforcedPause");
+    });
+
+    it("should revert pause when already paused", async function () {
+      await (await privateToken.pause()).wait();
+      await expect(privateToken.pause()).to.be.revertedWithCustomError(privateToken, "EnforcedPause");
+    });
+
+    it("should revert unpause when not paused", async function () {
+      await expect(privateToken.unpause()).to.be.revertedWithCustomError(privateToken, "ExpectedPause");
     });
   });
 }); 

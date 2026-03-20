@@ -3,34 +3,24 @@ pragma solidity ^0.8.24;
 
 import "../PrivateERC20Contract256.sol";
 import "./RestrictionListIntegration.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 /// @title PrivateERC20WithRestrictionList256
 /// @notice Enhanced PrivateERC20Contract256 with multiple restriction list functionality and pause capability
 /// @dev This contract demonstrates how to integrate multiple restriction list registries with 256-bit contract
 /// Restricted addresses cannot send, receive, approve, or perform other token operations
 /// The contract can be paused by the owner to halt all operations
-contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, RestrictionListIntegration {
+contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, RestrictionListIntegration, PausableUpgradeable {
     /// @notice Custom errors for gas-efficient reverts
     error NewOwnerIsZeroAddress();
-    error AlreadyPaused();
-    error NotPaused();
-    error ContractIsPaused();
     error NoRegistriesActive();
     
     /// @notice Emitted when restriction list enforcement is enabled or disabled
     /// @param enabled Whether restriction list enforcement is enabled
     event RestrictionListEnforcementChanged(bool enabled);
 
-    /// @notice Emitted when the contract is paused or unpaused
-    /// @param account The address that triggered the pause/unpause
-    /// @param paused Whether the contract is now paused
-    event Paused(address indexed account, bool paused);
-
     /// @notice Whether restriction list enforcement is currently enabled
     bool public restrictionListEnforcementEnabled;
-
-    /// @notice Whether the contract is currently paused
-    bool public paused;
 
     /// @notice Disables initializers in the implementation contract
     constructor() RestrictionListIntegration(new address[](0)) {
@@ -54,6 +44,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     ) public initializer {
         // Initialize parent contract
         PrivateERC20Contract256.initialize(name_, symbol_, underlying_, owner_, master_);
+        __Pausable_init();
         // Initialize restriction list registries
         _initializeRestrictionListRegistries(restrictionListRegistries_);
         restrictionListEnforcementEnabled = (restrictionListRegistries_.length > 0);
@@ -426,24 +417,12 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     /// @notice Pause the contract (only owner)
     /// @dev Pauses all token operations
     function pause() external onlyOwner {
-        if (paused) revert AlreadyPaused();
-        
-        paused = true;
-        emit Paused(msg.sender, true);
+        _pause();
     }
 
     /// @notice Unpause the contract (only owner)
     /// @dev Resumes all token operations
     function unpause() external onlyOwner {
-        if (!paused) revert NotPaused();
-        
-        paused = false;
-        emit Paused(msg.sender, false);
-    }
-
-    /// @notice Modifier to check if the contract is not paused
-    modifier whenNotPaused() {
-        if (paused) revert ContractIsPaused();
-        _;
+        _unpause();
     }
 }
