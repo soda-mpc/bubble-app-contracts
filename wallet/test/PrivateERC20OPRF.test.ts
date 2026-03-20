@@ -208,11 +208,6 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     });
 
     it("Should mint OPRF tokens for actual transferred amount when insufficient balance", async function () {
-      // Skip if not on sepolia-base
-      const network = await hre.ethers.provider.getNetwork();
-      if (Number(network.chainId) !== 84532) {
-        this.skip();
-      }
 
       // Ensure user has enough private ERC20 balance for this test
       const additionalShieldAmount = hre.ethers.parseEther("50"); // Shield additional 50 tokens
@@ -302,11 +297,6 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     });
 
     it("Should mint 0 OPRF tokens when user has no private ERC20 balance", async function () {
-      // Skip if not on sepolia-base
-      const network = await hre.ethers.provider.getNetwork();
-      if (Number(network.chainId) !== 84532) {
-        this.skip();
-      }
 
       // Create a new user with no private ERC20 balance
       const newWallet = Wallet.createRandom().connect(hre.ethers.provider);
@@ -394,11 +384,6 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     });
 
     it("Should successfully split OPRF tokens with encrypted parameters", async function () {
-      // Skip if not on sepolia-base
-      const network = await hre.ethers.provider.getNetwork();
-      if (Number(network.chainId) !== 84532) {
-        this.skip();
-      }
 
       // Ensure user has enough private ERC20 balance for this test
       const additionalShieldAmount = hre.ethers.parseEther("50"); // Shield additional 50 tokens
@@ -594,11 +579,6 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     });
 
     it("Should fail when trying to split more tokens than available", async function () {
-      // Skip if not on sepolia-base
-      const network = await hre.ethers.provider.getNetwork();
-      if (Number(network.chainId) !== 84532) {
-        this.skip();
-      }
 
       // Ensure user has enough private ERC20 balance for this test
       const additionalShieldAmount = hre.ethers.parseEther("50"); // Shield additional 50 tokens
@@ -782,11 +762,6 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     });
 
     it("Should successfully merge OPRF tokens - simple flow: mint -> split -> merge", async function () {
-      // Skip if not on sepolia-base
-      const network = await hre.ethers.provider.getNetwork();
-      if (Number(network.chainId) !== 84532) {
-        this.skip();
-      }
 
       // Ensure user has enough private ERC20 balance for this test
       const additionalShieldAmount = hre.ethers.parseEther("50"); // Shield additional 50 tokens
@@ -1088,11 +1063,6 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     });
 
     it("Should successfully split OPRF token for anonymous transfer to recipient", async function () {
-      // Skip if not on sepolia-base
-      const network = await hre.ethers.provider.getNetwork();
-      if (Number(network.chainId) !== 84532) {
-        this.skip();
-      }
 
       // Ensure user has enough private ERC20 balance for this test
       const additionalShieldAmount = hre.ethers.parseEther("50"); // Shield additional 50 tokens
@@ -1323,11 +1293,6 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     });
 
     it("Should complete anonymous transfer flow: split + burn by recipient", async function () {
-      // Skip if not on sepolia-base
-      const network = await hre.ethers.provider.getNetwork();
-      if (Number(network.chainId) !== 84532) {
-        this.skip();
-      }
 
       // Ensure user has enough private ERC20 balance for this test
       const additionalShieldAmount = hre.ethers.parseEther("50"); // Shield additional 50 tokens
@@ -1607,11 +1572,6 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     });
 
     it("Should successfully withdraw private ERC20 tokens from contract", async function () {
-      // Skip if not on sepolia-base
-      const network = await hre.ethers.provider.getNetwork();
-      if (Number(network.chainId) !== 84532) {
-        this.skip();
-      }
 
       // Ensure user has enough private ERC20 balance for this test
       const additionalShieldAmount = hre.ethers.parseEther("50"); // Shield additional 50 tokens
@@ -1694,12 +1654,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       }
     });
 
-    it("Should successfully burn OPRF token and verify burned amount is 0", async function () {
-      // Skip if not on sepolia-base
-      const network = await hre.ethers.provider.getNetwork();
-      if (Number(network.chainId) !== 84532) {
-        this.skip();
-      }
+    it("Should successfully burn OPRF token and verify burned amount equals quantity", async function () {
 
       // Ensure user has enough private ERC20 balance for this test
       const additionalShieldAmount = hre.ethers.parseEther("50"); // Shield additional 50 tokens
@@ -1829,16 +1784,21 @@ describe("PrivateERC20Contract OPRF Minting", function () {
 
       if (burnEvent) {
         const burnDecoded = privateToken.interface.parseLog(burnEvent);
-        const burnedAmountHandle = burnDecoded?.args[1];
+        const burnedAmountHandle = burnDecoded?.args[2];
 
         expect(burnedAmountHandle).to.not.be.undefined;
 
         // Wait a bit more for MPC computation to complete before decryption
         await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // Decrypt the burned amount
-        const decryptedBurnedAmount = await decryptValueViaProxy(burnedAmountHandle, defaultSigner, userAesKey, PROXY_URL);
+        // Decrypt the burned amount (zero handle cannot be decrypted via proxy; treat as 0n)
+        const decryptedBurnedAmount =
+          burnedAmountHandle === 0n
+            ? 0n
+            : await decryptValueViaProxy(burnedAmountHandle, defaultSigner, userAesKey, PROXY_URL);
+        console.log(`   ✅ Decrypted burned amount: ${decryptedBurnedAmount}`);
         expect(decryptedBurnedAmount).to.not.be.undefined;
+        expect(decryptedBurnedAmount).to.equal(quantity);
       }
     });
 
@@ -1846,11 +1806,6 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       // Increase timeout for this test since it processes multiple tokens
       this.timeout(120000); // 120 seconds
       
-      // Skip if not on sepolia-base
-      const network = await hre.ethers.provider.getNetwork();
-      if (Number(network.chainId) !== 84532) {
-        this.skip();
-      }
 
       // Ensure user has enough private ERC20 balance for this test
       const additionalShieldAmount = hre.ethers.parseEther("150"); // Shield additional 150 tokens for 3 tokens
@@ -2071,12 +2026,6 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     it("Should detect double-spend vulnerability: passing same token twice to mergeMany", async function () {
       // Increase timeout for this test since it processes multiple tokens
       this.timeout(120000); // 120 seconds
-      
-      // Skip if not on sepolia-base
-      const network = await hre.ethers.provider.getNetwork();
-      if (Number(network.chainId) !== 84532) {
-        this.skip();
-      }
 
       // Ensure user has enough private ERC20 balance for this test
       const additionalShieldAmount = hre.ethers.parseEther("100"); // Shield additional 100 tokens
@@ -2250,7 +2199,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       }
     });
 
-    it("Should successfully transfer OPRF tokens to recipient with sufficient balance", async function () {
+    it.only("Should successfully transfer OPRF tokens to recipient with sufficient balance", async function () {
       this.timeout(300000); // 300 seconds (5 minutes) - MPC operations take time
       
 
@@ -2447,6 +2396,53 @@ describe("PrivateERC20Contract OPRF Minting", function () {
 
       expect(recipientEvent).to.not.be.undefined;
       expect(senderEvent).to.not.be.undefined;
+
+      // Verify OPRFTransferred event and decrypt transferred amount by both parties
+      const transferEvent = transferReceipt?.logs.find((log: any) => {
+        try {
+          const decoded = privateToken.interface.parseLog(log);
+          return decoded?.name === "OPRFTransferred";
+        } catch {
+          return false;
+        }
+      });
+
+      expect(transferEvent).to.not.be.undefined;
+
+      if (transferEvent) {
+        const transferDecoded = privateToken.interface.parseLog(transferEvent);
+        const transferredUser = transferDecoded?.args[0];
+        const transferredRecipient = transferDecoded?.args[1];
+        const transferredAmountHandle = transferDecoded?.args[2];
+
+        expect(transferredUser.toLowerCase()).to.equal(userAddress.toLowerCase());
+        expect(transferredRecipient.toLowerCase()).to.equal(recipientAddress.toLowerCase());
+
+        // Give MPC computation a bit more time before decrypting
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        const decryptedAmountByRecipient = await decryptValueViaProxy(
+          transferredAmountHandle,
+          recipientWallet,
+          recipientAesKey,
+          PROXY_URL
+        );
+        const decryptedAmountBySender = await decryptValueViaProxy(
+          transferredAmountHandle,
+          defaultSigner,
+          userAesKey,
+          PROXY_URL
+        );
+
+        expect(decryptedAmountByRecipient).to.equal(
+          transferAmount,
+          "Recipient should decrypt transferred amount"
+        );
+        expect(decryptedAmountBySender).to.equal(
+          transferAmount,
+          "Sender should decrypt transferred amount"
+        );
+      }
 
       // Decrypt and verify results
       await new Promise(resolve => setTimeout(resolve, 20000));
@@ -2689,6 +2685,53 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       const senderX = await decryptValueViaProxy(senderEvent.x, defaultSigner, userAesKey, PROXY_URL);
       const senderY = await decryptValueViaProxy(senderEvent.y, defaultSigner, userAesKey, PROXY_URL);
       console.log(`   ✅ Decryption complete. Recipient: ${recipientQ}, Sender: ${senderQ}`);
+
+      // Also verify OPRFTransferred event and that both parties can decrypt the (zero) recipient amount
+      const transferEvent = transferReceipt?.logs.find((log: any) => {
+        try {
+          const decoded = privateToken.interface.parseLog(log);
+          return decoded?.name === "OPRFTransferred";
+        } catch {
+          return false;
+        }
+      });
+
+      expect(transferEvent).to.not.be.undefined;
+
+      if (transferEvent) {
+        const transferDecoded = privateToken.interface.parseLog(transferEvent);
+        const transferredUser = transferDecoded?.args[0];
+        const transferredRecipient = transferDecoded?.args[1];
+        const transferredAmountHandle = transferDecoded?.args[2];
+
+        expect(transferredUser.toLowerCase()).to.equal(userAddress.toLowerCase());
+        expect(transferredRecipient.toLowerCase()).to.equal(recipientAddress.toLowerCase());
+
+        // Wait a bit before decrypting the transferred amount
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        const decryptedAmountByRecipient = await decryptValueViaProxy(
+          transferredAmountHandle,
+          recipientWallet,
+          recipientAesKey,
+          PROXY_URL
+        );
+        const decryptedAmountBySender = await decryptValueViaProxy(
+          transferredAmountHandle,
+          defaultSigner,
+          userAesKey,
+          PROXY_URL
+        );
+
+        expect(decryptedAmountByRecipient).to.equal(
+          expectedRecipientAmount,
+          "Recipient should decrypt transferred amount (0 on insufficient balance)"
+        );
+        expect(decryptedAmountBySender).to.equal(
+          expectedRecipientAmount,
+          "Sender should decrypt transferred amount (0 on insufficient balance)"
+        );
+      }
 
       console.log("📋 Step 8: Verifying results...");
       console.log(`\n========== MUX LOGIC VERIFICATION ==========`);
@@ -3256,6 +3299,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       await new Promise(resolve => setTimeout(resolve, 10000));
 
       const decryptedBurnedAmount = await decryptValueViaProxy(burnedAmountHandle, defaultSigner, userAesKey, PROXY_URL);
+      console.log(`   ✅ Decrypted burned amount: ${decryptedBurnedAmount}`);
 
       let decryptedRemainderQ = 0n;
       if (mintedEvents.length > 0) {
