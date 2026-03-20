@@ -655,7 +655,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         itUint256 calldata q,
         uint128 y_clear,
         itUint256 calldata qSplit
-    ) external {
+    ) public virtual {
         // Validate and decrypt the encrypted parameters
         gtUint128 xGT = MpcCore.validateCiphertext(x);
         gtUint256 qGT = MpcCore.validateCiphertext(q);
@@ -693,7 +693,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         uint128 y_clear,
         itUint256 calldata qSplit,
         address recipient
-    ) external {
+    ) public virtual {
         // Validate and decrypt the encrypted parameters
         gtUint128 xGT = MpcCore.validateCiphertext(x);
         gtUint256 qGT = MpcCore.validateCiphertext(q);
@@ -732,7 +732,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         itUint256 calldata q,
         uint128 y_clear,
         address recipient
-    ) external {
+    ) public virtual {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         // Validate and decrypt the encrypted parameters
         gtUint128 xGT = MpcCore.validateCiphertext(x);
@@ -794,7 +794,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @return qMerged The encrypted quantity of the newly minted token (total of all burned tokens)
     function mergeMany(
         OPRFToken[] calldata tokens
-    ) external returns (gtUint128 x, gtUint128 y, gtUint256 qMerged) {
+    ) public virtual returns (gtUint128 x, gtUint128 y, gtUint256 qMerged) {
         require(tokens.length > 0, "At least one token required");
         
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
@@ -831,7 +831,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         OPRFToken[] calldata tokens,
         itUint256 calldata amount,
         address recipient
-    ) external returns (
+    ) public virtual returns (
         gtUint128 xRecipient,
         gtUint128 yRecipient,
         gtUint256 qRecipient,
@@ -891,7 +891,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         OPRFToken[] calldata tokens,
         itUint256 calldata amount,
         address recipient
-    ) external returns (
+    ) public virtual returns (
         gtUint128 xRemainder,
         gtUint128 yRemainder,
         gtUint256 qRemainder

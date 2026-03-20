@@ -84,16 +84,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         whenNotPaused
         returns (gtBool) 
     {
-        // Inline restriction check for sender
-        address restrictingRegistrySender = getRestrictingRegistry(msg.sender);
-        if (restrictingRegistrySender != address(0)) {
-            revert AccountIsRestricted(msg.sender, restrictingRegistrySender);
-        }
-        // Inline restriction check for receiver
-        address restrictingRegistryReceiver = getRestrictingRegistry(_to);
-        if (restrictingRegistryReceiver != address(0)) {
-            revert AccountIsRestricted(_to, restrictingRegistryReceiver);
-        }
+        _requireNotRestrictedPair(msg.sender, _to);
         return super.transfer(_to, _it);
     }
 
@@ -107,16 +98,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         whenNotPaused
         returns (gtBool) 
     {
-        // Inline restriction check for sender
-        address restrictingRegistrySender = getRestrictingRegistry(msg.sender);
-        if (restrictingRegistrySender != address(0)) {
-            revert AccountIsRestricted(msg.sender, restrictingRegistrySender);
-        }
-        // Inline restriction check for receiver
-        address restrictingRegistryReceiver = getRestrictingRegistry(_to);
-        if (restrictingRegistryReceiver != address(0)) {
-            revert AccountIsRestricted(_to, restrictingRegistryReceiver);
-        }
+        _requireNotRestrictedPair(msg.sender, _to);
         return super.transfer(_to, _value);
     }
 
@@ -130,16 +112,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         whenNotPaused
         returns (gtBool) 
     {
-        // Inline restriction check for sender
-        address restrictingRegistrySender = getRestrictingRegistry(msg.sender);
-        if (restrictingRegistrySender != address(0)) {
-            revert AccountIsRestricted(msg.sender, restrictingRegistrySender);
-        }
-        // Inline restriction check for receiver
-        address restrictingRegistryReceiver = getRestrictingRegistry(_to);
-        if (restrictingRegistryReceiver != address(0)) {
-            revert AccountIsRestricted(_to, restrictingRegistryReceiver);
-        }
+        _requireNotRestrictedPair(msg.sender, _to);
         return super.contractTransfer(_to, _value);
     }
 
@@ -154,21 +127,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         whenNotPaused
         returns (gtBool) 
     {
-        // Inline restriction check for sender (msg.sender)
-        address restrictingRegistrySender = getRestrictingRegistry(msg.sender);
-        if (restrictingRegistrySender != address(0)) {
-            revert AccountIsRestricted(msg.sender, restrictingRegistrySender);
-        }
-        // Inline restriction check for from address
-        address restrictingRegistryFrom = getRestrictingRegistry(_from);
-        if (restrictingRegistryFrom != address(0)) {
-            revert AccountIsRestricted(_from, restrictingRegistryFrom);
-        }
-        // Inline restriction check for to address
-        address restrictingRegistryTo = getRestrictingRegistry(_to);
-        if (restrictingRegistryTo != address(0)) {
-            revert AccountIsRestricted(_to, restrictingRegistryTo);
-        }
+        _requireNotRestrictedTriple(msg.sender, _from, _to);
         return super.transferFrom(_from, _to, _it);
     }
 
@@ -183,21 +142,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         whenNotPaused
         returns (gtBool) 
     {
-        // Inline restriction check for sender (msg.sender)
-        address restrictingRegistrySender = getRestrictingRegistry(msg.sender);
-        if (restrictingRegistrySender != address(0)) {
-            revert AccountIsRestricted(msg.sender, restrictingRegistrySender);
-        }
-        // Inline restriction check for from address
-        address restrictingRegistryFrom = getRestrictingRegistry(_from);
-        if (restrictingRegistryFrom != address(0)) {
-            revert AccountIsRestricted(_from, restrictingRegistryFrom);
-        }
-        // Inline restriction check for to address
-        address restrictingRegistryTo = getRestrictingRegistry(_to);
-        if (restrictingRegistryTo != address(0)) {
-            revert AccountIsRestricted(_to, restrictingRegistryTo);
-        }
+        _requireNotRestrictedTriple(msg.sender, _from, _to);
         return super.transferFrom(_from, _to, _value);
     }
 
@@ -212,21 +157,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         whenNotPaused
         returns (gtBool) 
     {
-        // Inline restriction check for sender (msg.sender)
-        address restrictingRegistrySender = getRestrictingRegistry(msg.sender);
-        if (restrictingRegistrySender != address(0)) {
-            revert AccountIsRestricted(msg.sender, restrictingRegistrySender);
-        }
-        // Inline restriction check for from address
-        address restrictingRegistryFrom = getRestrictingRegistry(_from);
-        if (restrictingRegistryFrom != address(0)) {
-            revert AccountIsRestricted(_from, restrictingRegistryFrom);
-        }
-        // Inline restriction check for to address
-        address restrictingRegistryTo = getRestrictingRegistry(_to);
-        if (restrictingRegistryTo != address(0)) {
-            revert AccountIsRestricted(_to, restrictingRegistryTo);
-        }
+        _requireNotRestrictedTriple(msg.sender, _from, _to);
         return super.contractTransferFrom(_from, _to, _value);
     }
 
@@ -240,16 +171,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         whenNotPaused
         returns (bool) 
     {
-        // Inline restriction check for sender (msg.sender)
-        address restrictingRegistrySender = getRestrictingRegistry(msg.sender);
-        if (restrictingRegistrySender != address(0)) {
-            revert AccountIsRestricted(msg.sender, restrictingRegistrySender);
-        }
-        // Inline restriction check for spender
-        address restrictingRegistrySpender = getRestrictingRegistry(_spender);
-        if (restrictingRegistrySpender != address(0)) {
-            revert AccountIsRestricted(_spender, restrictingRegistrySpender);
-        }
+        _requireNotRestrictedPair(msg.sender, _spender);
         return super.approve(_spender, _it);
     }
 
@@ -263,16 +185,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         whenNotPaused
         returns (bool) 
     {
-        // Inline restriction check for sender (msg.sender)
-        address restrictingRegistrySender = getRestrictingRegistry(msg.sender);
-        if (restrictingRegistrySender != address(0)) {
-            revert AccountIsRestricted(msg.sender, restrictingRegistrySender);
-        }
-        // Inline restriction check for spender
-        address restrictingRegistrySpender = getRestrictingRegistry(_spender);
-        if (restrictingRegistrySpender != address(0)) {
-            revert AccountIsRestricted(_spender, restrictingRegistrySpender);
-        }
+        _requireNotRestrictedPair(msg.sender, _spender);
         return super.approve(_spender, _value);
     }
 
@@ -286,16 +199,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         whenNotPaused
         returns (bool) 
     {
-        // Inline restriction check for sender (msg.sender)
-        address restrictingRegistrySender = getRestrictingRegistry(msg.sender);
-        if (restrictingRegistrySender != address(0)) {
-            revert AccountIsRestricted(msg.sender, restrictingRegistrySender);
-        }
-        // Inline restriction check for spender
-        address restrictingRegistrySpender = getRestrictingRegistry(_spender);
-        if (restrictingRegistrySpender != address(0)) {
-            revert AccountIsRestricted(_spender, restrictingRegistrySpender);
-        }
+        _requireNotRestrictedPair(msg.sender, _spender);
         return super.contractApprove(_spender, _value);
     }
 
@@ -308,11 +212,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         whenNotPaused
         returns (bool) 
     {
-        // Inline restriction check instead of modifier
-        address restrictingRegistry = getRestrictingRegistry(msg.sender);
-        if (restrictingRegistry != address(0)) {
-            revert AccountIsRestricted(msg.sender, restrictingRegistry);
-        }
+        _requireNotRestrictedAccount(msg.sender);
         return super.shield(amount);
     }
 
@@ -325,12 +225,21 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         whenNotPaused
         returns (bool) 
     {
-        // Inline restriction check instead of modifier
-        address restrictingRegistry = getRestrictingRegistry(msg.sender);
-        if (restrictingRegistry != address(0)) {
-            revert AccountIsRestricted(msg.sender, restrictingRegistry);
-        }
+        _requireNotRestrictedAccount(msg.sender);
         return super.unshield(privateAmount);
+    }
+
+    /// @notice Override unshieldForMaster to include restriction list checks
+    /// @param privateAmount The amount to unshield
+    /// @return True if the unshield was successful
+    function unshieldForMaster(uint256 privateAmount)
+        public
+        override
+        whenNotPaused
+        returns (bool)
+    {
+        _requireNotRestrictedAccount(msg.sender);
+        return super.unshieldForMaster(privateAmount);
     }
 
     /// @notice Override mintOPRFToken to include restriction list checks
@@ -340,12 +249,111 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         override 
         whenNotPaused
     {
-        // Inline restriction check instead of modifier
-        address restrictingRegistry = getRestrictingRegistry(msg.sender);
-        if (restrictingRegistry != address(0)) {
-            revert AccountIsRestricted(msg.sender, restrictingRegistry);
-        }
+        _requireNotRestrictedAccount(msg.sender);
         super.mintOPRFToken(quantity);
+    }
+
+    /// @notice Override splitToken to include restriction list checks
+    function splitToken(
+        itUint128 calldata x,
+        itUint256 calldata q,
+        uint128 y_clear,
+        itUint256 calldata qSplit
+    ) public override whenNotPaused {
+        _requireNotRestrictedAccount(msg.sender);
+        super.splitToken(x, q, y_clear, qSplit);
+    }
+
+    /// @notice Override splitTokenForRecipient to include restriction list checks
+    function splitTokenForRecipient(
+        itUint128 calldata x,
+        itUint256 calldata q,
+        uint128 y_clear,
+        itUint256 calldata qSplit,
+        address recipient
+    ) public override whenNotPaused {
+        _requireNotRestrictedPair(msg.sender, recipient);
+        super.splitTokenForRecipient(x, q, y_clear, qSplit, recipient);
+    }
+
+    /// @notice Override burnToken to include restriction list checks
+    function burnToken(
+        itUint128 calldata x,
+        itUint256 calldata q,
+        uint128 y_clear,
+        address recipient
+    ) public override whenNotPaused {
+        _requireNotRestrictedPair(msg.sender, recipient);
+        super.burnToken(x, q, y_clear, recipient);
+    }
+
+    /// @notice Override mergeMany to include restriction list checks
+    function mergeMany(OPRFToken[] calldata tokens)
+        public
+        override
+        whenNotPaused
+        returns (gtUint128 x, gtUint128 y, gtUint256 qMerged)
+    {
+        _requireNotRestrictedAccount(msg.sender);
+        return super.mergeMany(tokens);
+    }
+
+    /// @notice Override transferOPRF to include restriction list checks
+    function transferOPRF(
+        OPRFToken[] calldata tokens,
+        itUint256 calldata amount,
+        address recipient
+    )
+        public
+        override
+        whenNotPaused
+        returns (
+            gtUint128 xRecipient,
+            gtUint128 yRecipient,
+            gtUint256 qRecipient,
+            gtUint128 xSender,
+            gtUint128 ySender,
+            gtUint256 qSender
+        )
+    {
+        _requireNotRestrictedPair(msg.sender, recipient);
+        return super.transferOPRF(tokens, amount, recipient);
+    }
+
+    /// @notice Override redeemMany to include restriction list checks
+    function redeemMany(
+        OPRFToken[] calldata tokens,
+        itUint256 calldata amount,
+        address recipient
+    )
+        public
+        override
+        whenNotPaused
+        returns (gtUint128 xRemainder, gtUint128 yRemainder, gtUint256 qRemainder)
+    {
+        _requireNotRestrictedPair(msg.sender, recipient);
+        return super.redeemMany(tokens, amount, recipient);
+    }
+
+    /// @dev Reverts if account is restricted by any active registry.
+    function _requireNotRestrictedAccount(address account) internal view {
+        address restrictingRegistry = getRestrictingRegistry(account);
+        if (restrictingRegistry != address(0)) {
+            revert AccountIsRestricted(account, restrictingRegistry);
+        }
+    }
+
+    /// @dev Reverts if either account is restricted by any active registry.
+    function _requireNotRestrictedPair(address account1, address account2) internal view {
+        _requireNotRestrictedAccount(account1);
+        _requireNotRestrictedAccount(account2);
+    }
+
+    /// @dev Reverts if any account is restricted by any active registry.
+    function _requireNotRestrictedTriple(address account1, address account2, address account3) internal view {
+        _requireNotRestrictedAccount(account1);
+        _requireNotRestrictedAccount(account2);
+        _requireNotRestrictedAccount(account3);
     }
 
     /// @notice Add a new restriction list registry (only owner)
