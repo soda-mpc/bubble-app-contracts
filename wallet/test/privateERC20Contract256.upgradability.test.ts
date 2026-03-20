@@ -292,7 +292,7 @@ describe("PrivateERC20Contract256 Upgradability", function () {
       // Deploy V2 implementation for upgrade tests
       console.log("🏗️ Deploying PrivateERC20Contract256V2 implementation for upgrade tests...");
       const V2ImplementationFactory = await hre.ethers.getContractFactory(
-        "contracts/tests/PrivateERC20Contract256V2.sol:PrivateERC20Contract256V2",
+        "contracts/tests/PrivateERC20Contract256V2Dummy.sol:PrivateERC20Contract256V2",
         defaultSigner
       );
       newImplementation = await V2ImplementationFactory.deploy();
@@ -338,7 +338,7 @@ describe("PrivateERC20Contract256 Upgradability", function () {
 
         // Attach V2 interface to the proxy to access V2 functions
         const V2Factory = await hre.ethers.getContractFactory(
-          "contracts/tests/PrivateERC20Contract256V2.sol:PrivateERC20Contract256V2",
+          "contracts/tests/PrivateERC20Contract256V2Dummy.sol:PrivateERC20Contract256V2",
           defaultSigner
         );
         const privateTokenV2 = V2Factory.attach(await privateToken.getAddress()) as any;
@@ -362,7 +362,7 @@ describe("PrivateERC20Contract256 Upgradability", function () {
 
         // Attach V2 interface to the proxy to access V2 functions
         const V2Factory = await hre.ethers.getContractFactory(
-          "contracts/tests/PrivateERC20Contract256V2.sol:PrivateERC20Contract256V2",
+          "contracts/tests/PrivateERC20Contract256V2Dummy.sol:PrivateERC20Contract256V2",
           defaultSigner
         );
         const privateTokenV2 = V2Factory.attach(await privateToken.getAddress()) as any;
@@ -393,7 +393,7 @@ describe("PrivateERC20Contract256 Upgradability", function () {
 
         // Attach V2 interface
         const V2Factory = await hre.ethers.getContractFactory(
-          "contracts/tests/PrivateERC20Contract256V2.sol:PrivateERC20Contract256V2",
+          "contracts/tests/PrivateERC20Contract256V2Dummy.sol:PrivateERC20Contract256V2",
           defaultSigner
         );
         const privateTokenV2 = V2Factory.attach(await privateToken.getAddress()) as any;
