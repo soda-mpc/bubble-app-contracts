@@ -19,8 +19,31 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     /// @param enabled Whether restriction list enforcement is enabled
     event RestrictionListEnforcementChanged(bool enabled);
 
+    /// @custom:storage-location erc7201:bubble.storage.PrivateERC20WithRestrictionList256
+    struct PrivateERC20WithRestrictionList256Storage {
+        /// @notice Whether restriction list enforcement is currently enabled
+        bool restrictionListEnforcementEnabled;
+    }
+
+    /// @dev ERC-7201 storage slot for PrivateERC20WithRestrictionList256 state.
+    bytes32 private constant PrivateERC20WithRestrictionList256StorageLocation =
+        0x4adf8f4372892f157cd9a9ea6e7ea2f4cf8eff5ff2f7315e38f7464067d4a500;
+
+    function _getPrivateERC20WithRestrictionList256Storage()
+        internal
+        pure
+        returns (PrivateERC20WithRestrictionList256Storage storage $)
+    {
+        assembly {
+            $.slot := PrivateERC20WithRestrictionList256StorageLocation
+        }
+    }
+
     /// @notice Whether restriction list enforcement is currently enabled
-    bool public restrictionListEnforcementEnabled;
+    function restrictionListEnforcementEnabled() public view returns (bool) {
+        PrivateERC20WithRestrictionList256Storage storage $ = _getPrivateERC20WithRestrictionList256Storage();
+        return $.restrictionListEnforcementEnabled;
+    }
 
     /// @notice Disables initializers in the implementation contract
     constructor() RestrictionListIntegration(new address[](0)) {
@@ -47,7 +70,8 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         __Pausable_init();
         // Initialize restriction list registries
         _initializeRestrictionListRegistries(restrictionListRegistries_);
-        restrictionListEnforcementEnabled = (restrictionListRegistries_.length > 0);
+        PrivateERC20WithRestrictionList256Storage storage $ = _getPrivateERC20WithRestrictionList256Storage();
+        $.restrictionListEnforcementEnabled = (restrictionListRegistries_.length > 0);
     }
 
     /// @notice Override transfer to include restriction list checks
@@ -330,8 +354,9 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         _addRestrictionListRegistry(registry);
         
         // Enable enforcement if this is the first registry
-        if (getActiveRegistryCount() == 1 && !restrictionListEnforcementEnabled) {
-            restrictionListEnforcementEnabled = true;
+        PrivateERC20WithRestrictionList256Storage storage $ = _getPrivateERC20WithRestrictionList256Storage();
+        if (getActiveRegistryCount() == 1 && !$.restrictionListEnforcementEnabled) {
+            $.restrictionListEnforcementEnabled = true;
             emit RestrictionListEnforcementChanged(true);
         }
     }
@@ -342,8 +367,9 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         _removeRestrictionListRegistry(registry);
         
         // Disable enforcement if no registries remain
-        if (getActiveRegistryCount() == 0 && restrictionListEnforcementEnabled) {
-            restrictionListEnforcementEnabled = false;
+        PrivateERC20WithRestrictionList256Storage storage $ = _getPrivateERC20WithRestrictionList256Storage();
+        if (getActiveRegistryCount() == 0 && $.restrictionListEnforcementEnabled) {
+            $.restrictionListEnforcementEnabled = false;
             emit RestrictionListEnforcementChanged(false);
         }
     }
@@ -352,7 +378,8 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     /// @param _enabled Whether to enable restriction list enforcement
     function setRestrictionListEnforcement(bool _enabled) external onlyOwner {
         if (getActiveRegistryCount() == 0 && _enabled) revert NoRegistriesActive();
-        restrictionListEnforcementEnabled = _enabled;
+        PrivateERC20WithRestrictionList256Storage storage $ = _getPrivateERC20WithRestrictionList256Storage();
+        $.restrictionListEnforcementEnabled = _enabled;
         emit RestrictionListEnforcementChanged(_enabled);
     }
 
@@ -360,7 +387,8 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     /// @param account The address to check
     /// @return True if restricted and enforcement is enabled, false otherwise
     function isRestricted(address account) public view override returns (bool) {
-        if (!restrictionListEnforcementEnabled) {
+        PrivateERC20WithRestrictionList256Storage storage $ = _getPrivateERC20WithRestrictionList256Storage();
+        if (!$.restrictionListEnforcementEnabled) {
             return false;
         }
         return super.isRestricted(account);
@@ -369,13 +397,15 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     /// @notice Check if restriction list enforcement is active and registries are configured
     /// @return True if restriction list is active
     function isRestrictionListActive() external view returns (bool) {
-        return restrictionListEnforcementEnabled && getActiveRegistryCount() > 0;
+        PrivateERC20WithRestrictionList256Storage storage $ = _getPrivateERC20WithRestrictionList256Storage();
+        return $.restrictionListEnforcementEnabled && getActiveRegistryCount() > 0;
     }
 
     /// @notice Emergency function to disable restriction list enforcement (only owner)
     /// @dev This can be used if restriction list registries become compromised
     function emergencyDisableRestrictionList() external onlyOwner {
-        restrictionListEnforcementEnabled = false;
+        PrivateERC20WithRestrictionList256Storage storage $ = _getPrivateERC20WithRestrictionList256Storage();
+        $.restrictionListEnforcementEnabled = false;
         emit RestrictionListEnforcementChanged(false);
     }
 
