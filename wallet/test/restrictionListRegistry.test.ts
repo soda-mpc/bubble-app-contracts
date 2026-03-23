@@ -86,7 +86,7 @@ describe("RestrictionListRegistry", function () {
         await expectReverted(restrictionListRegistry.addToRestrictionList(owner.address));
       });
 
-      it.only("should revert when trying to add already restricted address", async function () {
+      it("should revert when trying to add already restricted address", async function () {
         await (await restrictionListRegistry.addToRestrictionList(user1.address)).wait();
         await waitForCondition(async () => restrictionListRegistry.isRestricted(user1.address));
         await expectReverted(restrictionListRegistry.addToRestrictionList(user1.address));
@@ -167,20 +167,14 @@ describe("RestrictionListRegistry", function () {
         
       });
 
-      it("should skip invalid addresses and already restricted addresses", async function () {
+      it("should revert when batch contains invalid or already restricted addresses", async function () {
         // First, add user1 to restriction list
-        await restrictionListRegistry.addToRestrictionList(user1.address);
+        await (await restrictionListRegistry.addToRestrictionList(user1.address)).wait();
+        await waitForCondition(async () => restrictionListRegistry.isRestricted(user1.address));
         
         // Try to add array including zero address, owner, already restricted user1, and new user2
         const addresses = [hre.ethers.ZeroAddress, owner.address, user1.address, user2.address];
-        const tx = await restrictionListRegistry.addMultipleToRestrictionList(addresses);
-        await tx.wait();
-
-        // Only user2 should be newly restricted
-        expect(await restrictionListRegistry.isRestricted(user1.address)).to.be.true; // Was already restricted
-        expect(await restrictionListRegistry.isRestricted(user2.address)).to.be.true; // Newly restricted
-        expect(await restrictionListRegistry.isRestricted(owner.address)).to.be.false; // Should be skipped
-        expect(await restrictionListRegistry.restrictionListCount()).to.equal(2); // user1 + user2
+        await expectReverted(restrictionListRegistry.addMultipleToRestrictionList(addresses));
       });
 
       it("should revert with empty array", async function () {
@@ -239,20 +233,14 @@ describe("RestrictionListRegistry", function () {
 
       });
 
-      it("should skip non-restricted addresses", async function () {
+      it("should revert when batch contains non-restricted addresses", async function () {
         // Remove user1 first
-        await restrictionListRegistry.removeFromRestrictionList(user1.address);
+        await (await restrictionListRegistry.removeFromRestrictionList(user1.address)).wait();
+        await waitForCondition(async () => !(await restrictionListRegistry.isRestricted(user1.address)));
         
         // Try to remove array including non-restricted user1 and restricted user2
         const addresses = [user1.address, user2.address];
-        const tx = await restrictionListRegistry.removeMultipleFromRestrictionList(addresses);
-        await tx.wait();
-
-        // Only user2 should be removed, user1 was skipped
-        expect(await restrictionListRegistry.isRestricted(user1.address)).to.be.false; // Was already not restricted
-        expect(await restrictionListRegistry.isRestricted(user2.address)).to.be.false; // Newly removed
-        expect(await restrictionListRegistry.isRestricted(user3.address)).to.be.true; // Still restricted
-        expect(await restrictionListRegistry.restrictionListCount()).to.equal(1);
+        await expectReverted(restrictionListRegistry.removeMultipleFromRestrictionList(addresses));
       });
 
       it("should revert with empty array", async function () {

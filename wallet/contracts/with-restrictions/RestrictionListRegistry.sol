@@ -64,24 +64,14 @@ contract RestrictionListRegistry is IRestrictionList, Ownable {
     /// @dev Only the owner can call this function
     /// @param account The address to restrict
     function addToRestrictionList(address account) external override onlyOwner {
-        if (account == address(0)) revert CannotRestrictZeroAddress();
-        if (account == owner()) revert CannotRestrictOwner(account);
-        if (_restrictedAddresses.contains(account)) revert AccountAlreadyRestricted(account);
-
-        _restrictedAddresses.add(account);
-        
-        emit AddedToRestrictionList(account, msg.sender);
+        _addToRestrictionList(account);
     }
 
     /// @notice Remove an address from the restriction list
     /// @dev Only the owner can call this function
     /// @param account The address to remove from restriction list
     function removeFromRestrictionList(address account) external override onlyOwner {
-        if (!_restrictedAddresses.contains(account)) revert AccountNotRestricted(account);
-
-        _restrictedAddresses.remove(account);
-        
-        emit RemovedFromRestrictionList(account, msg.sender);
+        _removeFromRestrictionList(account);
     }
 
     /// @notice Add multiple addresses to the restriction list in a single transaction
@@ -92,17 +82,7 @@ contract RestrictionListRegistry is IRestrictionList, Ownable {
         if (accounts.length > MAX_BATCH_SIZE) revert TooManyAccounts(accounts.length, MAX_BATCH_SIZE);
 
         for (uint256 i = 0; i < accounts.length; i++) {
-            address account = accounts[i];
-            
-            // Skip invalid addresses and already restricted accounts
-            if (account == address(0) || account == owner() || _restrictedAddresses.contains(account)) {
-                continue;
-            }
-
-            _restrictedAddresses.add(account);
-            
-            // Emit individual event for each successful addition
-            emit AddedToRestrictionList(account, msg.sender);
+            _addToRestrictionList(accounts[i]);
         }
     }
 
@@ -114,18 +94,24 @@ contract RestrictionListRegistry is IRestrictionList, Ownable {
         if (accounts.length > MAX_BATCH_SIZE) revert TooManyAccounts(accounts.length, MAX_BATCH_SIZE);
 
         for (uint256 i = 0; i < accounts.length; i++) {
-            address account = accounts[i];
-            
-            // Skip accounts that aren't restricted
-            if (!_restrictedAddresses.contains(account)) {
-                continue;
-            }
-
-            _restrictedAddresses.remove(account);
-            
-            // Emit individual event for each successful removal
-            emit RemovedFromRestrictionList(account, msg.sender);
+            _removeFromRestrictionList(accounts[i]);
         }
+    }
+
+    function _addToRestrictionList(address account) internal {
+        if (account == address(0)) revert CannotRestrictZeroAddress();
+        if (account == owner()) revert CannotRestrictOwner(account);
+        if (_restrictedAddresses.contains(account)) revert AccountAlreadyRestricted(account);
+
+        _restrictedAddresses.add(account);
+        emit AddedToRestrictionList(account, msg.sender);
+    }
+
+    function _removeFromRestrictionList(address account) internal {
+        if (!_restrictedAddresses.contains(account)) revert AccountNotRestricted(account);
+
+        _restrictedAddresses.remove(account);
+        emit RemovedFromRestrictionList(account, msg.sender);
     }
 
     /// @notice Get the total number of restricted addresses
@@ -164,13 +150,9 @@ contract RestrictionListRegistry is IRestrictionList, Ownable {
         address[] memory allRestricted = _restrictedAddresses.values();
         
         for (uint256 i = 0; i < allRestricted.length; i++) {
+            _restrictedAddresses.remove(allRestricted[i]);
             // Emit individual event for each removal
             emit RemovedFromRestrictionList(allRestricted[i], msg.sender);
-        }
-        
-        // Clear the set
-        for (uint256 i = allRestricted.length; i > 0; i--) {
-            _restrictedAddresses.remove(allRestricted[i - 1]);
         }
     }
 } 
