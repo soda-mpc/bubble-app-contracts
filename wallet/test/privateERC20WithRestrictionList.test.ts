@@ -215,13 +215,18 @@ describe("PrivateERC20WithRestrictionList", function () {
       expect(await privateToken.isRestricted(otherWallet.address)).to.be.false;
     });
 
-    it("should detect restrictions from multiple registries", async function () {
+    it.only("should detect restrictions from multiple registries", async function () {
       // Add to government registry
       await (await govRegistry.addToRestrictionList(otherWallet.address)).wait();
       await new Promise(resolve => setTimeout(resolve, 3000));
       expect(await privateToken.isRestricted(otherWallet.address)).to.be.true;
       
-      // Get detailed info
+      // Get comprehensive info (all restricting registries)
+      const comprehensiveRestrictingRegistries = await privateToken.getComprehensiveRestrictionInfo(otherWallet.address);
+      expect(comprehensiveRestrictingRegistries).to.have.length(1);
+      expect(comprehensiveRestrictingRegistries[0]).to.equal(await govRegistry.getAddress());
+
+      // Get detailed info with names
       const [restrictingRegistries, registryNames] = await privateToken.getDetailedRestrictionInfoWithNames(otherWallet.address);
       expect(restrictingRegistries).to.have.length(1);
       expect(registryNames).to.include("Government Sanctions List");
@@ -249,7 +254,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       expect(await privateToken.getActiveRegistryCount()).to.equal(2);
     });
 
-    it.only("should skip operational restriction checks when enforcement is disabled", async function () {
+    it("should skip operational restriction checks when enforcement is disabled", async function () {
       await (await companyRegistry.addToRestrictionList(otherWallet.address)).wait();
       await new Promise(resolve => setTimeout(resolve, 3000));
 

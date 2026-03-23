@@ -424,20 +424,12 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
 
     /// @notice Get comprehensive restriction information for an address
     /// @param account The address to check
-    /// @return isRestrictedByAny Whether the address is restricted by any active registry
-    /// @return restrictingRegistry The first registry that restricts the address (if any)
     /// @return allRestrictingRegistries All registries that restrict the address
     function getComprehensiveRestrictionInfo(address account) 
         external 
         view 
-        returns (
-            bool isRestrictedByAny, 
-            address restrictingRegistry, 
-            address[] memory allRestrictingRegistries
-        ) 
+        returns (address[] memory allRestrictingRegistries) 
     {
-        isRestrictedByAny = isRestricted(account);
-        restrictingRegistry = getRestrictingRegistry(account);
         allRestrictingRegistries = getDetailedRestrictionInfo(account);
     }
 
