@@ -115,52 +115,52 @@ async function waitForUnshieldOutcome(
   }
 
   before(async function () {
-    console.log("🚀 Starting PrivateERC20Contract256 test setup...");
+    console.log("Starting PrivateERC20Contract256 test setup...");
     
     // Get Hardhat's default signer (same approach as working debug script)
-    console.log("📡 Getting signers from hardhat...");
+    console.log("Getting signers from hardhat...");
     [defaultSigner] = await hre.ethers.getSigners();
-    console.log("✅ Got default signer:", await defaultSigner.getAddress());
+    console.log("Got default signer:", await defaultSigner.getAddress());
     
     // Setup main user with the default signer
-    console.log("🔑 Getting user AES key from proxy...");
-    console.log("📡 Proxy URL:", PROXY_URL);
+    console.log("Getting user AES key from proxy...");
+    console.log("Proxy URL:", PROXY_URL);
     try {
       userAesKey = await getUserKeyViaProxy(defaultSigner as any, PROXY_URL);
       userAesKeyHex = userAesKey.toString("hex");
       userAddress = await defaultSigner.getAddress();
-      console.log("✅ User AES key obtained, address:", userAddress);
+      console.log("User AES key obtained, address:", userAddress);
     } catch (error) {
-      console.error("❌ Failed to get user AES key:", error);
+      console.error("Failed to get user AES key:", error);
       throw error;
     }
 
     // Create another wallet for testing transfers
     otherWallet = Wallet.createRandom().connect(hre.ethers.provider) as HDNodeWallet;
-    console.log("✅ Created other wallet:", otherWallet.address);
+    console.log("Created other wallet:", otherWallet.address);
 
     // Create master wallet for unshieldForMaster tests
     masterWallet = Wallet.createRandom().connect(hre.ethers.provider) as HDNodeWallet;
-    console.log("✅ Created master wallet:", masterWallet.address);
+    console.log("Created master wallet:", masterWallet.address);
 
     // Deploy mock token using the default signer
-    console.log("🏗️ Deploying mock token...");
+    console.log("Deploying mock token...");
     const MockTokenFactory = await hre.ethers.getContractFactory("TUSDC", defaultSigner);
     mockToken = await MockTokenFactory.deploy("Test USDC", "TUSDC");
     await mockToken.waitForDeployment();
-    console.log("✅ Mock token deployed at:", await mockToken.getAddress());
+    console.log("Mock token deployed at:", await mockToken.getAddress());
     await new Promise(resolve => setTimeout(resolve, 3000));
 
     // Deploy private token using the upgradeable proxy pattern
-    console.log("🏗️ Deploying PrivateERC20Contract256 implementation...");
+    console.log("Deploying PrivateERC20Contract256 implementation...");
     const ImplementationFactory = await hre.ethers.getContractFactory("contracts/PrivateERC20Contract256.sol:PrivateERC20Contract256", defaultSigner);
     const implementation = await ImplementationFactory.deploy();
     await implementation.waitForDeployment();
     const implementationAddress = await implementation.getAddress();
-    console.log("✅ Implementation deployed at:", implementationAddress);
+    console.log("Implementation deployed at:", implementationAddress);
 
     // Encode the initialize function call
-    console.log("🔧 Encoding initialize function call...");
+    console.log("Encoding initialize function call...");
     const initializeInterface = ImplementationFactory.interface;
     const initData = initializeInterface.encodeFunctionData("initialize", [
       "BubbleToken",
@@ -171,49 +171,49 @@ async function waitForUnshieldOutcome(
     ]);
 
     // Deploy ERC1967Proxy pointing to the implementation
-    console.log("🏗️ Deploying ERC1967Proxy...");
+    console.log("Deploying ERC1967Proxy...");
     const ProxyFactory = await hre.ethers.getContractFactory("@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy", defaultSigner);
     const proxy = await ProxyFactory.deploy(implementationAddress, initData);
     await proxy.waitForDeployment();
     const proxyAddress = await proxy.getAddress();
-    console.log("✅ Proxy deployed at:", proxyAddress);
+    console.log("Proxy deployed at:", proxyAddress);
 
     // Get the contract instance attached to the proxy address
     privateToken = ImplementationFactory.attach(proxyAddress) as any;
-    console.log("✅ PrivateERC20Contract256 (upgradeable) deployed at:", proxyAddress);
+    console.log("PrivateERC20Contract256 (upgradeable) deployed at:", proxyAddress);
   });
 
   describe("Basic Token Information", function () {
     it("should have correct name, symbol and decimals", async function () {
-      console.log("🔍 Testing basic token information...");
+      console.log("Testing basic token information...");
       const contractAddress = await privateToken.getAddress();
-      console.log("📍 Contract address:", contractAddress);
+      console.log("Contract address:", contractAddress);
       
       // Ensure contract bytecode is available before continuing
       const code = await waitForContractCode(contractAddress);
-      console.log("📄 Contract code length:", code.length);
+      console.log("Contract code length:", code.length);
       
-      console.log("🔍 Calling name() function...");
+      console.log("Calling name() function...");
       try {
         const name = await privateToken.name();
-        console.log("📝 Name result:", name);
+        console.log("Name result:", name);
         expect(name).to.equal("BubbleToken");
       } catch (error) {
-        console.error("❌ Error calling name():", error);
+        console.error("Error calling name():", error);
         throw error;
       }
       
-      console.log("🔍 Calling symbol() function...");
+      console.log("Calling symbol() function...");
       const symbol = await privateToken.symbol();
-      console.log("🏷️ Symbol result:", symbol);
+      console.log("Symbol result:", symbol);
       expect(symbol).to.equal("BUB");
       
-      console.log("🔍 Calling decimals() function...");
+      console.log("Calling decimals() function...");
       const decimals = await privateToken.decimals();
-      console.log("🔢 Decimals result:", decimals);
+      console.log("Decimals result:", decimals);
       expect(decimals).to.equal(18);
       
-      console.log("✅ All basic token information tests passed");
+      console.log("All basic token information tests passed");
     });
 
     it("should start with zero total supply", async function () {
@@ -238,84 +238,84 @@ async function waitForUnshieldOutcome(
 
     beforeEach(async function () {
       this.timeout(120000); // 2 minutes timeout for beforeEach
-      console.log("🔄 Running beforeEach setup...");
+      console.log("Running beforeEach setup...");
 
       // Check if mock token is deployed properly
       const code = await hre.ethers.provider.getCode(await mockToken.getAddress());
       if (code === "0x") {
         throw new Error("Mock token contract not deployed properly");
       }
-      console.log("✅ Mock token code verified");
+      console.log("Mock token code verified");
 
       // Ensure user starts each test with zero private balance
       await ensurePrivateBalanceClearedFor(defaultSigner, userAesKey);
 
       // Check signer connection
-      console.log("🔗 Connecting mock token to signer...");
+      console.log("Connecting mock token to signer...");
       // Ensure mockToken is connected to the correct signer
       const connectedMockToken = mockToken.connect(defaultSigner);
 
       // Mint tokens to user for each test
-      console.log("💰 Minting", shieldAmount.toString(), "tokens to user...");
+      console.log("Minting", shieldAmount.toString(), "tokens to user...");
       const mintTx = await connectedMockToken.mint(userAddress, shieldAmount);
       const mintReceipt = await mintTx.wait();
-      console.log("✅ Mint transaction confirmed, block:", mintReceipt?.blockNumber);
+      console.log("Mint transaction confirmed, block:", mintReceipt?.blockNumber);
 
       if (mintReceipt?.status !== 1) {
         throw new Error(`Mint transaction failed with status: ${mintReceipt?.status}`);
       }
 
       // Wait 3 seconds between mint and approve
-      console.log("⏳ Waiting 3 seconds before approve...");
+      console.log("Waiting 3 seconds before approve...");
       await new Promise(resolve => setTimeout(resolve, 3000));
 
       // Approve the private token to spend mock tokens
-      console.log("✅ Approving private token to spend mock tokens...");
+      console.log("Approving private token to spend mock tokens...");
       const approveTx = await connectedMockToken.approve(await privateToken.getAddress(), shieldAmount);
       const approveReceipt = await approveTx.wait();
-      console.log("✅ Approve transaction confirmed, block:", approveReceipt?.blockNumber);
+      console.log("Approve transaction confirmed, block:", approveReceipt?.blockNumber);
 
       if (approveReceipt?.status !== 1) {
         throw new Error(`Approve transaction failed with status: ${approveReceipt?.status}`);
       }
-      console.log("✅ beforeEach setup completed");
+      console.log("beforeEach setup completed");
     });
 
     it("should successfully shield standard tokens into private tokens", async function () {
-      console.log("🛡️ Starting shield test...");
-      console.log("📊 Shield amount:", shieldAmount.toString());
+      console.log("Starting shield test...");
+      console.log("Shield amount:", shieldAmount.toString());
       
       await new Promise(resolve => setTimeout(resolve, 3000));
-      console.log("⏳ Waited 3 seconds before shield...");
+      console.log("Waited 3 seconds before shield...");
       
       const balanceHandleBeforeShield = await privateToken["balanceOf(address)"](userAddress);
-      console.log("💰 Balance handle before shield:", balanceHandleBeforeShield.toString());
+      console.log("Balance handle before shield:", balanceHandleBeforeShield.toString());
       
-      console.log("🚀 Executing shield transaction...");
+      console.log("Executing shield transaction...");
       const shieldTx = await privateToken.shield(shieldAmount);
-      console.log("📝 Shield transaction hash:", shieldTx.hash);
+      console.log("Shield transaction hash:", shieldTx.hash);
       
       const shieldReceipt = await shieldTx.wait();
-      console.log("✅ Shield transaction confirmed, block:", shieldReceipt?.blockNumber);
+      console.log("Shield transaction confirmed, block:", shieldReceipt?.blockNumber);
       
       await new Promise(resolve => setTimeout(resolve, 3000));
-      console.log("⏳ Waited 3 seconds after shield...");
+      console.log("Waited 3 seconds after shield...");
       
       expect(shieldReceipt).to.not.be.undefined;
 
       // Check Shield event
-      console.log("🔍 Querying for Shield events...");
+      console.log("Querying for Shield events...");
       const currentBlockForShield = await hre.ethers.provider.getBlockNumber();
       const endBlockForShield = Math.min(shieldReceipt?.blockNumber || currentBlockForShield, currentBlockForShield);
       const startBlockForShield = Math.max((shieldReceipt?.blockNumber || currentBlockForShield) - 1000, 0);
-      console.log("📊 Shield query range: blocks", startBlockForShield, "to", endBlockForShield, "(range:", endBlockForShield - startBlockForShield, "blocks)");
+      console.log("Shield query range: blocks", startBlockForShield, "to", endBlockForShield, "(range:", endBlockForShield - startBlockForShield, "blocks)");
       
       const events = await privateToken.queryFilter(privateToken.filters.Shield(userAddress), startBlockForShield, endBlockForShield);
-      console.log("📋 Found", events.length, "Shield events");
+      console.log("Found", events.length, "Shield events");
       expect(events.length).to.be.greaterThan(0);
       expect(events[0].args.from).to.equal(userAddress);
       expect(events[0].args.amount).to.equal(shieldAmount);
-      console.log("✅ Shield event verified");
+      console.log("Shield event verified");
 
       // Check mock token balance of the private token
       expect(await mockToken.balanceOf(await privateToken.getAddress())).to.equal(shieldAmount);
@@ -367,15 +367,15 @@ async function waitForUnshieldOutcome(
     });
 
     it("should successfully unshield private tokens back to standard tokens", async function () {
-      console.log("🔓 Starting unshield test...");
+      console.log("Starting unshield test...");
 
       const currentBlock = await hre.ethers.provider.getBlockNumber();
-      console.log("📊 Current block at start:", currentBlock);
+      console.log("Current block at start:", currentBlock);
 
-      console.log("🛡️ First shielding tokens...");
+      console.log("First shielding tokens...");
       const receipt = await (await privateToken.shield(shieldAmount)).wait();
       expect(receipt?.status).to.equal(1);
-      console.log("✅ Shield completed");
+      console.log("Shield completed");
 
       // Get balance before unshield
       await new Promise(resolve => setTimeout(resolve, 5000));
@@ -390,35 +390,35 @@ async function waitForUnshieldOutcome(
 
       // Store the current block number before unshield
       const startBlock = await hre.ethers.provider.getBlockNumber();
-      console.log("📊 Start block for unshield:", startBlock);
+      console.log("Start block for unshield:", startBlock);
 
       // Request unshield
-      console.log("🔓 Executing unshield transaction...");
+      console.log("Executing unshield transaction...");
       const unshieldTx = await privateToken.unshield(expectedPrivateAmount);
-      console.log("📝 Unshield transaction hash:", unshieldTx.hash);
+      console.log("Unshield transaction hash:", unshieldTx.hash);
       
       const unshieldReceipt = await unshieldTx.wait();
-      console.log("✅ Unshield transaction confirmed, block:", unshieldReceipt?.blockNumber);
+      console.log("Unshield transaction confirmed, block:", unshieldReceipt?.blockNumber);
       expect(unshieldReceipt).to.not.be.undefined;
 
       // Give the MPC network time to handle the callback before querying events
       await new Promise(resolve => setTimeout(resolve, 10000));
 
       // Check UnshieldRequested event from the start block
-      console.log("🔍 Querying for UnshieldRequested events...");
+      console.log("Querying for UnshieldRequested events...");
       const requestFilter = privateToken.filters.UnshieldRequested;
       const currentBlockForRequest = await hre.ethers.provider.getBlockNumber();
       const endBlockForRequest = Math.min(startBlock + 1000, currentBlockForRequest); // Limit to 1000 blocks max
-      console.log("📊 Query range: blocks", startBlock, "to", endBlockForRequest, "(range:", endBlockForRequest - startBlock, "blocks)");
+      console.log("Query range: blocks", startBlock, "to", endBlockForRequest, "(range:", endBlockForRequest - startBlock, "blocks)");
       
       const requestEvents = await privateToken.queryFilter(requestFilter, startBlock, endBlockForRequest);
-      console.log("📋 Found", requestEvents.length, "UnshieldRequested events");
+      console.log("Found", requestEvents.length, "UnshieldRequested events");
       expect(requestEvents.length).to.be.greaterThan(0);
       expect(requestEvents[0].args[0]).to.equal(userAddress); // 'to' address
       expect(requestEvents[0].args[1]).to.equal(expectedPrivateAmount); // amount
-      console.log("✅ UnshieldRequested event verified");
+      console.log("UnshieldRequested event verified");
       const { successEvents, failedEvents } = await waitForUnshieldOutcome(startBlock);
-      console.log("📋 Unshield events - Success:", successEvents.length, "Failed:", failedEvents.length);
+      console.log("Unshield events - Success:", successEvents.length, "Failed:", failedEvents.length);
 
       expect(successEvents.length, "Expected successful unshield event").to.be.greaterThan(0);
       expect(failedEvents.length, "Expected no failed unshield events").to.equal(0);
@@ -449,21 +449,21 @@ async function waitForUnshieldOutcome(
       const tooMuch = expectedPrivateAmount * 2n;
       const startBlock = await hre.ethers.provider.getBlockNumber();
       const mockTokenBalanceBefore = await mockToken.balanceOf(userAddress);
-      console.log("🔢 Mock token balance before unshield attempt:", mockTokenBalanceBefore.toString());
+      console.log("Mock token balance before unshield attempt:", mockTokenBalanceBefore.toString());
       const unshieldTx = await privateToken.unshield(tooMuch);
       await unshieldTx.wait();
 
       const { successEvents, failedEvents } = await waitForUnshieldOutcome(startBlock);
-      console.log("📋 Failed unshield events:", failedEvents.length, "Successful events:", successEvents.length);
+      console.log("Failed unshield events:", failedEvents.length, "Successful events:", successEvents.length);
 
       const balanceHandle = await privateToken["balanceOf(address)"](userAddress);
       const decryptedBalance = await decryptBalanceViaProxy(balanceHandle, defaultSigner, userAesKey, PROXY_URL);
       const mockTokenBalanceAfter = await mockToken.balanceOf(userAddress);
-      console.log("🔢 Mock token balance after unshield attempt:", mockTokenBalanceAfter.toString());
+      console.log("Mock token balance after unshield attempt:", mockTokenBalanceAfter.toString());
 
       if (successEvents.length > 0) {
         const unshieldedAmount = successEvents[0].args.amount;
-        console.log("✅ Oversized unshield processed as success for amount:", unshieldedAmount.toString());
+        console.log("Oversized unshield processed as success for amount:", unshieldedAmount.toString());
         expect(failedEvents.length).to.equal(0);
         expect(unshieldedAmount).to.equal(shieldAmount);
         expect(decryptedBalance).to.equal(0n);
@@ -471,7 +471,7 @@ async function waitForUnshieldOutcome(
         expect(await privateToken.totalSupply()).to.equal(0);
       } else {
         if (failedEvents.length === 0) {
-          console.warn("⚠️ No Unshield events detected; treating as no-op.");
+          console.warn("No Unshield events detected; treating as no-op.");
         }
         expect(decryptedBalance).to.equal(expectedPrivateAmount);
         expect(mockTokenBalanceAfter).to.be.at.most(mockTokenBalanceBefore);
@@ -485,16 +485,16 @@ async function waitForUnshieldOutcome(
     });
 
     it("should successfully unshield private tokens to master address", async function () {
-      console.log("🔓 Starting unshieldForMaster test...");
+      console.log("Starting unshieldForMaster test...");
 
       const masterAddress = await privateToken.master();
-      console.log("👤 Master address:", masterAddress);
+      console.log("Master address:", masterAddress);
       expect(masterAddress).to.equal(masterWallet.address);
 
-      console.log("🛡️ First shielding tokens...");
+      console.log("First shielding tokens...");
       const receipt = await (await privateToken.shield(shieldAmount)).wait();
       expect(receipt?.status).to.equal(1);
-      console.log("✅ Shield completed");
+      console.log("Shield completed");
 
       // Get balance before unshield
       await new Promise(resolve => setTimeout(resolve, 5000));
@@ -507,39 +507,39 @@ async function waitForUnshieldOutcome(
 
       // Store mock token balance of master before unshield
       const masterMockTokenBalanceBefore = await mockToken.balanceOf(masterAddress);
-      console.log("💰 Master mock token balance before:", masterMockTokenBalanceBefore.toString());
+      console.log("Master mock token balance before:", masterMockTokenBalanceBefore.toString());
 
       // Store the current block number before unshield
       const startBlock = await hre.ethers.provider.getBlockNumber();
-      console.log("📊 Start block for unshieldForMaster:", startBlock);
+      console.log("Start block for unshieldForMaster:", startBlock);
 
       // Request unshieldForMaster
-      console.log("🔓 Executing unshieldForMaster transaction...");
+      console.log("Executing unshieldForMaster transaction...");
       const unshieldTx = await privateToken.unshieldForMaster(expectedPrivateAmount);
-      console.log("📝 UnshieldForMaster transaction hash:", unshieldTx.hash);
+      console.log("UnshieldForMaster transaction hash:", unshieldTx.hash);
       
       const unshieldReceipt = await unshieldTx.wait();
-      console.log("✅ UnshieldForMaster transaction confirmed, block:", unshieldReceipt?.blockNumber);
+      console.log("UnshieldForMaster transaction confirmed, block:", unshieldReceipt?.blockNumber);
       expect(unshieldReceipt).to.not.be.undefined;
 
       // Give the MPC network time to handle the callback before querying events
       await new Promise(resolve => setTimeout(resolve, 10000));
 
       // Check UnshieldRequested event - should be for master address
-      console.log("🔍 Querying for UnshieldRequested events...");
+      console.log("Querying for UnshieldRequested events...");
       const requestFilter = privateToken.filters.UnshieldRequested;
       const currentBlockForRequest = await hre.ethers.provider.getBlockNumber();
       const endBlockForRequest = Math.min(startBlock + 1000, currentBlockForRequest);
       
       const requestEvents = await privateToken.queryFilter(requestFilter, startBlock, endBlockForRequest);
-      console.log("📋 Found", requestEvents.length, "UnshieldRequested events");
+      console.log("Found", requestEvents.length, "UnshieldRequested events");
       expect(requestEvents.length).to.be.greaterThan(0);
       expect(requestEvents[0].args[0]).to.equal(masterAddress); // 'to' should be master address
       expect(requestEvents[0].args[1]).to.equal(expectedPrivateAmount); // amount
-      console.log("✅ UnshieldRequested event verified for master");
+      console.log("UnshieldRequested event verified for master");
 
       const { successEvents, failedEvents } = await waitForUnshieldOutcome(startBlock);
-      console.log("📋 Unshield events - Success:", successEvents.length, "Failed:", failedEvents.length);
+      console.log("Unshield events - Success:", successEvents.length, "Failed:", failedEvents.length);
 
       expect(successEvents.length, "Expected successful unshield event").to.be.greaterThan(0);
       expect(failedEvents.length, "Expected no failed unshield events").to.equal(0);
@@ -547,7 +547,7 @@ async function waitForUnshieldOutcome(
       // Check that master received the tokens
       const masterMockTokenBalanceAfter = await mockToken.balanceOf(masterAddress);
       const masterBalanceDifference = masterMockTokenBalanceAfter - masterMockTokenBalanceBefore;
-      console.log("💰 Master mock token balance after:", masterMockTokenBalanceAfter.toString());
+      console.log("Master mock token balance after:", masterMockTokenBalanceAfter.toString());
       expect(masterBalanceDifference, "Master should receive the unshielded tokens").to.equal(shieldAmount);
 
       // Check total supply reduced
@@ -603,7 +603,7 @@ async function waitForUnshieldOutcome(
       await new Promise(resolve => setTimeout(resolve, 2000));
       const senderBalanceHandleBefore = await privateToken["balanceOf(address)"](userAddress);
       const senderBalanceBefore = await decryptBalanceViaProxy(senderBalanceHandleBefore, defaultSigner, userAesKey, PROXY_URL);
-      console.log("🔢 Sender private balance before oversized transfer:", senderBalanceBefore.toString());
+      console.log("Sender private balance before oversized transfer:", senderBalanceBefore.toString());
 
       const transferTx = await privateToken["transfer(address,uint256)"](otherWallet.address, tooMuch);
       const transferReceipt = await transferTx.wait();
@@ -613,7 +613,7 @@ async function waitForUnshieldOutcome(
 
       const senderBalanceHandleAfter = await privateToken["balanceOf(address)"](userAddress);
       const senderBalanceAfter = await decryptBalanceViaProxy(senderBalanceHandleAfter, defaultSigner, userAesKey, PROXY_URL);
-      console.log("🔢 Sender private balance after oversized transfer:", senderBalanceAfter.toString());
+      console.log("Sender private balance after oversized transfer:", senderBalanceAfter.toString());
       expect(senderBalanceAfter).to.equal(senderBalanceBefore);
     });
 
@@ -740,7 +740,7 @@ async function waitForUnshieldOutcome(
     before(async function () {
       // Create a new wallet to use as the new master address
       newMasterWallet = Wallet.createRandom().connect(hre.ethers.provider) as HDNodeWallet;
-      console.log("✅ Created new master wallet:", newMasterWallet.address);
+      console.log("Created new master wallet:", newMasterWallet.address);
     });
 
     beforeEach(async function () {
@@ -1008,9 +1008,14 @@ async function waitForUnshieldOutcome(
     this.timeout(120000);
 
     it("should complete unshield by fetching callback tx_data from proxy and submitting it", async function () {
-      console.log("🔓 Unshield via GetDecryption HTTP: shield first...");
+      console.log("Unshield via GetDecryption HTTP: shield first...");
       const shieldAmount = 100n * 10n ** 18n;
-      const expectedPrivateAmount = shieldAmount;
+      const totalSupplyBefore = await privateToken.totalSupply();
+      const balanceBeforeShieldHandle = await privateToken["balanceOf(address)"](userAddress);
+      let balanceBeforeShield = balanceBeforeShieldHandle;
+      if (balanceBeforeShieldHandle !== 0n) {
+        balanceBeforeShield = await decryptBalanceViaProxy(balanceBeforeShieldHandle, defaultSigner, userAesKey, PROXY_URL);
+      }
       await (await mockToken.mint(userAddress, shieldAmount)).wait();
       await (await mockToken.approve(await privateToken.getAddress(), shieldAmount)).wait();
       await new Promise(resolve => setTimeout(resolve, 3000));
@@ -1023,21 +1028,21 @@ async function waitForUnshieldOutcome(
       if (balanceBeforeHandle !== 0n) {
         balanceBefore = await decryptBalanceViaProxy(balanceBeforeHandle, defaultSigner, userAesKey, PROXY_URL);
       }
-      expect(balanceBefore).to.equal(expectedPrivateAmount);
+      expect(balanceBefore - balanceBeforeShield).to.equal(shieldAmount);
 
       const contractAddress = await privateToken.getAddress();
       const mockTokenBalanceBefore = await mockToken.balanceOf(userAddress);
       const startBlock = await hre.ethers.provider.getBlockNumber();
 
-      console.log("🔓 Unshield via GetDecryption HTTP: request unshield...");
-      const unshieldTx = await privateToken.unshield(expectedPrivateAmount);
+      console.log("Unshield via GetDecryption HTTP: request unshield...");
+      const unshieldTx = await privateToken.unshield(shieldAmount);
       const unshieldReceipt = await unshieldTx.wait();
       expect(unshieldReceipt).to.not.be.undefined;
 
       const decryptId = await privateToken.getLastDecryptRequestId();
-      console.log("📋 Last decrypt request ID:", decryptId.toString());
+      console.log("Last decrypt request ID:", decryptId.toString());
 
-      console.log("⏳ Waiting for MPC to produce decryption...");
+      console.log("Waiting for MPC to produce decryption...");
       await new Promise(resolve => setTimeout(resolve, 15000));
 
       const network = await hre.ethers.provider.getNetwork();
@@ -1045,10 +1050,10 @@ async function waitForUnshieldOutcome(
       // Flow: Proxy calls gRPC GetDecryption(chainId, contract, decryptId). Backend returns
       // calldata to invoke callbackUnshield(decryptId, output, signatures). We may submit it
       // ourselves, or the MPC relayer may have already submitted it (then our tx reverts).
-      console.log("📡 Fetching callback tx_data from proxy POST /get-decryption...");
+      console.log("Fetching callback tx_data from proxy POST /get-decryption...");
       const txDataHex = await getDecryptionTxDataViaProxy(PROXY_URL, chainId, contractAddress, decryptId);
 
-      console.log("📥 Proxy response:", {
+      console.log("Proxy response:", {
         request: { chainId, contractAddress, user_decrypt_id: decryptId.toString() },
         response: {
           tx_data_length: txDataHex.length,
@@ -1058,7 +1063,7 @@ async function waitForUnshieldOutcome(
 
       const hasTxData = txDataHex && txDataHex.length > 2 && txDataHex !== "0x";
       if (hasTxData) {
-        console.log("📤 Submitting callback transaction...");
+        console.log("Submitting callback transaction...");
         try {
           const tx = await defaultSigner.sendTransaction({
             to: contractAddress,
@@ -1069,13 +1074,13 @@ async function waitForUnshieldOutcome(
           expect(callbackReceipt?.status).to.equal(1);
         } catch (err: any) {
           if (err?.code === "CALL_EXCEPTION" || err?.receipt?.status === 0) {
-            console.log("📋 Callback tx reverted (MPC relayer may have already submitted it); waiting for outcome...");
+            console.log("Callback tx reverted (MPC relayer may have already submitted it); waiting for outcome...");
           } else {
             throw err;
           }
         }
       } else {
-        console.log("📋 No tx_data from proxy (MPC relayer may have already run callback); waiting for outcome...");
+        console.log("No tx_data from proxy (MPC relayer may have already run callback); waiting for outcome...");
       }
 
       // Either we submitted the callback or the relayer did; poll for Unshield/UnshieldFailed and assert final state.
@@ -1085,15 +1090,15 @@ async function waitForUnshieldOutcome(
 
       const mockTokenBalanceAfter = await mockToken.balanceOf(userAddress);
       expect(mockTokenBalanceAfter - mockTokenBalanceBefore).to.equal(shieldAmount);
-      expect(await privateToken.totalSupply()).to.equal(0);
+      expect(await privateToken.totalSupply()).to.equal(totalSupplyBefore);
 
       const balanceHandle = await privateToken["balanceOf(address)"](userAddress);
       let decryptedBalance = balanceHandle;
       if (balanceHandle !== 0n) {
         decryptedBalance = await decryptBalanceViaProxy(balanceHandle, defaultSigner, userAesKey, PROXY_URL);
       }
-      expect(decryptedBalance).to.equal(0n);
-      console.log("✅ Unshield callback via GetDecryption HTTP completed");
+      expect(decryptedBalance).to.equal(balanceBeforeShield);
+      console.log("Unshield callback via GetDecryption HTTP completed");
     });
   });
 }); 

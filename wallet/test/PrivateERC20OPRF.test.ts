@@ -49,44 +49,44 @@ describe("PrivateERC20Contract OPRF Minting", function () {
   let defaultSigner: any;
 
   before(async function () {
-    console.log("🚀 Starting PrivateERC20Contract OPRF test setup...");
+    console.log("Starting PrivateERC20Contract OPRF test setup...");
     
     // Get Hardhat's default signer (same approach as working debug script)
-    console.log("📡 Getting signers from hardhat...");
+    console.log("Getting signers from hardhat...");
     [defaultSigner] = await hre.ethers.getSigners();
-    console.log("✅ Got default signer:", await defaultSigner.getAddress());
+    console.log("Got default signer:", await defaultSigner.getAddress());
     
     // Setup main user with the default signer
-    console.log("🔑 Getting user AES key from proxy...");
-    console.log("📡 Proxy URL:", PROXY_URL);
+    console.log("Getting user AES key from proxy...");
+    console.log("Proxy URL:", PROXY_URL);
     try {
       userAesKey = await getUserKeyViaProxy(defaultSigner as any, PROXY_URL);
       userAesKeyHex = userAesKey.toString("hex");
       userAddress = await defaultSigner.getAddress();
-      console.log("✅ User AES key obtained, address:", userAddress);
+      console.log("User AES key obtained, address:", userAddress);
     } catch (error) {
-      console.error("❌ Failed to get user AES key:", error);
+      console.error("Failed to get user AES key:", error);
       throw error;
     }
 
     // Deploy mock token using the default signer
-    console.log("🏗️ Deploying mock token...");
+    console.log("Deploying mock token...");
     const MockTokenFactory = await hre.ethers.getContractFactory("TUSDC", defaultSigner);
     mockToken = await MockTokenFactory.deploy("Test USDC", "TUSDC");
     await mockToken.waitForDeployment();
-    console.log("✅ Mock token deployed at:", await mockToken.getAddress());
+    console.log("Mock token deployed at:", await mockToken.getAddress());
     await new Promise(resolve => setTimeout(resolve, 3000));
 
     // Deploy PrivateERC20Contract256 implementation
-    console.log("🏗️ Deploying PrivateERC20Contract256 implementation...");
+    console.log("Deploying PrivateERC20Contract256 implementation...");
     const ImplementationFactory = await hre.ethers.getContractFactory("contracts/PrivateERC20Contract256.sol:PrivateERC20Contract256", defaultSigner);
     const implementation = await ImplementationFactory.deploy();
     await implementation.waitForDeployment();
     const implementationAddress = await implementation.getAddress();
-    console.log("✅ Implementation deployed at:", implementationAddress);
+    console.log("Implementation deployed at:", implementationAddress);
 
     // Encode the initialize function call
-    console.log("🔧 Encoding initialize function call...");
+    console.log("Encoding initialize function call...");
     const initializeInterface = ImplementationFactory.interface;
     const initData = initializeInterface.encodeFunctionData("initialize", [
       "Test Private Token",
@@ -97,24 +97,24 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     ]);
 
     // Deploy ERC1967Proxy pointing to the implementation
-    console.log("🏗️ Deploying ERC1967Proxy...");
+    console.log("Deploying ERC1967Proxy...");
     const ProxyFactory = await hre.ethers.getContractFactory("@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy", defaultSigner);
     const proxy = await ProxyFactory.deploy(implementationAddress, initData);
     await proxy.waitForDeployment();
     const proxyAddress = await proxy.getAddress();
-    console.log("✅ Proxy deployed at:", proxyAddress);
+    console.log("Proxy deployed at:", proxyAddress);
 
     // Get the contract instance attached to the proxy address
     privateToken = ImplementationFactory.attach(proxyAddress) as any;
-    console.log("✅ PrivateERC20Contract256 (upgradeable) deployed at:", proxyAddress);
+    console.log("PrivateERC20Contract256 (upgradeable) deployed at:", proxyAddress);
     
     // Ensure contract bytecode is available before continuing
     const code = await waitForContractCode(proxyAddress);
-    console.log("📄 Contract code length:", code.length);
+    console.log("Contract code length:", code.length);
     await new Promise(resolve => setTimeout(resolve, 3000));
 
     // Give the user some private ERC20 tokens by shielding some underlying tokens
-    console.log("💰 Setting up initial token balance...");
+    console.log("Setting up initial token balance...");
     const underlyingAmount = hre.ethers.parseEther("1000"); // 1000 tokens
     const transferTx = await mockToken.transfer(userAddress, underlyingAmount);
     await transferTx.wait();
@@ -130,7 +130,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     
     // Wait for MPC computation to complete
     await new Promise(resolve => setTimeout(resolve, 5000));
-    console.log("✅ Initial setup completed");
+    console.log("Initial setup completed");
   });
 
   describe("OPRF Token tests", function () {
@@ -292,7 +292,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
         // The actual amount should be greater than 0 (some tokens were transferred)
         expect(decryptedQ).to.be.greaterThan(0n);
         
-        console.log("✅ Successfully minted OPRF tokens for actual transferred amount:", decryptedQ.toString());
+        console.log("Successfully minted OPRF tokens for actual transferred amount:", decryptedQ.toString());
       }
     });
 
@@ -1796,7 +1796,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
           burnedAmountHandle === 0n
             ? 0n
             : await decryptValueViaProxy(burnedAmountHandle, defaultSigner, userAesKey, PROXY_URL);
-        console.log(`   ✅ Decrypted burned amount: ${decryptedBurnedAmount}`);
+        console.log(`   Decrypted burned amount: ${decryptedBurnedAmount}`);
         expect(decryptedBurnedAmount).to.not.be.undefined;
         expect(decryptedBurnedAmount).to.equal(quantity);
       }
@@ -2017,7 +2017,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
         // Should have one invalidation event per token
         expect(invalidatedEvents.length).to.equal(mintedTokens.length);
 
-        console.log("✅ MergeMany successful!");
+        console.log("MergeMany successful!");
         console.log(`   Merged ${mintedTokens.length} tokens into 1 token`);
         console.log(`   Total quantity preserved: ${decryptedQMerged.toString()}`);
       }
@@ -2199,7 +2199,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       }
     });
 
-    it.only("Should successfully transfer OPRF tokens to recipient with sufficient balance", async function () {
+    it("Should successfully transfer OPRF tokens to recipient with sufficient balance", async function () {
       this.timeout(300000); // 300 seconds (5 minutes) - MPC operations take time
       
 
@@ -2485,7 +2485,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     it("transferOPRF with insufficient balance should return 0 to recipient", async function () {
       this.timeout(300000); // 5 minutes - MPC operations take time
       
-      console.log("📋 Step 1: Setup - preparing balances and recipient...");
+      console.log("Step 1: Setup - preparing balances and recipient...");
       const additionalShieldAmount = hre.ethers.parseEther("150");
       await mockToken.transfer(userAddress, additionalShieldAmount);
       await mockToken.approve(await privateToken.getAddress(), additionalShieldAmount);
@@ -2501,9 +2501,9 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       }).then((tx: any) => tx.wait());
 
       const recipientAesKey = await getUserKeyViaProxy(recipientWallet as any, PROXY_URL);
-      console.log("   ✅ Setup complete");
+      console.log("   Setup complete");
 
-      console.log("📋 Step 2: Minting 3 OPRF tokens...");
+      console.log("Step 2: Minting 3 OPRF tokens...");
       const tokenQuantities = [30n, 40n, 50n]; // Total: 120 tokens
       const transferAmount = 150n; // Try to transfer 150 tokens (insufficient - more than available)
       const expectedRecipientAmount = 0n; // Recipient should get 0 when insufficient
@@ -2574,13 +2574,13 @@ describe("PrivateERC20Contract OPRF Minting", function () {
           q: decryptedQ,
           y: decryptedY
         });
-        console.log(`   ✅ Token ${i + 1} minted and decrypted`);
+        console.log(`   Token ${i + 1} minted and decrypted`);
       }
 
       const totalQuantity = mintedTokens.reduce((sum, token) => sum + token.q, 0n);
-      console.log(`   ✅ All tokens minted. Total: ${totalQuantity}`);
+      console.log(`   All tokens minted. Total: ${totalQuantity}`);
 
-      console.log("📋 Step 3: Preparing tokens for transfer...");
+      console.log("Step 3: Preparing tokens for transfer...");
       const tokensToTransfer = await Promise.all(
         mintedTokens.map(async (token) => {
           const { encryptedInt: xEncrypted } = prepareMessageForBubble128(
@@ -2628,9 +2628,9 @@ describe("PrivateERC20Contract OPRF Minting", function () {
           ciphertextLow: amountLow
         }
       };
-      console.log("   ✅ Tokens prepared");
+      console.log("   Tokens prepared");
 
-      console.log("📋 Step 4: Executing transferOPRF (insufficient balance test)...");
+      console.log("Step 4: Executing transferOPRF (insufficient balance test)...");
       const transferTx = await privateToken.transferOPRF(
         tokensToTransfer,
         encryptedTransferAmount,
@@ -2638,12 +2638,12 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       );
       const transferReceipt = await transferTx.wait();
       expect(transferReceipt?.status).to.equal(1);
-      console.log("   ✅ Transfer transaction confirmed");
+      console.log("   Transfer transaction confirmed");
 
-      console.log("📋 Step 5: Waiting for MPC computation (15s)...");
+      console.log("Step 5: Waiting for MPC computation (15s)...");
       await new Promise(resolve => setTimeout(resolve, 15000));
 
-      console.log("📋 Step 6: Extracting events...");
+      console.log("Step 6: Extracting events...");
       const oprfMintedEvents = transferReceipt?.logs.filter((log: any) => {
         try {
           const decoded = privateToken.interface.parseLog(log);
@@ -2672,9 +2672,9 @@ describe("PrivateERC20Contract OPRF Minting", function () {
 
       expect(recipientEvent).to.not.be.undefined;
       expect(senderEvent).to.not.be.undefined;
-      console.log("   ✅ Events extracted");
+      console.log("   Events extracted");
 
-      console.log("📋 Step 7: Decrypting results (waiting 10s then decrypting 6 values)...");
+      console.log("Step 7: Decrypting results (waiting 10s then decrypting 6 values)...");
       await new Promise(resolve => setTimeout(resolve, 10000));
 
       const recipientQ = await decryptValueViaProxy(recipientEvent.q, recipientWallet, recipientAesKey, PROXY_URL);
@@ -2684,7 +2684,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       const senderQ = await decryptValueViaProxy(senderEvent.q, defaultSigner, userAesKey, PROXY_URL);
       const senderX = await decryptValueViaProxy(senderEvent.x, defaultSigner, userAesKey, PROXY_URL);
       const senderY = await decryptValueViaProxy(senderEvent.y, defaultSigner, userAesKey, PROXY_URL);
-      console.log(`   ✅ Decryption complete. Recipient: ${recipientQ}, Sender: ${senderQ}`);
+      console.log(`   Decryption complete. Recipient: ${recipientQ}, Sender: ${senderQ}`);
 
       // Also verify OPRFTransferred event and that both parties can decrypt the (zero) recipient amount
       const transferEvent = transferReceipt?.logs.find((log: any) => {
@@ -2733,7 +2733,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
         );
       }
 
-      console.log("📋 Step 8: Verifying results...");
+      console.log("Step 8: Verifying results...");
       console.log(`\n========== MUX LOGIC VERIFICATION ==========`);
       console.log(`Total tokens available: ${totalQuantity}`);
       console.log(`Attempted transfer: ${transferAmount}`);
@@ -3098,7 +3098,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     it("redeemMany with insufficient balance should return 0 to recipient", async function () {
       this.timeout(300000); // 5 minutes - MPC operations take time
 
-      console.log("📋 Step 1: Setup - preparing balances and recipient...");
+      console.log("Step 1: Setup - preparing balances and recipient...");
       // ========== Setup: Prepare balances and recipient ==========
       const additionalShieldAmount = hre.ethers.parseEther("150");
       await mockToken.transfer(userAddress, additionalShieldAmount);
@@ -3116,7 +3116,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       }).then((tx: any) => tx.wait());
 
       const recipientAesKey = await getUserKeyViaProxy(recipientWallet as any, PROXY_URL);
-      console.log("   ✅ Setup complete");
+      console.log("   Setup complete");
 
       const tokenQuantities = [30n, 40n, 50n]; // Total: 120 tokens
       const redeemAmount = 150n; // Try to redeem 150 tokens (insufficient - more than available)
@@ -3130,7 +3130,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       }
       const mintedTokens: MintedToken[] = [];
 
-      console.log("📋 Step 2: Minting OPRF tokens...");
+      console.log("Step 2: Minting OPRF tokens...");
       for (let i = 0; i < tokenQuantities.length; i++) {
         const quantity = tokenQuantities[i];
         
@@ -3176,7 +3176,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
         const decryptedX = await decryptValueViaProxy(xHandle, defaultSigner, userAesKey, PROXY_URL);
         const decryptedY = await decryptValueViaProxy(yHandle, defaultSigner, userAesKey, PROXY_URL);
         const decryptedQ = await decryptValueViaProxy(qHandle, defaultSigner, userAesKey, PROXY_URL);
-        console.log(`   ✅ Token ${i + 1} minted and decrypted`);
+        console.log(`   Token ${i + 1} minted and decrypted`);
 
         if (decryptedY > BigInt(2**128 - 1)) {
           throw new Error(`Y value ${decryptedY} is too large for uint128`);
@@ -3193,9 +3193,9 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       }
 
       const totalQuantity = mintedTokens.reduce((sum, token) => sum + token.q, 0n);
-      console.log(`   ✅ All tokens minted. Total: ${totalQuantity}`);
+      console.log(`   All tokens minted. Total: ${totalQuantity}`);
 
-      console.log("📋 Step 3: Preparing tokens for redeemMany...");
+      console.log("Step 3: Preparing tokens for redeemMany...");
       const tokensToRedeem = await Promise.all(
         mintedTokens.map(async (token) => {
           const { encryptedInt: xEncrypted } = prepareMessageForBubble128(
@@ -3228,9 +3228,9 @@ describe("PrivateERC20Contract OPRF Minting", function () {
           };
         })
       );
-      console.log("   ✅ Tokens prepared");
+      console.log("   Tokens prepared");
 
-      console.log("📋 Step 4: Preparing encrypted redeem amount...");
+      console.log("Step 4: Preparing encrypted redeem amount...");
       const { encryptedHigh: amountHigh, encryptedLow: amountLow } = prepareMessageForBubble256(
         redeemAmount,
         userAddress,
@@ -3248,7 +3248,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
 
       const recipientBalanceBeforeDecrypted = 0n;
 
-      console.log("📋 Step 5: Executing redeemMany (insufficient balance test)...");
+      console.log("Step 5: Executing redeemMany (insufficient balance test)...");
       const redeemTx = await privateToken.redeemMany(
         tokensToRedeem,
         encryptedRedeemAmount,
@@ -3256,12 +3256,12 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       );
       const redeemReceipt = await redeemTx.wait();
       expect(redeemReceipt?.status).to.equal(1);
-      console.log("   ✅ Redeem transaction confirmed");
+      console.log("   Redeem transaction confirmed");
 
-      console.log("📋 Step 6: Waiting for MPC computation (30s)...");
+      console.log("Step 6: Waiting for MPC computation (30s)...");
       await new Promise(resolve => setTimeout(resolve, 30000));
 
-      console.log("📋 Step 7: Extracting events...");
+      console.log("Step 7: Extracting events...");
       const burnEvents = redeemReceipt?.logs.filter((log: any) => {
         try {
           const decoded = privateToken.interface.parseLog(log);
@@ -3293,13 +3293,13 @@ describe("PrivateERC20Contract OPRF Minting", function () {
           return false;
         }
       });
-      console.log("   ✅ Events extracted");
+      console.log("   Events extracted");
 
-      console.log("📋 Step 8: Decrypting results...");
+      console.log("Step 8: Decrypting results...");
       await new Promise(resolve => setTimeout(resolve, 10000));
 
       const decryptedBurnedAmount = await decryptValueViaProxy(burnedAmountHandle, defaultSigner, userAesKey, PROXY_URL);
-      console.log(`   ✅ Decrypted burned amount: ${decryptedBurnedAmount}`);
+      console.log(`   Decrypted burned amount: ${decryptedBurnedAmount}`);
 
       let decryptedRemainderQ = 0n;
       if (mintedEvents.length > 0) {
@@ -3318,9 +3318,9 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       const recipientBalanceAfter = await privateToken["balanceOf(address)"](recipientAddress);
       await new Promise(resolve => setTimeout(resolve, 5000));
       const recipientBalanceAfterDecrypted = await decryptValueViaProxy(recipientBalanceAfter, recipientWallet, recipientAesKey, PROXY_URL);
-      console.log(`   ✅ Decryption complete. Recipient balance: ${recipientBalanceAfterDecrypted}, Sender remainder: ${decryptedRemainderQ}`);
+      console.log(`   Decryption complete. Recipient balance: ${recipientBalanceAfterDecrypted}, Sender remainder: ${decryptedRemainderQ}`);
 
-      console.log("📋 Step 9: Verifying results...");
+      console.log("Step 9: Verifying results...");
       const balanceIncrease = recipientBalanceAfterDecrypted - recipientBalanceBeforeDecrypted;
 
       // Display verification summary

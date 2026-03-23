@@ -24,50 +24,50 @@ describe("PrivateERC20Contract256 Upgradability", function () {
   let proxyAddress: string;
 
   before(async function () {
-    console.log("🚀 Starting PrivateERC20Contract256 Upgradability test setup...");
+    console.log("Starting PrivateERC20Contract256 Upgradability test setup...");
 
     // Get Hardhat's default signer
-    console.log("📡 Getting signers from hardhat...");
+    console.log("Getting signers from hardhat...");
     const signers = await hre.ethers.getSigners();
     defaultSigner = signers[0];
-    console.log("✅ Got default signer:", defaultSigner.address);
+    console.log("Got default signer:", defaultSigner.address);
 
     // Create other wallets for testing
     otherWallet = hre.ethers.Wallet.fromPhrase(MNEMONIC!).deriveChild(1).connect(hre.ethers.provider);
     thirdWallet = hre.ethers.Wallet.fromPhrase(MNEMONIC!).deriveChild(2).connect(hre.ethers.provider);
-    console.log("✅ Created other wallet:", otherWallet.address);
-    console.log("✅ Created third wallet:", thirdWallet.address);
+    console.log("Created other wallet:", otherWallet.address);
+    console.log("Created third wallet:", thirdWallet.address);
 
     // Fund the other wallets with ETH for gas
     const fundAmount = hre.ethers.parseEther("0.1");
-    console.log("💰 Funding other wallets with ETH...");
+    console.log("Funding other wallets with ETH...");
     
     const fundTx1 = await defaultSigner.sendTransaction({
       to: otherWallet.address,
       value: fundAmount
     });
     await fundTx1.wait();
-    console.log("✅ Funded otherWallet with 0.1 ETH");
+    console.log("Funded otherWallet with 0.1 ETH");
 
     const fundTx2 = await defaultSigner.sendTransaction({
       to: thirdWallet.address,
       value: fundAmount
     });
     await fundTx2.wait();
-    console.log("✅ Funded thirdWallet with 0.1 ETH");
+    console.log("Funded thirdWallet with 0.1 ETH");
 
     // Deploy mock ERC20 token
-    console.log("🏗️ Deploying mock token...");
+    console.log("Deploying mock token...");
     const MockTokenFactory = await hre.ethers.getContractFactory("TUSDC", defaultSigner);
     mockToken = await MockTokenFactory.deploy("Test USDC", "TUSDC");
     await mockToken.waitForDeployment();
-    console.log("✅ Mock token deployed at:", await mockToken.getAddress());
+    console.log("Mock token deployed at:", await mockToken.getAddress());
 
     // Wait for contract to be available
     await new Promise(resolve => setTimeout(resolve, 3000));
 
     // Deploy PrivateERC20Contract256 implementation
-    console.log("🏗️ Deploying PrivateERC20Contract256 implementation...");
+    console.log("Deploying PrivateERC20Contract256 implementation...");
     const ImplementationFactory = await hre.ethers.getContractFactory(
       "contracts/PrivateERC20Contract256.sol:PrivateERC20Contract256",
       defaultSigner
@@ -75,10 +75,10 @@ describe("PrivateERC20Contract256 Upgradability", function () {
     implementation = await ImplementationFactory.deploy();
     await implementation.waitForDeployment();
     implementationAddress = await implementation.getAddress();
-    console.log("✅ Implementation deployed at:", implementationAddress);
+    console.log("Implementation deployed at:", implementationAddress);
 
     // Encode the initialize function call
-    console.log("🔧 Encoding initialize function call...");
+    console.log("Encoding initialize function call...");
     const initializeInterface = ImplementationFactory.interface;
     const initData = initializeInterface.encodeFunctionData("initialize", [
       "BubbleToken",
@@ -89,7 +89,7 @@ describe("PrivateERC20Contract256 Upgradability", function () {
     ]);
 
     // Deploy ERC1967Proxy pointing to the implementation
-    console.log("🏗️ Deploying ERC1967Proxy...");
+    console.log("Deploying ERC1967Proxy...");
     const ProxyFactory = await hre.ethers.getContractFactory(
       "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy",
       defaultSigner
@@ -97,11 +97,11 @@ describe("PrivateERC20Contract256 Upgradability", function () {
     proxy = await ProxyFactory.deploy(implementationAddress, initData);
     await proxy.waitForDeployment();
     proxyAddress = await proxy.getAddress();
-    console.log("✅ Proxy deployed at:", proxyAddress);
+    console.log("Proxy deployed at:", proxyAddress);
 
     // Get the contract instance attached to the proxy address
     privateToken = ImplementationFactory.attach(proxyAddress);
-    console.log("✅ PrivateERC20Contract256 (upgradeable) ready at:", proxyAddress);
+    console.log("PrivateERC20Contract256 (upgradeable) ready at:", proxyAddress);
   });
 
   // ============================================
@@ -290,7 +290,7 @@ describe("PrivateERC20Contract256 Upgradability", function () {
 
     before(async function () {
       // Deploy V2 implementation for upgrade tests
-      console.log("🏗️ Deploying PrivateERC20Contract256V2 implementation for upgrade tests...");
+      console.log("Deploying PrivateERC20Contract256V2 implementation for upgrade tests...");
       const V2ImplementationFactory = await hre.ethers.getContractFactory(
         "contracts/tests/PrivateERC20Contract256V2Dummy.sol:PrivateERC20Contract256V2",
         defaultSigner
@@ -298,7 +298,7 @@ describe("PrivateERC20Contract256 Upgradability", function () {
       newImplementation = await V2ImplementationFactory.deploy();
       await newImplementation.waitForDeployment();
       newImplementationAddress = await newImplementation.getAddress();
-      console.log("✅ V2 Implementation deployed at:", newImplementationAddress);
+      console.log("V2 Implementation deployed at:", newImplementationAddress);
     });
 
     describe("Positive Cases", function () {

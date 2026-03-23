@@ -215,7 +215,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       expect(await privateToken.isRestricted(otherWallet.address)).to.be.false;
     });
 
-    it.only("should detect restrictions from multiple registries", async function () {
+    it("should detect restrictions from multiple registries", async function () {
       // Add to government registry
       await (await govRegistry.addToRestrictionList(otherWallet.address)).wait();
       await new Promise(resolve => setTimeout(resolve, 3000));
@@ -513,9 +513,9 @@ describe("PrivateERC20WithRestrictionList", function () {
         console.log("Restricting registry from inline check:", restrictingRegistry);
         
         if (restrictingRegistry !== "0x0000000000000000000000000000000000000000") {
-          console.log("✅ Inline restriction check found restricting registry");
+          console.log("Inline restriction check found restricting registry");
         } else {
-          console.log("❌ Inline restriction check found no restricting registry");
+          console.log("Inline restriction check found no restricting registry");
         }
       } catch (error: any) {
         console.log("Error in inline restriction check:", error.message);
@@ -526,7 +526,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       await expect(connectedPrivateToken["transfer(address,uint256)"](otherWallet.address, expectedPrivateAmount))
         .to.be.revertedWithCustomError(privateToken, "AccountIsRestricted")
         .withArgs(restrictedWallet.address, await companyRegistry.getAddress());
-      console.log("✅ Transfer correctly reverted with AccountIsRestricted");
+      console.log("Transfer correctly reverted with AccountIsRestricted");
         
       // Clean up - remove from restriction list and let them unshield
       await (await companyRegistry.removeFromRestrictionList(restrictedWallet.address)).wait();

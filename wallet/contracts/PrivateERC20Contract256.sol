@@ -528,10 +528,10 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
        require(privateAmount > 0, "Amount must be greater than 0");
        gtUint256 balanceGt = _balanceOf(msg.sender);
-       gtUint256 amountGt = MpcCore.setPublic256(uint256(privateAmount));
+       gtUint256 amountGt = MpcCore.setPublic256(privateAmount);
 
        (, gtUint256 newBalanceGt) = MpcCore.checkedSubWithOverflowBit(balanceGt, amountGt);
-       (gtBool overflowBit256, gtUint256 amountToUnshieldGt) = MpcCore.checkedSubWithOverflowBit(balanceGt, newBalanceGt);
+       (, gtUint256 amountToUnshieldGt) = MpcCore.checkedSubWithOverflowBit(balanceGt, newBalanceGt);
        MpcCore.permitThis(amountToUnshieldGt);
        MpcCore.permitThis(newBalanceGt);
        MpcCore.permit(newBalanceGt, msg.sender);
@@ -541,9 +541,8 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
        // user balance = 5, want to unshield 7. checkedSubWithOverflowBit(5, 7) = 5, amount to unshield = bal before 5 sub new balance 5 = 0
 
        // Create array for decryption request
-       uint256[] memory handles = new uint256[](2);
-       handles[0] = gtBool.unwrap(overflowBit256);
-       handles[1] = gtUint256.unwrap(amountToUnshieldGt);
+       uint256[] memory handles = new uint256[](1);
+       handles[0] = gtUint256.unwrap(amountToUnshieldGt);
 
        // Store the request details
        $.unshieldRequests[decryptCounter] = UnshieldRequest({
@@ -562,9 +561,9 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         UnshieldRequest storage request = $.unshieldRequests[decryptID];
         require(request.user != address(0), "Invalid request ID");
 
-        // output[0] contains overflowBit (unused - overflow is handled implicitly via amountToUnshield being 0)
+        // output[0] contains amountToUnshield
         // Both underlying and private tokens use 18 decimals, so amounts are 1:1
-        uint256 amountToUnshield = abi.decode(output[1], (uint256));
+        uint256 amountToUnshield = abi.decode(output[0], (uint256));
         if (amountToUnshield > 0) {
             $._totalSupply -= amountToUnshield;
             require($.underlying.transfer(request.user, amountToUnshield), "Transfer failed");
@@ -591,7 +590,9 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         
         // Calculate actual transferred amount
         gtUint256 contractBalanceAfter = _balanceOf(address(this));
-        gtUint256 actualTransferred = MpcCore.sub(contractBalanceAfter, contractBalanceBefore);
+        (gtBool overflowBit, gtUint256 actualTransferredCandidate) =
+            MpcCore.checkedSubWithOverflowBit(contractBalanceAfter, contractBalanceBefore);
+        gtUint256 actualTransferred = MpcCore.mux(overflowBit, actualTransferredCandidate, $.zero);
         MpcCore.permitThis(actualTransferred);
         
         // Mint OPRF token using the contract's internal key
@@ -614,6 +615,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @return yRemainder The y value of the remainder token
     /// @return qRemainder The quantity of the remainder token
     /// @return xrPay The x value of the payment token
+    /// @return qPay The quantity of the payment token
     /// @return yPay The y value of the payment token
     function _splitTokenInternal(
         gtUint128 xGT,
@@ -625,6 +627,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         gtUint128 yRemainder,
         gtUint256 qRemainder,
         gtUint128 xrPay,
+        gtUint256 qPay,
         gtUint128 yPay
     ) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
@@ -633,13 +636,17 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         gtUint256 qBurned = MpcCore.oprfBurn($._oprfKey, xGT, qGT, y_clear);
         MpcCore.permitThis(qBurned);
         
-        // Calculate the remainder: qRemainder = qBurned - qSplit
-        qRemainder = MpcCore.sub(qBurned, qSplitGT);
+        // Use checked subtraction to avoid underflow when requested split exceeds burned amount.
+        // If overflow occurs, keep full amount as remainder and set payment to zero.
+        (gtBool overflowBit, gtUint256 qRemainderCandidate) = MpcCore.checkedSubWithOverflowBit(qBurned, qSplitGT);
+        qRemainder = MpcCore.mux(overflowBit, qRemainderCandidate, qBurned);
+        qPay = MpcCore.mux(overflowBit, qSplitGT, $.zero);
         MpcCore.permitThis(qRemainder);
+        MpcCore.permitThis(qPay);
         
         // Mint two new tokens: remainder and payment
         (xrRemainder, yRemainder) = MpcCore.oprfMint($._oprfKey, qRemainder);
-        (xrPay, yPay) = MpcCore.oprfMint($._oprfKey, qSplitGT);
+        (xrPay, yPay) = MpcCore.oprfMint($._oprfKey, qPay);
         
         // Emit invalidation event for the original token (using validated GT values)
         emit OPRFTokenInvalidated(msg.sender, xGT, qGT, y_clear, 1); // 1=split
@@ -662,7 +669,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         gtUint256 qSplitGT = MpcCore.validateCiphertext(qSplit);
         
         // Perform the split operation
-        (gtUint128 xrRemainder, gtUint128 yRemainder, gtUint256 qRemainder, gtUint128 xrPay, gtUint128 yPay) = 
+        (gtUint128 xrRemainder, gtUint128 yRemainder, gtUint256 qRemainder, gtUint128 xrPay, gtUint256 qPay, gtUint128 yPay) = 
             _splitTokenInternal(xGT, qGT, qSplitGT, y_clear);
         
         // Permit the user to decrypt the results
@@ -670,15 +677,15 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         MpcCore.permit(qRemainder, msg.sender);
         MpcCore.permit(yRemainder, msg.sender);
         MpcCore.permit(xrPay, msg.sender);
-        MpcCore.permit(qSplitGT, msg.sender);
+        MpcCore.permit(qPay, msg.sender);
         MpcCore.permit(yPay, msg.sender);
         
         // Emit events
-        emit OPRFSplit(msg.sender, xrRemainder, qRemainder, yRemainder, xrPay, qSplitGT, yPay);
+        emit OPRFSplit(msg.sender, xrRemainder, qRemainder, yRemainder, xrPay, qPay, yPay);
         // Emit OPRFMinted events for both the remainder and payment tokens
         // This allows the subgraph to track them like regular minted tokens
         emit OPRFMinted(msg.sender, xrRemainder, yRemainder, qRemainder);
-        emit OPRFMinted(msg.sender, xrPay, yPay, qSplitGT);
+        emit OPRFMinted(msg.sender, xrPay, yPay, qPay);
     }
 
     /// @notice Splits an OPRF token for anonymous transfer to a recipient
@@ -700,7 +707,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         gtUint256 qSplitGT = MpcCore.validateCiphertext(qSplit);
         
         // Perform the split operation
-        (gtUint128 xrRemainder, gtUint128 yRemainder, gtUint256 qRemainder, gtUint128 xrPay, gtUint128 yPay) = 
+        (gtUint128 xrRemainder, gtUint128 yRemainder, gtUint256 qRemainder, gtUint128 xrPay, gtUint256 qPay, gtUint128 yPay) = 
             _splitTokenInternal(xGT, qGT, qSplitGT, y_clear);
         
         // Permit the original user to decrypt the remainder values
@@ -710,16 +717,16 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         
         // Permit the recipient to decrypt the payment values
         MpcCore.permit(xrPay, recipient);
-        MpcCore.permit(qSplitGT, recipient);
+        MpcCore.permit(qPay, recipient);
         MpcCore.permit(yPay, recipient);
         
         // Emit OPRFMinted events for both the remainder and payment tokens
         // This allows the subgraph to track them like regular minted tokens
         emit OPRFMinted(msg.sender, xrRemainder, yRemainder, qRemainder);
-        emit OPRFMinted(recipient, xrPay, yPay, qSplitGT);
+        emit OPRFMinted(recipient, xrPay, yPay, qPay);
         
         // Also emit the split event for backward compatibility and additional tracking
-        emit OPRFSplitForRecipient(msg.sender, recipient, xrRemainder, qRemainder, yRemainder, xrPay, qSplitGT, yPay);
+        emit OPRFSplitForRecipient(msg.sender, recipient, xrRemainder, qRemainder, yRemainder, xrPay, qPay, yPay);
     }
     
     /// @notice Burns an OPRF token and transfers the burned amount to recipient
