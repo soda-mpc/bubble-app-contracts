@@ -1,30 +1,10 @@
 import { artifacts, ethers, network } from "hardhat";
+import { DeploymentResult } from "./deployment-types";
 
-interface DeploymentResult {
-  testToken: {
-    address: string;
-    name: string;
-    symbol: string;
-    decimals: number;
-    blockNumber: number;
-  };
-  privateERC20WithRestrictionList: {
-    implementation: string;
-    implementationBlockNumber: number;
-    factory: string;
-    factoryBlockNumber: number;
-  };
-  restrictionListRegistryFactory: {
-    address: string;
-    blockNumber: number;
-  };
-  privateToken: {
-    address: string;
-    name: string;
-    symbol: string;
-    underlying: string;
-    blockNumber: number;
-  };
+interface DeployedContractInfo {
+  contract: any;
+  address: string;
+  blockNumber: number;
 }
 
 async function getContractSizeInfo(contractName: string) {
@@ -55,6 +35,47 @@ function getKurtosisDeployOverrides(
   return { gasLimit };
 }
 
+async function waitForDeploymentAndBlock(contract: any): Promise<{ address: string; blockNumber: number }> {
+  const deployTx = contract.deploymentTransaction();
+  if (deployTx) {
+    const receipt = await deployTx.wait(1);
+    return {
+      address: await contract.getAddress(),
+      blockNumber: receipt?.blockNumber || 0,
+    };
+  }
+
+  await contract.waitForDeployment();
+  return {
+    address: await contract.getAddress(),
+    blockNumber: await ethers.provider.getBlockNumber(),
+  };
+}
+
+async function deployWithSizeInfo(
+  contractName: string,
+  deployArgs: any[],
+  minGas: number
+): Promise<DeployedContractInfo> {
+  const sizeInfo = await getContractSizeInfo(contractName);
+  console.log(
+    `   Size: init ${sizeInfo.initCodeBytes} bytes, runtime ${sizeInfo.runtimeCodeBytes} bytes`
+  );
+  console.log(
+    `   Est. gas: code deposit ${sizeInfo.codeDepositGas}, initcode ${sizeInfo.initCodeGas}`
+  );
+
+  const deployOverrides = getKurtosisDeployOverrides(sizeInfo, minGas);
+  if ("gasLimit" in deployOverrides) {
+    console.log(`   Using gasLimit: ${deployOverrides.gasLimit}`);
+  }
+
+  const Factory = await ethers.getContractFactory(contractName);
+  const contract = await Factory.deploy(...deployArgs, deployOverrides);
+  const { address, blockNumber } = await waitForDeploymentAndBlock(contract);
+  return { contract, address, blockNumber };
+}
+
 async function main(): Promise<DeploymentResult> {
   console.log("\n╔════════════════════════════════════════════════════════════╗");
   console.log("║          ENVIRONMENT SETUP - FULL DEPLOYMENT               ║");
@@ -77,33 +98,11 @@ async function main(): Promise<DeploymentResult> {
   const tokenSymbol = "TUSDC";
   const tokenDecimals = 18;
 
-  const tusdcSize = await getContractSizeInfo("TUSDC");
-  console.log(
-    `   📏 Size: init ${tusdcSize.initCodeBytes} bytes, runtime ${tusdcSize.runtimeCodeBytes} bytes`
+  const { address: tusdcAddress, blockNumber: tusdcBlockNumber } = await deployWithSizeInfo(
+    "TUSDC",
+    [tokenName, tokenSymbol],
+    3_000_000
   );
-  console.log(
-    `   ⛽ Est. gas: code deposit ${tusdcSize.codeDepositGas}, initcode ${tusdcSize.initCodeGas}`
-  );
-  const tusdcDeployOverrides = getKurtosisDeployOverrides(tusdcSize);
-  if ("gasLimit" in tusdcDeployOverrides) {
-    console.log(`   ⛽ Using gasLimit: ${tusdcDeployOverrides.gasLimit}`);
-  }
-
-  const TUSDC = await ethers.getContractFactory("TUSDC");
-  const tusdc = await TUSDC.deploy(tokenName, tokenSymbol, tusdcDeployOverrides);
-  
-  const tusdcDeployTx = tusdc.deploymentTransaction();
-  let tusdcBlockNumber = 0;
-  if (tusdcDeployTx) {
-    const receipt = await tusdcDeployTx.wait(1);
-    tusdcBlockNumber = receipt?.blockNumber || 0;
-  } else {
-    await tusdc.waitForDeployment();
-    const blockNumber = await ethers.provider.getBlockNumber();
-    tusdcBlockNumber = blockNumber;
-  }
-  
-  const tusdcAddress = await tusdc.getAddress();
   console.log(`   ✅ TUSDC deployed at: ${tusdcAddress}`);
   console.log(`   📦 Block number: ${tusdcBlockNumber}\n`);
 
@@ -114,33 +113,8 @@ async function main(): Promise<DeploymentResult> {
   console.log("📦 STEP 2: Deploying PrivateERC20WithRestrictionList256 Implementation...");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-  const privateImplSize = await getContractSizeInfo("PrivateERC20WithRestrictionList256");
-  console.log(
-    `   📏 Size: init ${privateImplSize.initCodeBytes} bytes, runtime ${privateImplSize.runtimeCodeBytes} bytes`
-  );
-  console.log(
-    `   ⛽ Est. gas: code deposit ${privateImplSize.codeDepositGas}, initcode ${privateImplSize.initCodeGas}`
-  );
-  const privateImplDeployOverrides = getKurtosisDeployOverrides(privateImplSize);
-  if ("gasLimit" in privateImplDeployOverrides) {
-    console.log(`   ⛽ Using gasLimit: ${privateImplDeployOverrides.gasLimit}`);
-  }
-
-  const PrivateERC20Impl = await ethers.getContractFactory("PrivateERC20WithRestrictionList256");
-  const privateERC20Impl = await PrivateERC20Impl.deploy(privateImplDeployOverrides);
-  
-  const privateERC20ImplTx = privateERC20Impl.deploymentTransaction();
-  let privateERC20ImplBlockNumber = 0;
-  if (privateERC20ImplTx) {
-    const receipt = await privateERC20ImplTx.wait(1);
-    privateERC20ImplBlockNumber = receipt?.blockNumber || 0;
-  } else {
-    await privateERC20Impl.waitForDeployment();
-    const blockNumber = await ethers.provider.getBlockNumber();
-    privateERC20ImplBlockNumber = blockNumber;
-  }
-  
-  const privateERC20ImplAddress = await privateERC20Impl.getAddress();
+  const { address: privateERC20ImplAddress, blockNumber: privateERC20ImplBlockNumber } =
+    await deployWithSizeInfo("PrivateERC20WithRestrictionList256", [], 3_000_000);
   console.log(`   ✅ Implementation deployed at: ${privateERC20ImplAddress}`);
   console.log(`   📦 Block number: ${privateERC20ImplBlockNumber}\n`);
 
@@ -151,34 +125,15 @@ async function main(): Promise<DeploymentResult> {
   console.log("📦 STEP 3: Deploying PrivateERC20WithRestrictionListFactory256...");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-  const privateFactorySize = await getContractSizeInfo("PrivateERC20WithRestrictionListFactory256");
-  console.log(
-    `   📏 Size: init ${privateFactorySize.initCodeBytes} bytes, runtime ${privateFactorySize.runtimeCodeBytes} bytes`
+  const {
+    contract: privateERC20Factory,
+    address: privateERC20FactoryAddress,
+    blockNumber: privateERC20FactoryBlockNumber,
+  } = await deployWithSizeInfo(
+    "PrivateERC20WithRestrictionListFactory256",
+    [privateERC20ImplAddress],
+    3_000_000
   );
-  console.log(
-    `   ⛽ Est. gas: code deposit ${privateFactorySize.codeDepositGas}, initcode ${privateFactorySize.initCodeGas}`
-  );
-  const privateFactoryDeployOverrides = getKurtosisDeployOverrides(privateFactorySize);
-  if ("gasLimit" in privateFactoryDeployOverrides) {
-    console.log(`   ⛽ Using gasLimit: ${privateFactoryDeployOverrides.gasLimit}`);
-  }
-
-  const PrivateERC20Factory = await ethers.getContractFactory("PrivateERC20WithRestrictionListFactory256");
-  // @ts-ignore - TypeScript types may be stale after contract changes
-  const privateERC20Factory = await PrivateERC20Factory.deploy(privateERC20ImplAddress, privateFactoryDeployOverrides);
-  
-  const privateERC20FactoryTx = privateERC20Factory.deploymentTransaction();
-  let privateERC20FactoryBlockNumber = 0;
-  if (privateERC20FactoryTx) {
-    const receipt = await privateERC20FactoryTx.wait(1);
-    privateERC20FactoryBlockNumber = receipt?.blockNumber || 0;
-  } else {
-    await privateERC20Factory.waitForDeployment();
-    const blockNumber = await ethers.provider.getBlockNumber();
-    privateERC20FactoryBlockNumber = blockNumber;
-  }
-  
-  const privateERC20FactoryAddress = await privateERC20Factory.getAddress();
   console.log(`   ✅ Factory deployed at: ${privateERC20FactoryAddress}`);
   console.log(`   📦 Block number: ${privateERC20FactoryBlockNumber}\n`);
 
@@ -189,33 +144,10 @@ async function main(): Promise<DeploymentResult> {
   console.log("📦 STEP 4: Deploying RestrictionListRegistryFactory...");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-  const restrictionListFactorySize = await getContractSizeInfo("RestrictionListRegistryFactory");
-  console.log(
-    `   📏 Size: init ${restrictionListFactorySize.initCodeBytes} bytes, runtime ${restrictionListFactorySize.runtimeCodeBytes} bytes`
-  );
-  console.log(
-    `   ⛽ Est. gas: code deposit ${restrictionListFactorySize.codeDepositGas}, initcode ${restrictionListFactorySize.initCodeGas}`
-  );
-  const restrictionListFactoryDeployOverrides = getKurtosisDeployOverrides(restrictionListFactorySize);
-  if ("gasLimit" in restrictionListFactoryDeployOverrides) {
-    console.log(`   ⛽ Using gasLimit: ${restrictionListFactoryDeployOverrides.gasLimit}`);
-  }
-
-  const RestrictionListFactory = await ethers.getContractFactory("RestrictionListRegistryFactory");
-  const restrictionListFactory = await RestrictionListFactory.deploy(restrictionListFactoryDeployOverrides);
-  
-  const restrictionListFactoryTx = restrictionListFactory.deploymentTransaction();
-  let restrictionListFactoryBlockNumber = 0;
-  if (restrictionListFactoryTx) {
-    const receipt = await restrictionListFactoryTx.wait(1);
-    restrictionListFactoryBlockNumber = receipt?.blockNumber || 0;
-  } else {
-    await restrictionListFactory.waitForDeployment();
-    const blockNumber = await ethers.provider.getBlockNumber();
-    restrictionListFactoryBlockNumber = blockNumber;
-  }
-  
-  const restrictionListFactoryAddress = await restrictionListFactory.getAddress();
+  const {
+    address: restrictionListFactoryAddress,
+    blockNumber: restrictionListFactoryBlockNumber,
+  } = await deployWithSizeInfo("RestrictionListRegistryFactory", [], 3_000_000);
   console.log(`   ✅ Factory deployed at: ${restrictionListFactoryAddress}`);
   console.log(`   📦 Block number: ${restrictionListFactoryBlockNumber}\n`);
 

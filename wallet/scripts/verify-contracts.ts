@@ -18,43 +18,58 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { run } from "hardhat";
+import { ethers, run } from "hardhat";
+import { DeploymentResult } from "./deployment-types";
 
-interface DeploymentResult {
-  testToken: {
-    address: string;
-    name: string;
-    symbol: string;
-    decimals: number;
-    blockNumber: number;
-  };
-  privateERC20WithRestrictionList: {
-    implementation: string;
-    implementationBlockNumber: number;
-    factory: string;
-    factoryBlockNumber: number;
-  };
-  restrictionListRegistryFactory: {
-    address: string;
-    blockNumber: number;
-  };
-  privateToken: {
-    address: string;
-    name: string;
-    symbol: string;
-    underlying: string;
-    blockNumber: number;
-  };
+function parseDeploymentPathArg(): string | undefined {
+  const maybePath = process.argv.slice(2).find((arg) => !arg.startsWith("-"));
+  return maybePath;
+}
+
+function assertAddress(value: string, field: string): void {
+  if (!ethers.isAddress(value)) {
+    throw new Error(`Invalid address for ${field}: ${value}`);
+  }
+}
+
+function validateDeployment(json: DeploymentResult): void {
+  if (!json?.testToken?.address || !json?.privateERC20WithRestrictionList?.implementation) {
+    throw new Error("Invalid deployment JSON: missing testToken or privateERC20WithRestrictionList");
+  }
+
+  assertAddress(json.testToken.address, "testToken.address");
+  assertAddress(json.privateERC20WithRestrictionList.implementation, "privateERC20WithRestrictionList.implementation");
+  assertAddress(json.privateERC20WithRestrictionList.factory, "privateERC20WithRestrictionList.factory");
+  assertAddress(json.restrictionListRegistryFactory.address, "restrictionListRegistryFactory.address");
+  assertAddress(json.privateToken.address, "privateToken.address");
+  assertAddress(json.privateToken.underlying, "privateToken.underlying");
 }
 
 function loadDeployment(filePath: string): DeploymentResult {
   const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
   const raw = fs.readFileSync(resolved, "utf-8");
   const json = JSON.parse(raw) as DeploymentResult;
-  if (!json?.testToken?.address || !json?.privateERC20WithRestrictionList?.implementation) {
-    throw new Error("Invalid deployment JSON: missing testToken or privateERC20WithRestrictionList");
-  }
+  validateDeployment(json);
   return json;
+}
+
+async function retryWithBackoff<T>(
+  operation: () => Promise<T>,
+  maxRetries = 2,
+  baseDelayMs = 1500
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxRetries) break;
+      const delay = baseDelayMs * 2 ** attempt;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
 }
 
 async function verify(
@@ -69,78 +84,73 @@ async function verify(
       constructorArguments,
     };
     if (contract) params.contract = contract;
-    await run("verify:verify", params);
-    console.log(`   ✅ ${name} verified: ${address}`);
+    await retryWithBackoff(() => run("verify:verify", params));
+    console.log(`   ${name} verified: ${address}`);
     return true;
   } catch (e: unknown) {
     const err = e as { message?: string };
     if (err.message?.includes("Already Verified")) {
-      console.log(`   ⏭️  ${name} already verified: ${address}`);
+      console.log(`   ${name} already verified: ${address}`);
       return true;
     }
-    console.error(`   ❌ ${name} failed: ${address}`);
+    console.error(`   ${name} failed: ${address}`);
     console.error(`      ${err.message ?? e}`);
     return false;
   }
 }
 
-async function main() {
-  // Hardhat run doesn't pass extra args to scripts; use DEPLOYMENT_JSON env or default path
+async function main(): Promise<number> {
+  // Hardhat run can pass extra args after script path; support env or positional arg.
+  const pathArg = parseDeploymentPathArg();
   const jsonPath =
+    pathArg ||
     process.env.DEPLOYMENT_JSON ||
     path.join(process.cwd(), "deployment.json");
 
   if (!fs.existsSync(jsonPath)) {
-    console.error("Usage: npx hardhat run scripts/verify-contracts.ts --network <network>");
-    console.error("       (optional) DEPLOYMENT_JSON=/path/to/deployment.json");
+    console.error("Usage: npx hardhat run scripts/verify-contracts.ts --network <network> [deployment.json]");
+    console.error("       (optional) DEPLOYMENT_JSON=/path/to/deployment.json if no positional arg");
     console.error("Missing deployment file:", jsonPath);
     console.error("Run setup-environment.ts, save the JSON output to deployment.json (or set DEPLOYMENT_JSON), then re-run.");
-    process.exit(1);
+    return 1;
   }
 
   const deployment = loadDeployment(jsonPath);
-  const network = process.env.HARDHAT_NETWORK ?? "unknown";
+  const networkName = process.env.HARDHAT_NETWORK ?? "unknown";
 
-  console.log("\n╔════════════════════════════════════════════════════════════╗");
-  console.log("║          CONTRACT VERIFICATION                             ║");
-  console.log("╚════════════════════════════════════════════════════════════╝\n");
-  console.log(`Network: ${network}`);
+  console.log("\n=== Contract Verification ===\n");
+  console.log(`Network: ${networkName}`);
   console.log(`Deployment file: ${jsonPath}\n`);
+
+  const targets: Array<{ name: string; address: string; constructorArguments?: unknown[]; contract?: string }> = [
+    {
+      name: "TUSDC (Test Token)",
+      address: deployment.testToken.address,
+      constructorArguments: [deployment.testToken.name, deployment.testToken.symbol],
+    },
+    {
+      name: "PrivateERC20WithRestrictionList256 (Implementation)",
+      address: deployment.privateERC20WithRestrictionList.implementation,
+      constructorArguments: [],
+    },
+    {
+      name: "PrivateERC20WithRestrictionListFactory256 (Factory)",
+      address: deployment.privateERC20WithRestrictionList.factory,
+      constructorArguments: [deployment.privateERC20WithRestrictionList.implementation],
+    },
+    {
+      name: "RestrictionListRegistryFactory",
+      address: deployment.restrictionListRegistryFactory.address,
+      constructorArguments: [],
+    },
+  ];
 
   let ok = 0;
   let fail = 0;
-
-  // 1. TUSDC — constructor(string name, string symbol)
-  const r1 = await verify(
-    "TUSDC (Test Token)",
-    deployment.testToken.address,
-    [deployment.testToken.name, deployment.testToken.symbol]
-  );
-  r1 ? ok++ : fail++;
-
-  // 2. PrivateERC20WithRestrictionList256 implementation — no args
-  const r2 = await verify(
-    "PrivateERC20WithRestrictionList256 (Implementation)",
-    deployment.privateERC20WithRestrictionList.implementation,
-    []
-  );
-  r2 ? ok++ : fail++;
-
-  // 3. PrivateERC20WithRestrictionListFactory256 — constructor(address implementation_)
-  const r3 = await verify(
-    "PrivateERC20WithRestrictionListFactory256 (Factory)",
-    deployment.privateERC20WithRestrictionList.factory,
-    [deployment.privateERC20WithRestrictionList.implementation]
-  );
-  r3 ? ok++ : fail++;
-
-  // 4. RestrictionListRegistryFactory — no constructor args
-  const r4 = await verify(
-    "RestrictionListRegistryFactory",
-    deployment.restrictionListRegistryFactory.address,
-    []
-  );
-  r4 ? ok++ : fail++;
+  for (const target of targets) {
+    const result = await verify(target.name, target.address, target.constructorArguments ?? [], target.contract);
+    result ? ok++ : fail++;
+  }
 
   console.log("\n--- Summary ---");
   console.log(`Verified or already verified: ${ok}`);
@@ -148,10 +158,14 @@ async function main() {
   console.log("\nNote: The private token (proxy) at", deployment.privateToken.address, "is an ERC1967Proxy.");
   console.log("      Verify the implementation above; the proxy can be verified separately with constructor args (implementation, initData) if needed.\n");
 
-  process.exit(fail > 0 ? 1 : 0);
+  return fail > 0 ? 1 : 0;
 }
 
 main().catch((err) => {
   console.error(err);
   process.exit(1);
+}).then((code) => {
+  if (typeof code === "number") {
+    process.exit(code);
+  }
 });

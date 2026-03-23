@@ -1,5 +1,5 @@
 import { ethers } from "hardhat";
-import {PrivateERC20Factory} from "../../../bubble/typechain-types";
+import { PrivateERC20Factory } from "../typechain-types";
 
 async function main() {
   // Parse command line arguments

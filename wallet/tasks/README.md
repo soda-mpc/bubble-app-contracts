@@ -63,7 +63,7 @@ Use Hardhat’s **`--network`** flag; do not add a custom `network` param.
 
 ### GCHandlerAddress.sol
 
-Chain folders may only define `GCExtendedOperationsAddress`. The task ensures the root file has **both** `GCHandlerAddress` and `GCExtendedOperationsAddress` (same address) with a single SPDX/pragma block so compilation succeeds.
+Chain folders should define `GCHandlerAddress`. The task ensures the root file has `GCHandlerAddress` with a single SPDX/pragma block so compilation succeeds.
 
 ### Examples
 
