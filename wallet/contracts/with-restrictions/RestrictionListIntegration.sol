@@ -233,26 +233,26 @@ abstract contract RestrictionListIntegration {
     /// @notice Get the names of all active restriction list registries
     /// @return registryNames Array of registry names
     function getActiveRegistryNames() public view returns (string[] memory registryNames) {
-        registryNames = new string[](_restrictionListRegistries.length);
+        string[] memory tempNames = new string[](_restrictionListRegistries.length);
         uint256 count = 0;
         
         for (uint256 i = 0; i < _restrictionListRegistries.length; i++) {
             address registry = _restrictionListRegistries[i];
             if (_isActiveRegistry[registry]) {
                 try IRestrictionList(registry).name() returns (string memory name) {
-                    registryNames[count] = name;
+                    tempNames[count] = name;
                     count++;
                 } catch {
                     // If name() fails, use address as fallback
-                    registryNames[count] = _addressToString(registry);
+                    tempNames[count] = _addressToString(registry);
                     count++;
                 }
             }
         }
         
-        // Resize array to actual count
-        assembly {
-            mstore(registryNames, count)
+        registryNames = new string[](count);
+        for (uint256 i = 0; i < count; i++) {
+            registryNames[i] = tempNames[i];
         }
     }
 
