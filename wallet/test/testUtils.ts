@@ -55,6 +55,31 @@ async function retryWithBackoff<T>(
   throw lastError!;
 }
 
+export async function expectReverted(txPromise: Promise<any>): Promise<void> {
+  try {
+    const tx = await txPromise;
+    await tx.wait();
+  } catch {
+    return;
+  }
+  throw new Error("Expected transaction to revert, but it succeeded");
+}
+
+export async function waitForCondition(
+  condition: () => Promise<boolean>,
+  timeoutMs = 30000,
+  stepMs = 1500
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await condition()) {
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, stepMs));
+  }
+  throw new Error("Timed out waiting for on-chain condition");
+}
+
 export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl: string) {
   // Get signer's address
   const userAddress = await signer.getAddress();

@@ -27,9 +27,6 @@ contract RestrictionListRegistry is IRestrictionList, Ownable {
     /// @notice Set of restricted addresses for efficient enumeration
     EnumerableSet.AddressSet private _restrictedAddresses;
     
-    /// @notice Mapping for O(1) restriction status checks
-    mapping(address => bool) private _isRestricted;
-    
     /// @notice Maximum number of accounts that can be processed in batch operations
     uint256 public constant MAX_BATCH_SIZE = 100;
     
@@ -46,7 +43,7 @@ contract RestrictionListRegistry is IRestrictionList, Ownable {
 
     /// @notice Modifier to prevent restricted addresses from becoming owner
     modifier notRestricted(address account) {
-        if (_isRestricted[account]) revert AccountAlreadyRestricted(account);
+        if (_restrictedAddresses.contains(account)) revert AccountAlreadyRestricted(account);
         _;
     }
 
@@ -60,7 +57,7 @@ contract RestrictionListRegistry is IRestrictionList, Ownable {
     /// @param account The address to check
     /// @return True if the address is restricted, false otherwise
     function isRestricted(address account) external view override returns (bool) {
-        return _isRestricted[account];
+        return _restrictedAddresses.contains(account);
     }
 
     /// @notice Add an address to the restriction list
@@ -69,9 +66,8 @@ contract RestrictionListRegistry is IRestrictionList, Ownable {
     function addToRestrictionList(address account) external override onlyOwner {
         if (account == address(0)) revert CannotRestrictZeroAddress();
         if (account == owner()) revert CannotRestrictOwner(account);
-        if (_isRestricted[account]) revert AccountAlreadyRestricted(account);
+        if (_restrictedAddresses.contains(account)) revert AccountAlreadyRestricted(account);
 
-        _isRestricted[account] = true;
         _restrictedAddresses.add(account);
         
         emit AddedToRestrictionList(account, msg.sender);
@@ -81,9 +77,8 @@ contract RestrictionListRegistry is IRestrictionList, Ownable {
     /// @dev Only the owner can call this function
     /// @param account The address to remove from restriction list
     function removeFromRestrictionList(address account) external override onlyOwner {
-        if (!_isRestricted[account]) revert AccountNotRestricted(account);
+        if (!_restrictedAddresses.contains(account)) revert AccountNotRestricted(account);
 
-        _isRestricted[account] = false;
         _restrictedAddresses.remove(account);
         
         emit RemovedFromRestrictionList(account, msg.sender);
@@ -100,11 +95,10 @@ contract RestrictionListRegistry is IRestrictionList, Ownable {
             address account = accounts[i];
             
             // Skip invalid addresses and already restricted accounts
-            if (account == address(0) || account == owner() || _isRestricted[account]) {
+            if (account == address(0) || account == owner() || _restrictedAddresses.contains(account)) {
                 continue;
             }
 
-            _isRestricted[account] = true;
             _restrictedAddresses.add(account);
             
             // Emit individual event for each successful addition
@@ -123,11 +117,10 @@ contract RestrictionListRegistry is IRestrictionList, Ownable {
             address account = accounts[i];
             
             // Skip accounts that aren't restricted
-            if (!_isRestricted[account]) {
+            if (!_restrictedAddresses.contains(account)) {
                 continue;
             }
 
-            _isRestricted[account] = false;
             _restrictedAddresses.remove(account);
             
             // Emit individual event for each successful removal
@@ -171,7 +164,6 @@ contract RestrictionListRegistry is IRestrictionList, Ownable {
         address[] memory allRestricted = _restrictedAddresses.values();
         
         for (uint256 i = 0; i < allRestricted.length; i++) {
-            _isRestricted[allRestricted[i]] = false;
             // Emit individual event for each removal
             emit RemovedFromRestrictionList(allRestricted[i], msg.sender);
         }
