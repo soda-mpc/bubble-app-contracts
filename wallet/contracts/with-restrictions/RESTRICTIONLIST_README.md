@@ -25,7 +25,6 @@ The restriction list system provides a modular, standardized way to manage addre
 
 4. **Example Implementations**
    - `PrivateERC20WithRestrictionList256.sol` - Shows integration with existing contracts
-   - `RestrictionListExample.sol` - Advanced third-party implementation with roles
 
 ## Event Design Philosophy
 
@@ -66,8 +65,8 @@ The system supports **multiple restriction list registries** simultaneously, ena
 ```solidity
 // Multiple registries check (ANY registry restricts = address is restricted)
 function isRestricted(address account) returns (bool) {
-    // Check all active registries
-    // Return true if ANY registry restricts the address
+    // Returns false when enforcement is disabled
+    // Otherwise checks all active registries and returns true if ANY restricts
 }
 
 // Get which registry restricts an address
@@ -78,6 +77,11 @@ function getRestrictingRegistry(address account) returns (address) {
 // Get ALL registries that restrict an address
 function getDetailedRestrictionInfo(address account) returns (address[] memory) {
     // Returns array of all registries that restrict the address
+}
+
+// Convenience function in PrivateERC20WithRestrictionList256
+function getComprehensiveRestrictionInfo(address account) returns (address[] memory) {
+    // Returns the same "all restricting registries" array
 }
 ```
 
@@ -181,9 +185,9 @@ contract.on("AddedToRestrictionList", (account, admin) => {
 
 ```solidity
 contract MyToken is ERC20, RestrictionListIntegration {
-    constructor(address restrictionListRegistry) 
+    constructor(address[] memory restrictionListRegistries) 
         ERC20("MyToken", "MTK")
-        RestrictionListIntegration(restrictionListRegistry) 
+        RestrictionListIntegration(restrictionListRegistries) 
     {}
     
     function transfer(address to, uint256 amount) 
@@ -225,8 +229,8 @@ contract CustomRestrictionList is IRestrictionList, AccessControl {
 
 ```solidity
 contract MyContract is RestrictionListIntegration {
-    constructor(address restrictionListRegistry) 
-        RestrictionListIntegration(restrictionListRegistry) 
+    constructor(address[] memory restrictionListRegistries) 
+        RestrictionListIntegration(restrictionListRegistries) 
     {}
     
     function restrictedFunction() public notRestricted(msg.sender) {
@@ -291,6 +295,7 @@ addMultipleToRestrictionList([...10 addresses]);
 - Allow registry updates for flexibility
 - Implement proper validation when changing registries
 - Consider timelock mechanisms for sensitive operations
+- If using `PrivateERC20WithRestrictionList256`, use `setRestrictionListEnforcement(bool)` and emergency disable controls when needed
 
 ### 3. Gas Optimization
 - Batch operations still save gas on transaction costs
@@ -439,13 +444,16 @@ describe("Restriction List System", function() {
         await registry.addToRestrictionList(user1.address);
         await expect(
             token.connect(user1).transfer(user2.address, 100)
-        ).to.be.revertedWith("account is restricted");
+        ).to.be.revertedWithCustomError(token, "AccountIsRestricted");
     });
     
     it("should allow registry updates by owner", async function() {
-        const newRegistry = await RestrictionListRegistry.deploy(owner.address);
-        await token.updateRestrictionListRegistry(newRegistry.address);
-        expect(await token.getRestrictionListRegistry()).to.equal(newRegistry.address);
+        const newRegistry = await RestrictionListRegistry.deploy(owner.address, "New Compliance Registry");
+        await token.addRestrictionListRegistry(newRegistry.address);
+        expect(await token.getActiveRegistryCount()).to.equal(2);
+
+        await token.removeRestrictionListRegistry(newRegistry.address);
+        expect(await token.getActiveRegistryCount()).to.equal(1);
     });
 });
 ```
