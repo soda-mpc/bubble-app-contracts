@@ -337,6 +337,11 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
 
     /// @dev Reverts if account is restricted by any active registry.
     function _requireNotRestrictedAccount(address account) internal view {
+        PrivateERC20WithRestrictionList256Storage storage $ = _getPrivateERC20WithRestrictionList256Storage();
+        if (!$.restrictionListEnforcementEnabled) {
+            return;
+        }
+
         address restrictingRegistry = getRestrictingRegistry(account);
         if (restrictingRegistry != address(0)) {
             revert AccountIsRestricted(account, restrictingRegistry);

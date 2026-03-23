@@ -248,6 +248,32 @@ describe("PrivateERC20WithRestrictionList", function () {
       await new Promise(resolve => setTimeout(resolve, 3000));
       expect(await privateToken.getActiveRegistryCount()).to.equal(2);
     });
+
+    it.only("should skip operational restriction checks when enforcement is disabled", async function () {
+      await (await companyRegistry.addToRestrictionList(otherWallet.address)).wait();
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      expect(await privateToken.isRestricted(otherWallet.address)).to.be.true;
+
+      await expect(privateToken["approve(address,uint256)"](otherWallet.address, 1n))
+        .to.be.revertedWithCustomError(privateToken, "AccountIsRestricted")
+        .withArgs(otherWallet.address, await companyRegistry.getAddress());
+
+      await (await privateToken.setRestrictionListEnforcement(false)).wait();
+      expect(await privateToken.restrictionListEnforcementEnabled()).to.be.false;
+      expect(await privateToken.isRestricted(otherWallet.address)).to.be.false;
+
+      const approveTx = await privateToken["approve(address,uint256)"](otherWallet.address, 1n);
+      const approveReceipt = await approveTx.wait();
+      expect(approveReceipt?.status).to.equal(1);
+
+      await (await privateToken.setRestrictionListEnforcement(true)).wait();
+      expect(await privateToken.restrictionListEnforcementEnabled()).to.be.true;
+
+      await expect(privateToken["approve(address,uint256)"](otherWallet.address, 1n))
+        .to.be.revertedWithCustomError(privateToken, "AccountIsRestricted")
+        .withArgs(otherWallet.address, await companyRegistry.getAddress());
+    });
   });
 
   describe("Shield/Unshield Operations with Restrictions", function () {
