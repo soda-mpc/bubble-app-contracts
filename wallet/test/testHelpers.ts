@@ -2,7 +2,7 @@
  * Shared helpers for PrivateERC20-style contract tests (proxy deploy, MPC delays, event queries).
  */
 import type { HDNodeWallet, Wallet } from "ethers";
-import { decryptBalanceViaProxy } from "./testUtils";
+import { decryptBalanceViaProxy, prepareMessageForBubble128, prepareMessageForBubble256 } from "./testUtils";
 
 /** Hardhat runtime (`import hre from "hardhat"`) — typed loosely for reuse across test suites. */
 export type HardhatRuntime = {
@@ -21,6 +21,9 @@ export const DELAY_STANDARD_MS = 3000;
 export const DELAY_BALANCE_SYNC_MS = 5000;
 export const DELAY_MPC_PROCESSING_MS = 10000;
 export const DELAY_MPC_DECRYPTION_MS = 15000;
+/** Long settle waits (transferOPRF / redeemMany against live MPC). */
+export const DELAY_MPC_EXTENDED_MS = 20000;
+export const DELAY_MPC_REDEEM_MS = 30000;
 
 export async function delay(ms: number): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, ms));
@@ -123,6 +126,30 @@ export async function mintAndApprove(params: {
   await delay(delayAfterApproveMs);
 }
 
+/**
+ * Mint underlying to `recipient`, approve the private token, and shield.
+ * Prefer this over `mockToken.transfer(recipient, amount)` when `recipient` is the test signer:
+ * self-transfers are a no-op and do not add balance, so long test runs can run out of underlying
+ * for `shield` while isolated tests still pass.
+ */
+export async function mintApproveAndShield(params: {
+  mockToken: {
+    mint: (to: string, amount: bigint) => Promise<{ wait: () => Promise<unknown> }>;
+    approve: (spender: string, amount: bigint) => Promise<{ wait: () => Promise<unknown> }>;
+  };
+  privateToken: {
+    getAddress: () => Promise<string>;
+    shield: (amount: bigint) => Promise<{ wait: () => Promise<unknown> }>;
+  };
+  recipient: string;
+  amount: bigint;
+}): Promise<void> {
+  const { mockToken, privateToken, recipient, amount } = params;
+  await (await mockToken.mint(recipient, amount)).wait();
+  await (await mockToken.approve(await privateToken.getAddress(), amount)).wait();
+  await (await privateToken.shield(amount)).wait();
+}
+
 export async function getPrivateTokenBalance(params: {
   privateToken: { ["balanceOf(address)"](address: string): Promise<bigint> };
   address: string;
@@ -209,6 +236,60 @@ export function findParsedLogInReceipt(
   });
 }
 
+/** All receipt logs that parse to `eventName` (same parsing rules as `findParsedLogInReceipt`). */
+export function findParsedLogsInReceipt(
+  receipt: Parameters<typeof findParsedLogInReceipt>[0],
+  contract: Parameters<typeof findParsedLogInReceipt>[1],
+  eventName: string
+): any[] {
+  if (!receipt?.logs?.length) return [];
+  return receipt.logs.filter((log) => {
+    try {
+      const parsed = contract.interface.parseLog(log);
+      return parsed?.name === eventName;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** First receipt log for `eventName` where `predicate` holds on the parsed log (name + args). */
+export function findParsedLogInReceiptWhere(
+  receipt: Parameters<typeof findParsedLogInReceipt>[0],
+  contract: Parameters<typeof findParsedLogInReceipt>[1],
+  eventName: string,
+  predicate: (parsed: { name?: string; args?: readonly unknown[] }) => boolean
+): any | undefined {
+  return receipt?.logs?.find((log) => {
+    try {
+      const parsed = contract.interface.parseLog(log) as { name?: string; args?: readonly unknown[] };
+      if (parsed?.name !== eventName) return false;
+      return predicate(parsed);
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** X, Y, Q handles from the first `OPRFMinted` log in a receipt (args[0] is user). */
+export function getOprfMintedHandlesFromReceipt(
+  receipt: Parameters<typeof findParsedLogInReceipt>[0],
+  contract: Parameters<typeof findParsedLogInReceipt>[1]
+): { xHandle: bigint; yHandle: bigint; qHandle: bigint } | undefined {
+  const mintEvent = findParsedLogInReceipt(receipt, contract, "OPRFMinted");
+  if (!mintEvent) return undefined;
+  const mintDecoded = contract.interface.parseLog(mintEvent) as unknown as {
+    args?: readonly unknown[];
+  };
+  const args = mintDecoded?.args;
+  if (!args || args.length < 4) return undefined;
+  return {
+    xHandle: args[1] as bigint,
+    yHandle: args[2] as bigint,
+    qHandle: args[3] as bigint,
+  };
+}
+
 export async function waitForUnshieldOutcome(
   privateToken: {
     queryFilter: (filter: any, from: number, to: number) => Promise<any[]>;
@@ -276,4 +357,162 @@ export async function ensurePrivateBalanceClearedFor(params: {
       throw new Error(`Failed to clear private balance for ${address}`);
     }
   });
+}
+
+/** Signed `itUint256`-shaped payload for PrivateERC20 OPRF flows (mint, split, etc.). */
+export async function buildSignedItUint256(params: {
+  value: bigint;
+  userAddress: string;
+  userAesKeyHex: string;
+  contractAddress: string;
+  signer: { signMessage: (msg: string | Uint8Array) => Promise<string> };
+}): Promise<{
+  userAddress: string;
+  ciphertext: { ciphertextHigh: bigint; ciphertextLow: bigint };
+  signature: string;
+}> {
+  const { value, userAddress, userAesKeyHex, contractAddress, signer } = params;
+  const { encryptedHigh, encryptedLow, messageBytes } = prepareMessageForBubble256(
+    value,
+    userAddress,
+    userAesKeyHex,
+    contractAddress
+  );
+  const signature = await signer.signMessage(messageBytes);
+  return {
+    userAddress,
+    ciphertext: { ciphertextHigh: encryptedHigh, ciphertextLow: encryptedLow },
+    signature,
+  };
+}
+
+/** Unsigned ciphertext-only `itUint256` (some integration paths omit signatures). */
+export function buildUnsignedItUint256(params: {
+  value: bigint;
+  userAddress: string;
+  userAesKeyHex: string;
+  contractAddress: string;
+}): {
+  userAddress: string;
+  ciphertext: { ciphertextHigh: bigint; ciphertextLow: bigint };
+} {
+  const { value, userAddress, userAesKeyHex, contractAddress } = params;
+  const { encryptedHigh, encryptedLow } = prepareMessageForBubble256(value, userAddress, userAesKeyHex, contractAddress);
+  return {
+    userAddress,
+    ciphertext: { ciphertextHigh: encryptedHigh, ciphertextLow: encryptedLow },
+  };
+}
+
+/** Signed `itUint128`-shaped payload (OPRF x / xr limbs). */
+export async function buildSignedItUint128(params: {
+  value: bigint;
+  userAddress: string;
+  userAesKeyHex: string;
+  contractAddress: string;
+  signer: { signMessage: (msg: string | Uint8Array) => Promise<string> };
+}): Promise<{
+  userAddress: string;
+  ciphertext: bigint;
+  signature: string;
+}> {
+  const { value, userAddress, userAesKeyHex, contractAddress, signer } = params;
+  const { encryptedInt, messageBytes } = prepareMessageForBubble128(
+    value,
+    userAddress,
+    userAesKeyHex,
+    contractAddress
+  );
+  const signature = await signer.signMessage(messageBytes);
+  return {
+    userAddress,
+    ciphertext: encryptedInt,
+    signature,
+  };
+}
+
+export function buildUnsignedItUint128(params: {
+  value: bigint;
+  userAddress: string;
+  userAesKeyHex: string;
+  contractAddress: string;
+}): {
+  userAddress: string;
+  ciphertext: bigint;
+} {
+  const { value, userAddress, userAesKeyHex, contractAddress } = params;
+  const { encryptedInt } = prepareMessageForBubble128(value, userAddress, userAesKeyHex, contractAddress);
+  return {
+    userAddress,
+    ciphertext: encryptedInt,
+  };
+}
+
+/** Signed `x`, `q`, and `qSplit` ciphertexts for `splitToken` / `splitTokenForRecipient`. */
+export async function buildSignedOprfSplitPayloads(params: {
+  decryptedX: bigint;
+  decryptedQ: bigint;
+  qSplit: bigint;
+  userAddress: string;
+  userAesKeyHex: string;
+  contractAddress: string;
+  signer: { signMessage: (msg: string | Uint8Array) => Promise<string> };
+}): Promise<{
+  xIT: Awaited<ReturnType<typeof buildSignedItUint128>>;
+  qIT: Awaited<ReturnType<typeof buildSignedItUint256>>;
+  qSplitIT: Awaited<ReturnType<typeof buildSignedItUint256>>;
+}> {
+  const { decryptedX, decryptedQ, qSplit, userAddress, userAesKeyHex, contractAddress, signer } = params;
+  const xIT = await buildSignedItUint128({
+    value: decryptedX,
+    userAddress,
+    userAesKeyHex,
+    contractAddress,
+    signer,
+  });
+  const qIT = await buildSignedItUint256({
+    value: decryptedQ,
+    userAddress,
+    userAesKeyHex,
+    contractAddress,
+    signer,
+  });
+  const qSplitIT = await buildSignedItUint256({
+    value: qSplit,
+    userAddress,
+    userAesKeyHex,
+    contractAddress,
+    signer,
+  });
+  return { xIT, qIT, qSplitIT };
+}
+
+/** Signed `x` and `q` for `burnToken`. */
+export async function buildSignedOprfBurnPayloads(params: {
+  decryptedX: bigint;
+  decryptedQ: bigint;
+  userAddress: string;
+  userAesKeyHex: string;
+  contractAddress: string;
+  signer: { signMessage: (msg: string | Uint8Array) => Promise<string> };
+}): Promise<{
+  xIT: Awaited<ReturnType<typeof buildSignedItUint128>>;
+  qIT: Awaited<ReturnType<typeof buildSignedItUint256>>;
+}> {
+  const { decryptedX, decryptedQ, userAddress, userAesKeyHex, contractAddress, signer } = params;
+  const xIT = await buildSignedItUint128({
+    value: decryptedX,
+    userAddress,
+    userAesKeyHex,
+    contractAddress,
+    signer,
+  });
+  const qIT = await buildSignedItUint256({
+    value: decryptedQ,
+    userAddress,
+    userAesKeyHex,
+    contractAddress,
+    signer,
+  });
+  return { xIT, qIT };
 }
