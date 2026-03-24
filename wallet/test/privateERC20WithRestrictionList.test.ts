@@ -4,10 +4,23 @@ import { Wallet, HDNodeWallet } from "ethers";
 import dotenv from "dotenv";
 
 import {
-  prepareMessageForBubble256
+  decryptBalanceViaProxy,
+  getDecryptionTxDataViaProxy,
+  getUserKeyViaProxy,
+  prepareMessageForBubble256,
 } from "./testUtils";
+import {
+  delay,
+  DELAY_BALANCE_SYNC_MS,
+  DELAY_MPC_DECRYPTION_MS,
+  DELAY_MPC_PROCESSING_MS,
+  DELAY_SHORT_MS,
+  DELAY_STANDARD_MS,
+  findParsedLogInReceipt,
+  getPrivateTokenBalance,
+  waitForDeploymentConfirmation,
+} from "./testHelpers";
 import { PrivateERC20WithRestrictionList256 } from "../typechain-types";
-import { decryptValueViaProxy, getDecryptionTxDataViaProxy, getUserKeyViaProxy } from "./testUtils";
 
 dotenv.config();
 
@@ -15,32 +28,6 @@ const PROXY_URL = process.env.PROXY_URL || "https://proxy.bubble.sodalabs.net";
 const MNEMONIC = process.env.MNEMONIC;
 if (!MNEMONIC) {
   throw new Error("MNEMONIC environment variable is required");
-}
-
-async function waitForDeploymentConfirmation(contract: { deploymentTransaction(): any; getAddress(): Promise<string>; }) {
-  const tx = contract.deploymentTransaction();
-  if (tx && typeof tx.wait === "function") {
-    await tx.wait();
-  }
-  const provider = hre.ethers.provider;
-  const address = await contract.getAddress();
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const code = await provider.getCode(address);
-    if (code && code !== "0x") {
-      return;
-    }
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }
-  throw new Error(`Contract code not available at ${address} after waiting`);
-}
-
-async function decryptBalanceViaProxy(
-  balanceHandle: bigint,
-  signer: Wallet | HDNodeWallet,
-  userAesKey: Buffer,
-  proxyUrl: string
-): Promise<bigint> {
-  return decryptValueViaProxy(balanceHandle, signer, userAesKey, proxyUrl);
 }
 
 describe("PrivateERC20WithRestrictionList", function () {
@@ -88,17 +75,17 @@ describe("PrivateERC20WithRestrictionList", function () {
       to: restrictedWallet.address,
       value: fundAmount
     });
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    await delay(DELAY_STANDARD_MS);
 
     // Deploy restriction list registries
     const RestrictionListRegistryFactory = await hre.ethers.getContractFactory("RestrictionListRegistry", defaultSigner);
     companyRegistry = await (RestrictionListRegistryFactory as any).deploy(userAddress, "Company Compliance List");
     await companyRegistry.waitForDeployment();
-    await waitForDeploymentConfirmation(companyRegistry);
+    await waitForDeploymentConfirmation(companyRegistry, hre);
     
     govRegistry = await (RestrictionListRegistryFactory as any).deploy(userAddress, "Government Sanctions List");
     await govRegistry.waitForDeployment();
-    await waitForDeploymentConfirmation(govRegistry);
+    await waitForDeploymentConfirmation(govRegistry, hre);
 
     console.log("Company Registry deployed to:", await companyRegistry.getAddress());
     console.log("Government Registry deployed to:", await govRegistry.getAddress());
@@ -107,14 +94,14 @@ describe("PrivateERC20WithRestrictionList", function () {
     const MockTokenFactory = await hre.ethers.getContractFactory("TUSDC", defaultSigner);
     mockToken = await MockTokenFactory.deploy("Test USDC", "TUSDC");
     await mockToken.waitForDeployment();
-    await waitForDeploymentConfirmation(mockToken);
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    await waitForDeploymentConfirmation(mockToken, hre);
+    await delay(DELAY_STANDARD_MS);
 
     // Deploy private token implementation + proxy and initialize through proxy
     const ContractFactory = await hre.ethers.getContractFactory("PrivateERC20WithRestrictionList256", defaultSigner);
     const implementation = await ContractFactory.deploy();
     await implementation.waitForDeployment();
-    await waitForDeploymentConfirmation(implementation);
+    await waitForDeploymentConfirmation(implementation, hre);
 
     const ProxyFactory = await hre.ethers.getContractFactory(
       "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy",
@@ -122,7 +109,7 @@ describe("PrivateERC20WithRestrictionList", function () {
     );
     const proxy = await ProxyFactory.deploy(await implementation.getAddress(), "0x");
     await proxy.waitForDeployment();
-    await waitForDeploymentConfirmation(proxy);
+    await waitForDeploymentConfirmation(proxy, hre);
     privateToken = ContractFactory.attach(await proxy.getAddress()) as PrivateERC20WithRestrictionList256;
 
     await (await (privateToken as any)["initialize(string,string,address,address,address)"](
@@ -136,7 +123,7 @@ describe("PrivateERC20WithRestrictionList", function () {
     // Configure restriction registries post-initialization through owner-only functions.
     await (await privateToken.addRestrictionListRegistry(await companyRegistry.getAddress())).wait();
     await (await privateToken.addRestrictionListRegistry(await govRegistry.getAddress())).wait();
-    await new Promise(resolve => setTimeout(resolve, 15000));
+    await delay(DELAY_MPC_DECRYPTION_MS);
 
     const privateTokenCode = await hre.ethers.provider.getCode(await privateToken.getAddress());
     const mockTokenCode = await hre.ethers.provider.getCode(await mockToken.getAddress());
@@ -154,7 +141,7 @@ describe("PrivateERC20WithRestrictionList", function () {
 
     console.log("Private Token deployed to:", await privateToken.getAddress());
     console.log("Mock Token deployed to:", await mockToken.getAddress());
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    await delay(DELAY_STANDARD_MS);
   });
 
   describe("Basic Token Information", function () {
@@ -169,11 +156,13 @@ describe("PrivateERC20WithRestrictionList", function () {
     });
 
     it("should have zero initial balance for any address", async function () {
-      const balanceHandle = await privateToken["balanceOf(address)"](userAddress);
-      let decryptedBalance = balanceHandle;
-      if (balanceHandle !== 0n) {
-        decryptedBalance = await decryptBalanceViaProxy(balanceHandle, defaultSigner, userAesKey, PROXY_URL);
-      }
+      const decryptedBalance = await getPrivateTokenBalance({
+        privateToken,
+        address: userAddress,
+        signer: defaultSigner,
+        aesKey: userAesKey,
+        proxyUrl: PROXY_URL,
+      });
       expect(decryptedBalance).to.equal(0n);
     });
 
@@ -195,7 +184,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       await (await companyRegistry.addToRestrictionList(restrictedWallet.address)).wait();
       
       // Wait for blockchain state to update
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
 
       expect(await privateToken.isRestricted(restrictedWallet.address)).to.be.true;
     });
@@ -203,14 +192,14 @@ describe("PrivateERC20WithRestrictionList", function () {
     it("should allow owner to remove address from restriction list", async function () {
       // First add to restriction list
       await (await companyRegistry.addToRestrictionList(otherWallet.address)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       expect(await privateToken.isRestricted(otherWallet.address)).to.be.true;
 
       // Then remove
       await (await companyRegistry.removeFromRestrictionList(otherWallet.address)).wait();
 
       // Wait for blockchain state to update
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
 
       expect(await privateToken.isRestricted(otherWallet.address)).to.be.false;
     });
@@ -218,7 +207,7 @@ describe("PrivateERC20WithRestrictionList", function () {
     it("should detect restrictions from multiple registries", async function () {
       // Add to government registry
       await (await govRegistry.addToRestrictionList(otherWallet.address)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       expect(await privateToken.isRestricted(otherWallet.address)).to.be.true;
       
       // Get comprehensive info (all restricting registries)
@@ -233,7 +222,7 @@ describe("PrivateERC20WithRestrictionList", function () {
 
       // Clean up
       await (await govRegistry.removeFromRestrictionList(otherWallet.address)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
     });
 
     it("should allow owner to add/remove restriction list registries", async function () {
@@ -241,22 +230,22 @@ describe("PrivateERC20WithRestrictionList", function () {
       const RestrictionListRegistryFactory = await hre.ethers.getContractFactory("RestrictionListRegistry");
       const newRegistry = await (RestrictionListRegistryFactory as any).deploy(userAddress, "Internal Compliance List");
       await newRegistry.waitForDeployment();
-      await waitForDeploymentConfirmation(newRegistry);
+      await waitForDeploymentConfirmation(newRegistry, hre);
 
       // Add registry to token
       await (await privateToken.addRestrictionListRegistry(await newRegistry.getAddress())).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       expect(await privateToken.getActiveRegistryCount()).to.equal(3);
 
       // Remove registry from token
       await (await privateToken.removeRestrictionListRegistry(await newRegistry.getAddress())).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       expect(await privateToken.getActiveRegistryCount()).to.equal(2);
     });
 
     it("should skip operational restriction checks when enforcement is disabled", async function () {
       await (await companyRegistry.addToRestrictionList(otherWallet.address)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
 
       expect(await privateToken.isRestricted(otherWallet.address)).to.be.true;
 
@@ -293,7 +282,7 @@ describe("PrivateERC20WithRestrictionList", function () {
         const mintAmount = requiredBalance - currentBalance;
         const mintTx = await mockToken.mint(userAddress, mintAmount);
         await mintTx.wait();
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await delay(DELAY_SHORT_MS);
       }
 
       console.log("BeforeEach: User address:", userAddress);
@@ -317,7 +306,7 @@ describe("PrivateERC20WithRestrictionList", function () {
           value: hre.ethers.parseEther("0.01")
         });
       }
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
 
       // Ensure mockToken is connected to the correct signer
       const connectedMockToken = mockToken.connect(defaultSigner);
@@ -342,7 +331,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       const mintOtherTx = await connectedMockToken.mint(otherWallet.address, shieldAmount * 3n);
       await mintOtherTx.wait();
 
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
 
       // Approve the private token to spend mock tokens
       const approveTx = await connectedMockToken.approve(await privateToken.getAddress(), shieldAmount);
@@ -355,28 +344,20 @@ describe("PrivateERC20WithRestrictionList", function () {
     });
 
     it("should successfully shield standard tokens for non-restricted user", async function () {
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       const totalSupplyBefore = await privateToken.totalSupply();
       const shieldTx = await privateToken.shield(shieldAmount);
       const shieldReceipt = await shieldTx.wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       
       expect(shieldReceipt).to.not.be.undefined;
 
-      // Check Shield event
-      const shieldEvent = shieldReceipt?.logs
-        .map((log: any) => {
-          try {
-            return privateToken.interface.parseLog(log);
-          } catch {
-            return undefined;
-          }
-        })
-        .find((decoded: any) => decoded?.name === "Shield");
-      expect(shieldEvent).to.not.be.undefined;
-      if (shieldEvent) {
-        expect(shieldEvent.args.from).to.equal(userAddress);
-        expect(shieldEvent.args.amount).to.equal(shieldAmount);
+      const shieldLog = findParsedLogInReceipt(shieldReceipt, privateToken as any, "Shield");
+      expect(shieldLog).to.not.be.undefined;
+      if (shieldLog) {
+        const shieldDecoded = privateToken.interface.parseLog(shieldLog)!;
+        expect(shieldDecoded.args.from).to.equal(userAddress);
+        expect(shieldDecoded.args.amount).to.equal(shieldAmount);
       }
 
       // Check total supply of private tokens
@@ -384,10 +365,10 @@ describe("PrivateERC20WithRestrictionList", function () {
       expect(totalSupplyAfter - totalSupplyBefore).to.equal(expectedPrivateAmount);
 
       // Check user's private balance
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       const balanceHandle = await privateToken["balanceOf(address)"](userAddress);
       // Wait for MPC to process before decryption
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
       const decryptedBalance = await decryptBalanceViaProxy(balanceHandle, defaultSigner, userAesKey, PROXY_URL);
       expect(decryptedBalance).to.equal(expectedPrivateAmount);
     });
@@ -406,18 +387,18 @@ describe("PrivateERC20WithRestrictionList", function () {
       let currentBalance = 0n;
       if (currentBalanceHandle !== 0n) {
         // Wait for MPC to process before decryption
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await delay(DELAY_SHORT_MS);
         currentBalance = await decryptBalanceViaProxy(currentBalanceHandle, defaultSigner, userAesKey, PROXY_URL);
       }
       
       // If no balance, shield some tokens first
       if (currentBalance === 0n) {
         await (await privateToken.shield(shieldAmount)).wait();
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        await delay(DELAY_BALANCE_SYNC_MS);
         
         const balanceAfterShieldHandle = await privateToken["balanceOf(address)"](userAddress);
         // Wait for MPC to process before decryption
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await delay(DELAY_SHORT_MS);
         currentBalance = await decryptBalanceViaProxy(balanceAfterShieldHandle, defaultSigner, userAesKey, PROXY_URL);
         expect(currentBalance).to.equal(expectedPrivateAmount);
       }
@@ -433,7 +414,7 @@ describe("PrivateERC20WithRestrictionList", function () {
 
       // Fetch callback calldata from proxy and submit callback if needed.
       const decryptId = await privateToken.getLastDecryptRequestId();
-      await new Promise(resolve => setTimeout(resolve, 15000));
+      await delay(DELAY_MPC_DECRYPTION_MS);
       const network = await hre.ethers.provider.getNetwork();
       const chainId = Number(network.chainId);
       const txDataHex = await getDecryptionTxDataViaProxy(PROXY_URL, chainId, contractAddress, decryptId);
@@ -449,7 +430,7 @@ describe("PrivateERC20WithRestrictionList", function () {
           // Callback may have already been submitted by backend relayer.
         }
       }
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await delay(DELAY_BALANCE_SYNC_MS);
 
       // Check mock token balance difference
       const mockTokenBalanceAfter = await mockToken.balanceOf(userAddress);
@@ -474,12 +455,12 @@ describe("PrivateERC20WithRestrictionList", function () {
       // First, let's temporarily remove the restriction to shield tokens
       if (isCurrentlyRestricted) {
         await companyRegistry.removeFromRestrictionList(restrictedWallet.address);
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await delay(DELAY_STANDARD_MS);
       }
       
       // Shield tokens as restricted user BEFORE adding them to restriction list
       // Wait before MPC proxy call
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
       const restrictedUserAesKey = await getUserKeyViaProxy(restrictedWallet, PROXY_URL);
       const connectedPrivateToken = privateToken.connect(restrictedWallet);
       console.log("About to shield tokens as restricted user (before restriction)...");
@@ -487,11 +468,11 @@ describe("PrivateERC20WithRestrictionList", function () {
       // First, make sure the restricted user has approved the private token to spend their mock tokens
       const connectedMockToken = mockToken.connect(restrictedWallet);
       await (await connectedMockToken.approve(await privateToken.getAddress(), shieldAmount)).wait();
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
       
       // Now shield the tokens
       await (await connectedPrivateToken.shield(shieldAmount)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       
       // Check if the restricted user has tokens
       const balanceHandle = await privateToken["balanceOf(address)"](restrictedWallet.address);
@@ -499,7 +480,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       
       // Now add them to restriction list
       await (await companyRegistry.addToRestrictionList(restrictedWallet.address)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       
       // Verify the restriction is applied
       const isRestrictedAfter = await privateToken.isRestricted(restrictedWallet.address);
@@ -533,7 +514,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       await (await connectedPrivateToken.unshield(expectedPrivateAmount)).wait();
       
       // Wait for unshield to complete
-      await new Promise(resolve => setTimeout(resolve, 10000));
+      await delay(DELAY_MPC_PROCESSING_MS);
       
       // Add back to restriction list for other tests
       await (await companyRegistry.addToRestrictionList(restrictedWallet.address)).wait();
@@ -555,7 +536,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       if (currentBalance < requiredBalance) {
         const mintAmount = requiredBalance - currentBalance;
         await (await mockToken.mint(userAddress, mintAmount)).wait();
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await delay(DELAY_SHORT_MS);
       }
       
       // Ensure random wallets have sufficient ETH for gas
@@ -576,26 +557,26 @@ describe("PrivateERC20WithRestrictionList", function () {
           value: hre.ethers.parseEther("0.01")
         });
       }
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
       
       // Add restrictedWallet to restriction list for this test section
       const isAlreadyRestricted = await companyRegistry.isRestricted(restrictedWallet.address);
       if (!isAlreadyRestricted) {
         await (await companyRegistry.addToRestrictionList(restrictedWallet.address)).wait();
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await delay(DELAY_STANDARD_MS);
       }
       
       // Mint and shield tokens for transfer tests
       await (await mockToken.approve(await privateToken.getAddress(), transferTestShieldAmount)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       await (await privateToken.shield(transferTestShieldAmount)).wait();
     });
 
     it("should successfully transfer private tokens between non-restricted users", async function () {
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await delay(DELAY_BALANCE_SYNC_MS);
 
       const balanceHandleBefore = await privateToken["balanceOf(address)"](userAddress);
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
       const balanceBefore = await decryptBalanceViaProxy(balanceHandleBefore, defaultSigner, userAesKey, PROXY_URL);
       expect(balanceBefore).to.equal(initialPrivateBalance);
 
@@ -607,7 +588,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       const senderBalanceHandle = await privateToken["balanceOf(address)"](userAddress);
       try {
         // Wait for MPC to process before decryption
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await delay(DELAY_SHORT_MS);
         const senderBalance = await decryptBalanceViaProxy(senderBalanceHandle, defaultSigner, userAesKey, PROXY_URL);
         expect(senderBalance).to.equal(balanceBefore - transferAmount);
       } catch (error) {
@@ -621,16 +602,16 @@ describe("PrivateERC20WithRestrictionList", function () {
       const isCurrentlyRestricted = await companyRegistry.isRestricted(restrictedWallet.address);
       if (isCurrentlyRestricted) {
         await (await companyRegistry.removeFromRestrictionList(restrictedWallet.address)).wait();
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await delay(DELAY_STANDARD_MS);
       }
       
       // Give some tokens to user while they're not restricted
       await (await privateToken["transfer(address,uint256)"](restrictedWallet.address, transferAmount)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       
       // Now add them back to restriction list
       await (await companyRegistry.addToRestrictionList(restrictedWallet.address)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       expect(await privateToken.isRestricted(restrictedWallet.address)).to.equal(true);
       
       const connectedPrivateToken = privateToken.connect(restrictedWallet);
@@ -646,7 +627,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       const isRestricted = await companyRegistry.isRestricted(restrictedWallet.address);
       if (!isRestricted) {
         await (await companyRegistry.addToRestrictionList(restrictedWallet.address)).wait();
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await delay(DELAY_STANDARD_MS);
       }
       await expect(privateToken["transfer(address,uint256)"](restrictedWallet.address, transferAmount))
         .to.be.revertedWithCustomError(privateToken, "AccountIsRestricted")
@@ -656,23 +637,23 @@ describe("PrivateERC20WithRestrictionList", function () {
     it("should successfully transfer using encrypted IT value between non-restricted users", async function () {
       // Onboard the receiver (otherWallet)
       // Wait before MPC proxy call
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
       const otherUserAesKey = await getUserKeyViaProxy(otherWallet, PROXY_URL);
       const amount = transferAmount;
       const PRIVATE_TOKEN_ADDRESS = await privateToken.getAddress();
 
       // Get balances before transfer
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await delay(DELAY_BALANCE_SYNC_MS);
 
       const senderBalanceHandleBefore = await privateToken["balanceOf(address)"](userAddress);
       // Wait for MPC to process before decryption
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
       const senderBalanceBefore = await decryptBalanceViaProxy(senderBalanceHandleBefore, defaultSigner, userAesKey, PROXY_URL);
       const receiverBalanceHandleBefore = await privateToken["balanceOf(address)"](otherWallet.address);
       let receiverBalanceBefore = receiverBalanceHandleBefore;
       if (receiverBalanceBefore !== 0n) {
         // Wait for MPC to process before decryption
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await delay(DELAY_SHORT_MS);
         receiverBalanceBefore = await decryptBalanceViaProxy(receiverBalanceHandleBefore, otherWallet, otherUserAesKey, PROXY_URL);
       }
 
@@ -694,16 +675,16 @@ describe("PrivateERC20WithRestrictionList", function () {
       });
       await transferTx.wait();
 
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await delay(DELAY_BALANCE_SYNC_MS);
 
       // Get balances after transfer
       const senderBalanceHandleAfter = await privateToken["balanceOf(address)"](userAddress);
       // Wait for MPC to process before decryption
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
       const senderBalanceAfter = await decryptBalanceViaProxy(senderBalanceHandleAfter, defaultSigner, userAesKey, PROXY_URL);
       const receiverBalanceHandleAfter = await privateToken["balanceOf(address)"](otherWallet.address);
       // Wait for MPC to process before decryption
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
       const receiverBalanceAfter = await decryptBalanceViaProxy(receiverBalanceHandleAfter, otherWallet, otherUserAesKey, PROXY_URL);
 
       // Assert balances
@@ -740,10 +721,10 @@ describe("PrivateERC20WithRestrictionList", function () {
 
     it("should handle self-transfer for non-restricted user", async function () {
       // Get balance before self-transfer
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await delay(DELAY_BALANCE_SYNC_MS);
       const balanceHandleBefore = await privateToken["balanceOf(address)"](userAddress);
       // Wait for MPC to process before decryption
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
       const balanceBefore = await decryptBalanceViaProxy(balanceHandleBefore, defaultSigner, userAesKey, PROXY_URL);
 
       // Self-transfer (transfer to same address)
@@ -751,12 +732,12 @@ describe("PrivateERC20WithRestrictionList", function () {
       await transferTx.wait();
 
       // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await delay(DELAY_BALANCE_SYNC_MS);
 
       // Get balance after self-transfer
       const balanceHandleAfter = await privateToken["balanceOf(address)"](userAddress);
       // Wait for MPC to process before decryption
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
       const balanceAfter = await decryptBalanceViaProxy(balanceHandleAfter, defaultSigner, userAesKey, PROXY_URL);
 
       // Balance should remain the same in a self-transfer
@@ -777,7 +758,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       if (currentBalance < requiredBalance) {
         const mintAmount = requiredBalance - currentBalance;
         await (await mockToken.mint(userAddress, mintAmount)).wait();
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await delay(DELAY_SHORT_MS);
       }
       
       // Ensure random wallets have sufficient ETH for gas
@@ -798,11 +779,11 @@ describe("PrivateERC20WithRestrictionList", function () {
           value: hre.ethers.parseEther("0.01")
         });
       }
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
       
       // Mint and shield tokens for approval tests
       await (await mockToken.approve(await privateToken.getAddress(), approvalTestShieldAmount)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       await (await privateToken.shield(approvalTestShieldAmount)).wait();
     });
 
@@ -826,16 +807,16 @@ describe("PrivateERC20WithRestrictionList", function () {
       const isCurrentlyRestricted = await companyRegistry.isRestricted(restrictedWallet.address);
       if (isCurrentlyRestricted) {
         await (await companyRegistry.removeFromRestrictionList(restrictedWallet.address)).wait();
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await delay(DELAY_STANDARD_MS);
       }
       
       // Give some tokens to user while they're not restricted
       await (await privateToken["transfer(address,uint256)"](restrictedWallet.address, approvalAmount)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       
       // Now add them back to restriction list
       await (await companyRegistry.addToRestrictionList(restrictedWallet.address)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       
       const connectedPrivateToken = privateToken.connect(restrictedWallet);
       
@@ -892,7 +873,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       const isAlreadyRestricted = await companyRegistry.isRestricted(restrictedWallet.address);
       if (!isAlreadyRestricted) {
         await (await companyRegistry.addToRestrictionList(restrictedWallet.address)).wait();
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await delay(DELAY_STANDARD_MS);
       }
     });
 
@@ -904,7 +885,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       } catch (error) {
         // Ignore errors if they're not in the list
       }
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
     });
 
     it("should correctly report restriction status", async function () {
@@ -919,33 +900,33 @@ describe("PrivateERC20WithRestrictionList", function () {
       
       // Add to restriction list
       await (await companyRegistry.addToRestrictionList(otherWallet.address)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       
       expect(await privateToken.isRestricted(otherWallet.address)).to.be.true;
       
       // Remove from restriction list
       await (await companyRegistry.removeFromRestrictionList(otherWallet.address)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       expect(await privateToken.isRestricted(otherWallet.address)).to.be.false;
     });
 
     it("should handle multiple registry restrictions", async function () {
       // Add to both registries
       await (await companyRegistry.addToRestrictionList(otherWallet.address)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       await (await govRegistry.addToRestrictionList(otherWallet.address)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       
       expect(await privateToken.isRestricted(otherWallet.address)).to.be.true;
       
       // Remove from one registry - still restricted
       await (await companyRegistry.removeFromRestrictionList(otherWallet.address)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       expect(await privateToken.isRestricted(otherWallet.address)).to.be.true;
       
       // Remove from second registry - no longer restricted
       await (await govRegistry.removeFromRestrictionList(otherWallet.address)).wait();
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await delay(DELAY_STANDARD_MS);
       expect(await privateToken.isRestricted(otherWallet.address)).to.be.false;
     });
 
@@ -972,7 +953,7 @@ describe("PrivateERC20WithRestrictionList", function () {
       await (await mockToken.mint(userAddress, pauseTestShieldAmount)).wait();
       await (await mockToken.approve(await privateToken.getAddress(), pauseTestShieldAmount)).wait();
       await (await privateToken.shield(pauseTestShieldAmount)).wait();
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await delay(DELAY_SHORT_MS);
     });
 
     it("should allow owner to pause and emit Paused event", async function () {
@@ -980,19 +961,11 @@ describe("PrivateERC20WithRestrictionList", function () {
       const receipt = await tx.wait();
       expect(receipt).to.not.be.null;
 
-      const pausedEvent = receipt?.logs
-        .map((log: any) => {
-          try {
-            return privateToken.interface.parseLog(log);
-          } catch {
-            return undefined;
-          }
-        })
-        .find((decoded: any) => decoded?.name === "Paused");
-
-      expect(pausedEvent).to.not.be.undefined;
-      if (pausedEvent) {
-        expect(pausedEvent.args.account).to.equal(userAddress);
+      const pausedLog = findParsedLogInReceipt(receipt, privateToken as any, "Paused");
+      expect(pausedLog).to.not.be.undefined;
+      if (pausedLog) {
+        const pausedDecoded = privateToken.interface.parseLog(pausedLog)!;
+        expect(pausedDecoded.args.account).to.equal(userAddress);
       }
     });
 
@@ -1002,19 +975,11 @@ describe("PrivateERC20WithRestrictionList", function () {
       const receipt = await tx.wait();
       expect(receipt).to.not.be.null;
 
-      const unpausedEvent = receipt?.logs
-        .map((log: any) => {
-          try {
-            return privateToken.interface.parseLog(log);
-          } catch {
-            return undefined;
-          }
-        })
-        .find((decoded: any) => decoded?.name === "Unpaused");
-
-      expect(unpausedEvent).to.not.be.undefined;
-      if (unpausedEvent) {
-        expect(unpausedEvent.args.account).to.equal(userAddress);
+      const unpausedLog = findParsedLogInReceipt(receipt, privateToken as any, "Unpaused");
+      expect(unpausedLog).to.not.be.undefined;
+      if (unpausedLog) {
+        const unpausedDecoded = privateToken.interface.parseLog(unpausedLog)!;
+        expect(unpausedDecoded.args.account).to.equal(userAddress);
       }
     });
 

@@ -46,6 +46,34 @@ export async function waitForContractCode(
   throw new Error(`Contract at ${address} still has no code after ${timeoutMs}ms`);
 }
 
+/**
+ * After deployment, wait for the deployment tx (if present), then poll until `getCode` is non-empty
+ * (helps with RPC propagation). Same pattern as restriction-list integration tests.
+ */
+export async function waitForDeploymentConfirmation(
+  contract: {
+    deploymentTransaction?: () => { wait?: () => Promise<unknown> } | null | undefined;
+    getAddress: () => Promise<string>;
+  },
+  hre: HardhatRuntime,
+  options?: { pollIntervalMs?: number; maxAttempts?: number }
+): Promise<void> {
+  const tx = typeof contract.deploymentTransaction === "function" ? contract.deploymentTransaction() : null;
+  if (tx && typeof tx.wait === "function") {
+    await tx.wait();
+  }
+  const address = await contract.getAddress();
+  const { pollIntervalMs = 2000, maxAttempts = 10 } = options ?? {};
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const code = await hre.ethers.provider.getCode(address);
+    if (code && code !== "0x") {
+      return;
+    }
+    await delay(pollIntervalMs);
+  }
+  throw new Error(`Contract code not available at ${address} after waiting`);
+}
+
 export async function retryWithDelay<T>(
   operation: () => Promise<T>,
   attempts: number = 3,
