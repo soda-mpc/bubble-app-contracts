@@ -1,8 +1,39 @@
 /**
- * Shared helpers for PrivateERC20-style contract tests (proxy deploy, MPC delays, event queries).
+ * Shared test harness: Hardhat deploy, delays, receipt/event helpers, chai-style helpers.
+ * Transport + crypto (proxy HTTP, encrypt/decrypt message prep) live in `bubbleCryptoTransport.ts`.
  */
 import type { HDNodeWallet, Wallet } from "ethers";
-import { decryptBalanceViaProxy, prepareMessageForBubble128, prepareMessageForBubble256 } from "./testUtils";
+import {
+  decryptBalanceViaProxy,
+  prepareMessageForBubble128,
+  prepareMessageForBubble256,
+  retryWithBackoff,
+} from "./bubbleCryptoTransport";
+
+export async function expectReverted(txPromise: Promise<any>): Promise<void> {
+  try {
+    const tx = await txPromise;
+    await tx.wait();
+  } catch {
+    return;
+  }
+  throw new Error("Expected transaction to revert, but it succeeded");
+}
+
+export async function waitForCondition(
+  condition: () => Promise<boolean>,
+  timeoutMs = 30000,
+  stepMs = 1500
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await condition()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, stepMs));
+  }
+  throw new Error("Timed out waiting for on-chain condition");
+}
 
 /** Hardhat runtime (`import hre from "hardhat"`) — typed loosely for reuse across test suites. */
 export type HardhatRuntime = {
@@ -64,38 +95,7 @@ export async function waitForDeploymentConfirmation(
   }
   const address = await contract.getAddress();
   const { pollIntervalMs = 2000, maxAttempts = 10 } = options ?? {};
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const code = await hre.ethers.provider.getCode(address);
-    if (code && code !== "0x") {
-      return;
-    }
-    await delay(pollIntervalMs);
-  }
-  throw new Error(`Contract code not available at ${address} after waiting`);
-}
-
-export async function retryWithDelay<T>(
-  operation: () => Promise<T>,
-  attempts: number = 3,
-  baseDelayMs: number = 1000
-): Promise<T> {
-  let lastError: Error | undefined;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error as Error;
-      if (attempt === attempts - 1) {
-        throw lastError;
-      }
-      const backoff = baseDelayMs * Math.pow(2, attempt);
-      console.warn(
-        `Operation failed (attempt ${attempt + 1}/${attempts}): ${lastError.message}. Retrying in ${backoff}ms...`
-      );
-      await new Promise(resolve => setTimeout(resolve, backoff));
-    }
-  }
-  throw lastError!;
+  await waitForContractCode(address, hre, maxAttempts * pollIntervalMs, pollIntervalMs);
 }
 
 export async function deployPrivateToken(
@@ -142,7 +142,10 @@ export async function deployPrivateTokenImplementation(
 }
 
 export async function mintAndApprove(params: {
-  mockToken: { mint: (to: string, amount: bigint) => Promise<{ wait: () => Promise<unknown> }> };
+  mockToken: {
+    mint: (to: string, amount: bigint) => Promise<{ wait: () => Promise<unknown> }>;
+    approve: (spender: string, amount: bigint) => Promise<{ wait: () => Promise<unknown> }>;
+  };
   privateToken: { getAddress: () => Promise<string> };
   userAddress: string;
   amount: bigint;
@@ -193,7 +196,7 @@ export async function getPrivateTokenBalance(params: {
   return decryptBalanceViaProxy(balanceHandle, signer, aesKey, proxyUrl);
 }
 
-export async function findEventsFromStartBlock(
+async function findEventsFromStartBlock(
   privateToken: { queryFilter: (filter: any, from: number, to: number) => Promise<any[]> },
   filter: any,
   hre: HardhatRuntime,
@@ -210,7 +213,7 @@ export async function findEventsFromStartBlock(
  * Resolve an ethers `contract.filters.<EventName>` by name.
  * If the filter is a function (typical), it is called with no args, or with `indexedArgs` when provided.
  */
-export function getEventFilterByName(contract: any, eventName: string, indexedArgs?: unknown[]): any {
+function getEventFilterByName(contract: any, eventName: string, indexedArgs?: unknown[]): any {
   const entry = contract.filters?.[eventName];
   if (entry == null) {
     throw new Error(`Contract has no filters.${eventName}`);
@@ -299,23 +302,31 @@ export function findParsedLogInReceiptWhere(
   });
 }
 
+/** All `OPRFMinted` logs in a receipt decoded to `{ user, x, y, q }` (same arg order as the contract event). */
+export function getOprfMintedEventsFromReceipt(
+  receipt: Parameters<typeof findParsedLogInReceipt>[0],
+  contract: Parameters<typeof findParsedLogInReceipt>[1]
+): Array<{ user: string; x: bigint; y: bigint; q: bigint }> {
+  return findParsedLogsInReceipt(receipt, contract, "OPRFMinted").map((log) => {
+    const decoded = contract.interface.parseLog(log)! as { args: readonly unknown[] };
+    const a = decoded.args;
+    return {
+      user: a[0] as string,
+      x: a[1] as bigint,
+      y: a[2] as bigint,
+      q: a[3] as bigint,
+    };
+  });
+}
+
 /** X, Y, Q handles from the first `OPRFMinted` log in a receipt (args[0] is user). */
 export function getOprfMintedHandlesFromReceipt(
   receipt: Parameters<typeof findParsedLogInReceipt>[0],
   contract: Parameters<typeof findParsedLogInReceipt>[1]
 ): { xHandle: bigint; yHandle: bigint; qHandle: bigint } | undefined {
-  const mintEvent = findParsedLogInReceipt(receipt, contract, "OPRFMinted");
-  if (!mintEvent) return undefined;
-  const mintDecoded = contract.interface.parseLog(mintEvent) as unknown as {
-    args?: readonly unknown[];
-  };
-  const args = mintDecoded?.args;
-  if (!args || args.length < 4) return undefined;
-  return {
-    xHandle: args[1] as bigint,
-    yHandle: args[2] as bigint,
-    qHandle: args[3] as bigint,
-  };
+  const first = getOprfMintedEventsFromReceipt(receipt, contract)[0];
+  if (!first) return undefined;
+  return { xHandle: first.x, yHandle: first.y, qHandle: first.q };
 }
 
 export async function waitForUnshieldOutcome(
@@ -364,7 +375,7 @@ export async function ensurePrivateBalanceClearedFor(params: {
     return;
   }
 
-  await retryWithDelay(async () => {
+  await retryWithBackoff(async () => {
     const address = await signer.getAddress();
     const balanceHandle = await privateToken["balanceOf(address)"](address);
     if (balanceHandle === 0n) {
@@ -384,7 +395,7 @@ export async function ensurePrivateBalanceClearedFor(params: {
     if (failedEvents.length > 0 || successEvents.length === 0) {
       throw new Error(`Failed to clear private balance for ${address}`);
     }
-  });
+  }, 2, 1000);
 }
 
 /** Signed `itUint256`-shaped payload for PrivateERC20 OPRF flows (mint, split, etc.). */

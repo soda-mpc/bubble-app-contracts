@@ -1,8 +1,13 @@
 import { expect } from "chai";
 import hre from "hardhat";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
-import { expectReverted, waitForCondition } from "./testUtils";
-import { findParsedLogInReceiptWhere, findParsedLogsInReceipt, waitForDeploymentConfirmation } from "./testHelpers";
+import {
+  expectReverted,
+  findParsedLogInReceiptWhere,
+  findParsedLogsInReceipt,
+  waitForCondition,
+  waitForDeploymentConfirmation,
+} from "./testHelpers";
 
 describe("RestrictionListRegistry", function () {
   this.timeout(180000);

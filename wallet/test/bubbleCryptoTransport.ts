@@ -1,7 +1,10 @@
+/**
+ * Transport (HTTP proxy, provider) + crypto for Bubble tests.
+ * Deploy, delays, receipt helpers, and chai-style helpers: `testHelpers.ts`.
+ */
 import hre from "hardhat";
 import fetch from "node-fetch";
 import { Wallet, getBytes, HDNodeWallet, solidityPacked, isAddress } from "ethers";
-import crypto from "crypto";
 
 import {
   generateRSAKeyPair,
@@ -27,8 +30,8 @@ async function getNetworkWithTimeout(timeoutMs: number, timeoutMessage: string) 
   }
 }
 
-// Utility function to retry operations with exponential backoff
-async function retryWithBackoff<T>(
+/** Retry with exponential backoff (`maxRetries` = number of retries after the first attempt). */
+export async function retryWithBackoff<T>(
   operation: () => Promise<T>,
   maxRetries: number = 3,
   baseDelay: number = 1000
@@ -53,31 +56,6 @@ async function retryWithBackoff<T>(
   }
   
   throw lastError!;
-}
-
-export async function expectReverted(txPromise: Promise<any>): Promise<void> {
-  try {
-    const tx = await txPromise;
-    await tx.wait();
-  } catch {
-    return;
-  }
-  throw new Error("Expected transaction to revert, but it succeeded");
-}
-
-export async function waitForCondition(
-  condition: () => Promise<boolean>,
-  timeoutMs = 30000,
-  stepMs = 1500
-): Promise<void> {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    if (await condition()) {
-      return;
-    }
-    await new Promise(resolve => setTimeout(resolve, stepMs));
-  }
-  throw new Error("Timed out waiting for on-chain condition");
 }
 
 export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl: string) {
@@ -152,102 +130,6 @@ export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl
 
   // 5. Process response
   const rsaCiphertexts = Buffer.from(result.rsa_ciphertexts, "base64");
-  const RSA_CIPHERTEXT_SIZE = 256;
-  const encryptedKeyShare0 = rsaCiphertexts.slice(0, RSA_CIPHERTEXT_SIZE).toString("hex");
-  const encryptedKeyShare1 = rsaCiphertexts.slice(RSA_CIPHERTEXT_SIZE).toString("hex");
-  
-  // 6. Reconstruct user key
-  const decryptedAESKey = reconstructUserKey(privateKey, encryptedKeyShare0, encryptedKeyShare1);
-
-  return decryptedAESKey;
-}
-
-/**
- * Onboard a user using the Integration Service API
- * @param signer Wallet or HDNodeWallet to onboard
- * @param integrationServiceUrl Base URL of the Integration Service (e.g., https://isb.sodalabs.net)
- * @param apiKey Optional API key for authentication
- * @returns User's AES key as a Buffer
- */
-export async function getUserKeyViaIntegrationService(
-  signer: Wallet | HDNodeWallet,
-  integrationServiceUrl: string,
-  apiKey?: string
-): Promise<Buffer> {
-  // Get signer's address (deposit address)
-  const userAddress = await signer.getAddress();
-
-  // 1. Generate RSA key pair (synchronous function)
-  const { publicKey, privateKey } = generateRSAKeyPair();
-
-  // V2: Sign rsa_public_key + user_address (new behavior)
-  
-  // NPM package returns publicKey in DER format (binary)
-  const publicKeyDer = new Uint8Array(publicKey);
-  
-  // Convert address to bytes using ethers.getBytes
-  const addressBytes = hre.ethers.getBytes(userAddress);
-  
-  // Combine rsaPublicKeyDer + addressBytes (direct concatenation, no hashing)
-  const message = new Uint8Array(publicKeyDer.length + addressBytes.length);
-  message.set(publicKeyDer, 0);
-  message.set(addressBytes, publicKeyDer.length);
-  
-  const signature = await signer.signMessage(message);
-  const signedEK = getBytes(signature);
-
-  // 3. Prepare request data for Integration Service API
-  const rsaPublicKey = Buffer.from(publicKeyDer).toString("base64");
-  const userSignature = Buffer.from(signedEK).toString("base64");
-  
-  const requestData = {
-    rsaPublicKey: rsaPublicKey,
-    depositAddress: userAddress,
-    signature: userSignature
-  };
-  
-  // Prepare headers
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json"
-  };
-  
-  // Add API key if provided
-  if (apiKey) {
-    headers["x-api-key"] = apiKey;
-  }
-  
-  const url = `${integrationServiceUrl.replace(/\/$/, "")}/v1/user-keys/onBoardUser`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(requestData),
-  });
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Onboarding failed (${response.status}): ${errorText}`);
-  }
-  
-  // Parse response - Integration Service returns ResponseEnvelope format
-  const result = (await response.json()) as {
-    success: boolean;
-    message: string;
-    data?: {
-      keyShares: string;
-      rsaPublicKey: string;
-      depositAddress: string;
-      signature: string;
-    };
-    error?: string;
-    errorCode?: string;
-  };
-
-  if (!result.success || !result.data) {
-    throw new Error(`Onboarding failed: ${result.error || result.message || "Unknown error"}`);
-  }
-
-  // 5. Process response - keyShares is the same as rsa_ciphertexts
-  const rsaCiphertexts = Buffer.from(result.data.keyShares, "base64");
   const RSA_CIPHERTEXT_SIZE = 256;
   const encryptedKeyShare0 = rsaCiphertexts.slice(0, RSA_CIPHERTEXT_SIZE).toString("hex");
   const encryptedKeyShare1 = rsaCiphertexts.slice(RSA_CIPHERTEXT_SIZE).toString("hex");
@@ -532,46 +414,6 @@ export async function decryptMultipleValuesViaProxy(
 export const decryptBalanceViaProxy = decryptValueViaProxy;
 
 // --- Bubble-specific message preparation for ValidateCiphertext / ValidateCiphertext256 ---
-
-/**
- * Prepares a message for ValidateCiphertext by encrypting the plaintext and building
- * abi.encodePacked(signerAddress, contractAddress, encryptedInt).
- */
-export function prepareMessageForBubble(
-  plaintext: bigint,
-  signerAddress: string,
-  aesKey: string,
-  contractAddress: string
-): {
-  encryptedInt: bigint;
-  messageBytes: Uint8Array;
-} {
-  if (!isAddress(signerAddress)) {
-    throw new TypeError("Invalid signer address");
-  }
-  if (typeof aesKey !== "string" || aesKey.length !== 32) {
-    throw new TypeError("Invalid AES key length. Expected 16 bytes as hex string (32 characters).");
-  }
-  if (typeof contractAddress !== "string" || !isAddress(contractAddress)) {
-    throw new TypeError("Invalid contract address");
-  }
-
-  const plaintextBytes = Buffer.alloc(8);
-  plaintextBytes.writeBigUInt64BE(plaintext);
-  const keyBytes = new Uint8Array(Buffer.from(aesKey, "hex"));
-  const { ciphertext, r } = encrypt(keyBytes, new Uint8Array(plaintextBytes));
-  const ct = new Uint8Array(ciphertext.length + r.length);
-  ct.set(ciphertext, 0);
-  ct.set(r, ciphertext.length);
-
-  const encryptedInt = BigInt("0x" + Buffer.from(ct).toString("hex"));
-  const messageBytes = solidityPacked(
-    ["address", "address", "uint256"],
-    [signerAddress, contractAddress, encryptedInt]
-  );
-
-  return { encryptedInt, messageBytes: getBytes(messageBytes) };
-}
 
 /**
  * Prepares a message for ValidateCiphertext for 128-bit values.

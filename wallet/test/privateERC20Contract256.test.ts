@@ -3,8 +3,7 @@ import hre from "hardhat";
 import { Wallet, HDNodeWallet } from "ethers";
 import dotenv from "dotenv";
 
-import { prepareMessageForBubble256 } from "./testUtils";
-import { getUserKeyViaProxy, getDecryptionTxDataViaProxy } from "./testUtils";
+import { prepareMessageForBubble256, getUserKeyViaProxy, getDecryptionTxDataViaProxy } from "./bubbleCryptoTransport";
 import {
   delay,
   DELAY_BALANCE_SYNC_MS,

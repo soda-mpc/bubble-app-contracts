@@ -3,7 +3,7 @@ import hre from "hardhat";
 import { Wallet } from "ethers";
 import dotenv from "dotenv";
 
-import { decryptValueViaProxy, decryptMultipleValuesViaProxy, getUserKeyViaProxy } from "./testUtils";
+import { decryptValueViaProxy, decryptMultipleValuesViaProxy, getUserKeyViaProxy } from "./bubbleCryptoTransport";
 import {
   buildSignedItUint128,
   buildSignedItUint256,
@@ -23,6 +23,7 @@ import {
   findParsedLogInReceipt,
   findParsedLogInReceiptWhere,
   findParsedLogsInReceipt,
+  getOprfMintedEventsFromReceipt,
   getOprfMintedHandlesFromReceipt,
   mintAndApprove,
   mintApproveAndShield,
@@ -1030,22 +1031,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
 
       // Get split values from OPRFMinted events (same approach as frontend)
       // The contract emits two OPRFMinted events: one for remainder (msg.sender) and one for payment (recipient)
-      const oprfMintedEvents = splitReceipt?.logs.filter((log: any) => {
-        try {
-          const decoded = privateToken.interface.parseLog(log);
-          return decoded?.name === "OPRFMinted";
-        } catch {
-          return false;
-        }
-      }).map((log: any) => {
-        const decoded = privateToken.interface.parseLog(log);
-        return {
-          user: decoded?.args[0],
-          x: decoded?.args[1],
-          y: decoded?.args[2],
-          q: decoded?.args[3]
-        };
-      });
+      const oprfMintedEvents = getOprfMintedEventsFromReceipt(splitReceipt, privateToken);
 
       // Find remainder event (for msg.sender = tempWallet in this test)
       const remainderEvent = oprfMintedEvents.find((e: any) => 
@@ -1653,22 +1639,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       await delay(DELAY_MPC_REDEEM_MS);
 
       // Extract OPRFMinted events
-      const oprfMintedEvents = transferReceipt?.logs.filter((log: any) => {
-        try {
-          const decoded = privateToken.interface.parseLog(log);
-          return decoded?.name === "OPRFMinted";
-        } catch {
-          return false;
-        }
-      }).map((log: any) => {
-        const decoded = privateToken.interface.parseLog(log);
-        return {
-          user: decoded?.args[0],
-          x: decoded?.args[1],
-          y: decoded?.args[2],
-          q: decoded?.args[3]
-        };
-      });
+      const oprfMintedEvents = getOprfMintedEventsFromReceipt(transferReceipt, privateToken);
 
       expect(oprfMintedEvents.length).to.equal(2);
       
@@ -1713,15 +1684,10 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       expect(senderQ).to.equal(expectedSenderRemainder, "Sender should keep the remainder");
       expect(recipientQ + senderQ).to.equal(totalQuantity, "Total should be preserved");
 
-      // Verify all input tokens were invalidated (burned)
-      const invalidatedEvents = transferReceipt?.logs.filter((log: any) => {
-        try {
-          const decoded = privateToken.interface.parseLog(log);
-          return decoded?.name === "OPRFTokenInvalidated" && Number(decoded?.args[4]) === 3;
-        } catch {
-          return false;
-        }
-      });
+      // Verify all input tokens were invalidated (burned); reason 3 = burned per contract
+      const invalidatedEvents = findParsedLogsInReceipt(transferReceipt, privateToken, "OPRFTokenInvalidated").filter(
+        (log) => Number(privateToken.interface.parseLog(log)!.args[4]) === 3
+      );
 
       expect(invalidatedEvents.length).to.equal(mintedTokens.length, "All input tokens should be invalidated");
     });
@@ -1852,22 +1818,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       await delay(DELAY_MPC_DECRYPTION_MS);
 
       console.log("Step 6: Extracting events...");
-      const oprfMintedEvents = transferReceipt?.logs.filter((log: any) => {
-        try {
-          const decoded = privateToken.interface.parseLog(log);
-          return decoded?.name === "OPRFMinted";
-        } catch {
-          return false;
-        }
-      }).map((log: any) => {
-        const decoded = privateToken.interface.parseLog(log);
-        return {
-          user: decoded?.args[0],
-          x: decoded?.args[1],
-          y: decoded?.args[2],
-          q: decoded?.args[3]
-        };
-      });
+      const oprfMintedEvents = getOprfMintedEventsFromReceipt(transferReceipt, privateToken);
 
       expect(oprfMintedEvents.length).to.equal(2);
       
@@ -1927,15 +1878,10 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       );
       expect(recipientQ + senderQ).to.equal(totalQuantity, "Total should be preserved");
 
-      // Verify all input tokens were invalidated (burned)
-      const invalidatedEvents = transferReceipt?.logs.filter((log: any) => {
-        try {
-          const decoded = privateToken.interface.parseLog(log);
-          return decoded?.name === "OPRFTokenInvalidated" && Number(decoded?.args[4]) === 3;
-        } catch {
-          return false;
-        }
-      });
+      // Verify all input tokens were invalidated (burned); reason 3 = burned per contract
+      const invalidatedEvents = findParsedLogsInReceipt(transferReceipt, privateToken, "OPRFTokenInvalidated").filter(
+        (log) => Number(privateToken.interface.parseLog(log)!.args[4]) === 3
+      );
 
       expect(invalidatedEvents.length).to.equal(mintedTokens.length, "All input tokens should be invalidated");
     });
@@ -2178,15 +2124,10 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       // balanceIncrease is calculated above in the total preservation check
       expect(balanceIncrease).to.equal(redeemAmount, "Recipient should receive the redeemed amount as private tokens");
 
-      // Verify all input tokens were invalidated (burned)
-      const invalidatedEvents = redeemReceipt?.logs.filter((log: any) => {
-        try {
-          const decoded = privateToken.interface.parseLog(log);
-          return decoded?.name === "OPRFTokenInvalidated" && Number(decoded?.args[4]) === 3;
-        } catch {
-          return false;
-        }
-      });
+      // Verify all input tokens were invalidated (burned); reason 3 = burned per contract
+      const invalidatedEvents = findParsedLogsInReceipt(redeemReceipt, privateToken, "OPRFTokenInvalidated").filter(
+        (log) => Number(privateToken.interface.parseLog(log)!.args[4]) === 3
+      );
 
       expect(invalidatedEvents.length).to.equal(mintedTokens.length, "All input tokens should be invalidated");
     });
@@ -2389,15 +2330,10 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       // Verify recipient did not receive any private tokens
       expect(balanceIncrease).to.equal(expectedRedeemedAmount, "Recipient should receive 0 when balance is insufficient");
 
-      // Verify all input tokens were invalidated (burned)
-      const invalidatedEvents = redeemReceipt?.logs.filter((log: any) => {
-        try {
-          const decoded = privateToken.interface.parseLog(log);
-          return decoded?.name === "OPRFTokenInvalidated" && Number(decoded?.args[4]) === 3;
-        } catch {
-          return false;
-        }
-      });
+      // Verify all input tokens were invalidated (burned); reason 3 = burned per contract
+      const invalidatedEvents = findParsedLogsInReceipt(redeemReceipt, privateToken, "OPRFTokenInvalidated").filter(
+        (log) => Number(privateToken.interface.parseLog(log)!.args[4]) === 3
+      );
 
       expect(invalidatedEvents.length).to.equal(mintedTokens.length, "All input tokens should be invalidated");
     });

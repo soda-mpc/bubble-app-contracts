@@ -8,7 +8,7 @@ import {
   getDecryptionTxDataViaProxy,
   getUserKeyViaProxy,
   prepareMessageForBubble256,
-} from "./testUtils";
+} from "./bubbleCryptoTransport";
 import {
   delay,
   DELAY_BALANCE_SYNC_MS,
