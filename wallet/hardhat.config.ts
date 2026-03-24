@@ -12,6 +12,8 @@ import "./tasks/sync-gc-addresses";
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY || "";
 const QUICKNODE_ARBITRUM_SEPOLIA_URL = process.env.QUICKNODE_ARBITRUM_SEPOLIA_URL || "";
 const QUICKNODE_ARBITRUM_MAINNET_URL = process.env.QUICKNODE_ARBITRUM_MAINNET_URL || "";
+/** Etherscan-compatible API key (World Sepolia / worldscan uses the same pattern). */
+const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
 
 const config: HardhatUserConfig = {
     solidity: {
@@ -128,8 +130,9 @@ const config: HardhatUserConfig = {
             gasPrice: "auto",
             gasMultiplier: 1.2
         },
-    }, etherscan: {
-        apiKey: "IHWIAFSRJ8X5MWVSWMFBHG5NE1BNPJUMDJ",
+    },
+    etherscan: {
+        apiKey: ETHERSCAN_API_KEY,
         customChains: [
             {
                 network: "sepolia-world",
