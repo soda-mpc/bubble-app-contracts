@@ -115,6 +115,44 @@ describe("RestrictionListIntegration", function () {
       expect(registryNames).to.include("Company Restriction List");
       expect(registryNames).to.include("Government Sanctions List");
     });
+
+    it("should fail closed when any registry check reverts", async function () {
+      const RevertingRegistryFactory = await hre.ethers.getContractFactory("RevertingRestrictionList");
+      const revertingRegistry = await (RevertingRegistryFactory as any).deploy();
+      await revertingRegistry.waitForDeployment();
+
+      await (await token.addRestrictionListRegistry(await revertingRegistry.getAddress())).wait();
+
+      await expect(token.isRestricted(user1.address))
+        .to.be.revertedWithCustomError(token, "RestrictionRegistryCheckFailed")
+        .withArgs(await revertingRegistry.getAddress());
+
+      await expect(token.getRestrictingRegistry(user1.address))
+        .to.be.revertedWithCustomError(token, "RestrictionRegistryCheckFailed")
+        .withArgs(await revertingRegistry.getAddress());
+
+      await expect(token.getDetailedRestrictionInfo(user1.address))
+        .to.be.revertedWithCustomError(token, "RestrictionRegistryCheckFailed")
+        .withArgs(await revertingRegistry.getAddress());
+    });
+
+    it.only("should allow owner to remove a deficient registry and recover checks", async function () {
+      const RevertingRegistryFactory = await hre.ethers.getContractFactory("RevertingRestrictionList");
+      const revertingRegistry = await (RevertingRegistryFactory as any).deploy();
+      await revertingRegistry.waitForDeployment();
+
+      const revertingRegistryAddress = await revertingRegistry.getAddress();
+      await (await token.addRestrictionListRegistry(revertingRegistryAddress)).wait();
+
+      await expect(token.isRestricted(user1.address))
+        .to.be.revertedWithCustomError(token, "RestrictionRegistryCheckFailed")
+        .withArgs(revertingRegistryAddress);
+
+      await (await token.removeRestrictionListRegistry(revertingRegistryAddress)).wait();
+      expect(await token.isRegistryActive(revertingRegistryAddress)).to.equal(false);
+      expect(await token.isRestricted(user1.address)).to.equal(false);
+      expect(await token.getDetailedRestrictionInfo(user1.address)).to.deep.equal([]);
+    });
   });
 
   describe("Registry management", function () {

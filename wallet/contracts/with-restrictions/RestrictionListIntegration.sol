@@ -15,6 +15,7 @@ abstract contract RestrictionListIntegration {
     error RegistryNotFound(address registry);
     error TooManyRegistries(uint256 current, uint256 maximum);
     error InvalidRegistry();
+    error RestrictionRegistryCheckFailed(address registry);
     
     /// @notice Array of active restriction list registries
     address[] private _restrictionListRegistries;
@@ -113,8 +114,8 @@ abstract contract RestrictionListIntegration {
                     return registry;
                 }
             } catch {
-                // If a registry call fails, skip it and continue checking others
-                continue;
+                // Fail closed: if any active registry cannot be queried, block execution.
+                revert RestrictionRegistryCheckFailed(registry);
             }
         }
         return address(0);
@@ -219,8 +220,8 @@ abstract contract RestrictionListIntegration {
                     count++;
                 }
             } catch {
-                // Skip failed registry calls
-                continue;
+                // Fail closed: cannot provide reliable restriction details if a registry fails.
+                revert RestrictionRegistryCheckFailed(registry);
             }
         }
         
