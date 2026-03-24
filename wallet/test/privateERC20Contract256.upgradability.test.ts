@@ -420,9 +420,23 @@ describe("PrivateERC20Contract256 Upgradability", function () {
       });
 
       it("should revert when upgrading to zero address", async function () {
-        await expect(
-          privateToken.connect(defaultSigner).upgradeToAndCall(hre.ethers.ZeroAddress, "0x")
-        ).to.be.reverted;
+        // Reverting calls fail eth_estimateGas without an explicit gasLimit.
+        const tx = await privateToken.connect(defaultSigner).upgradeToAndCall(
+          hre.ethers.ZeroAddress,
+          "0x",
+          { gasLimit: 500_000n }
+        );
+        try {
+          const receipt = await tx.wait();
+          expect(receipt?.status).to.equal(0);
+        } catch (e: any) {
+          // ethers v6: wait() often throws CALL_EXCEPTION for mined reverts; receipt.status === 0 is still attached
+          const st = e?.receipt?.status;
+          if (e?.code === "CALL_EXCEPTION" && st != null && Number(st) === 0) {
+            return;
+          }
+          throw e;
+        }
       });
 
       it("should revert when upgrading to non-UUPS implementation", async function () {
