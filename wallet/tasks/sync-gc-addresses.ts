@@ -17,7 +17,6 @@ const NETWORK_TO_CHAIN_FOLDER: Record<string, string> = {
   "world-mobile-testnet": "WORLD-MOBILE-TESTNET",
   "sepolia-world": "SEPOLIA-WORLD",
   "arc-testnet": "ARC-TESTNET",
-  kurtosis: "KURTOSIS",
 };
 
 const CONTRACTS_BUBBLE = "contracts/bubble";
@@ -45,22 +44,14 @@ function syncOneAddressFile(
   chainFolder: string,
   filename: string,
   envVar: string | undefined,
-  placeholderContent: string | null,
-  options: { ensureGCHandlerAddress?: boolean } = {}
+  placeholderContent: string | null
 ): void {
   const targetPath = path.join(root, CONTRACTS_BUBBLE, filename);
   const chainPath = path.join(root, CONTRACTS_BUBBLE, chainFolder, filename);
 
   if (envVar) {
     const constantName = path.basename(filename, ".sol");
-    const content =
-      filename === ADDRESS_FILES.GCHandlerAddress && options.ensureGCHandlerAddress
-        ? `// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
-address constant GCHandlerAddress = ${envVar};
-address constant GCExtendedOperationsAddress = ${envVar};
-`
-        : `// SPDX-License-Identifier: MIT
+    const content = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 address constant ${constantName} = ${envVar};
 `;
@@ -71,21 +62,7 @@ address constant ${constantName} = ${envVar};
   }
 
   if (fs.existsSync(chainPath)) {
-    let content = fs.readFileSync(chainPath, "utf8");
-    // GCHandlerAddress.sol in chain folders sometimes only has GCExtendedOperationsAddress; MpcCore needs both
-    if (filename === ADDRESS_FILES.GCHandlerAddress) {
-      const hasGCHandler = /address\s+constant\s+GCHandlerAddress\s*=/.test(content);
-      const matchGCExt = content.match(/address\s+constant\s+GCExtendedOperationsAddress\s*=\s*([^;]+);/);
-      if (!hasGCHandler && matchGCExt) {
-        const addr = matchGCExt[1].trim();
-        // Write a single file with one SPDX/pragma and both constants (no duplicate headers)
-        content = `// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
-address constant GCHandlerAddress = ${addr};
-address constant GCExtendedOperationsAddress = ${addr};
-`;
-      }
-    }
+    const content = fs.readFileSync(chainPath, "utf8");
     fs.writeFileSync(targetPath, content, "utf8");
     console.log(`  ${filename}: ${chainFolder}/ -> ${targetPath}`);
   } else {
@@ -129,8 +106,7 @@ task(
       chainFolder,
       ADDRESS_FILES.GCHandlerAddress,
       process.env.GCHANDLER_ADDRESS,
-      null,
-      { ensureGCHandlerAddress: true }
+      null
     );
   });
 
