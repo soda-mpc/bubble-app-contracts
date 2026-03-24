@@ -191,6 +191,24 @@ export async function getEventsInReceiptBlock(
   return privateToken.queryFilter(filter, receipt?.blockNumber, receipt?.blockNumber);
 }
 
+/**
+ * First receipt log that parses with `contract.interface` to the given event name.
+ */
+export function findParsedLogInReceipt(
+  receipt: { logs?: readonly any[] } | null | undefined,
+  contract: { interface: { parseLog: (log: any) => { name?: string } } },
+  eventName: string
+): any | undefined {
+  return receipt?.logs?.find((log) => {
+    try {
+      const parsed = contract.interface.parseLog(log);
+      return parsed?.name === eventName;
+    } catch {
+      return false;
+    }
+  });
+}
+
 export async function waitForUnshieldOutcome(
   privateToken: {
     queryFilter: (filter: any, from: number, to: number) => Promise<any[]>;
