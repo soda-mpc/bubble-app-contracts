@@ -3,7 +3,7 @@ import hre from "hardhat";
 import { Wallet } from "ethers";
 import dotenv from "dotenv";
 
-import { decryptValueViaProxy, decryptMultipleValuesViaProxy, getUserKeyViaProxy } from "./bubbleCryptoTransport";
+import { decryptValueViaProxy, decryptMultipleValuesViaProxy, getUserKeyViaProxy } from "./helpers/bubbleCryptoTransport";
 import {
   buildSignedItUint128,
   buildSignedItUint256,
@@ -19,6 +19,7 @@ import {
   DELAY_SHORT_MS,
   DELAY_STANDARD_MS,
   delay,
+  deployMockToken,
   deployPrivateToken,
   findParsedLogInReceipt,
   findParsedLogInReceiptWhere,
@@ -28,7 +29,7 @@ import {
   mintAndApprove,
   mintApproveAndShield,
   waitForContractCode,
-} from "./testHelpers";
+} from "./helpers/testHelpers";
 
 dotenv.config();
 
@@ -56,9 +57,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     userAesKeyHex = userAesKey.toString("hex");
     userAddress = await defaultSigner.getAddress();
 
-    const MockTokenFactory = await hre.ethers.getContractFactory("TUSDC", defaultSigner);
-    mockToken = await MockTokenFactory.deploy("Test USDC", "TUSDC");
-    await mockToken.waitForDeployment();
+    mockToken = await deployMockToken(hre, defaultSigner);
 
     await delay(DELAY_STANDARD_MS);
 

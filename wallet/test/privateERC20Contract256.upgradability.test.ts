@@ -7,12 +7,14 @@ import {
   DELAY_BALANCE_SYNC_MS,
   DELAY_STANDARD_MS,
   delay,
+  deployMockToken,
   deployPrivateToken,
   deployPrivateTokenImplementation,
+  fundWalletsForGas,
   findParsedLogInReceipt,
   getEventsInReceiptBlock,
   mintAndApprove,
-} from "./testHelpers";
+} from "./helpers/testHelpers";
 
 dotenv.config();
 
@@ -43,27 +45,17 @@ describe("PrivateERC20Contract256 Upgradability", function () {
     // Fund the other wallets with ETH for gas
     const fundAmount = hre.ethers.parseEther("0.1");
 
-    const fundTx1 = await defaultSigner.sendTransaction({
-      to: otherWallet.address,
-      value: fundAmount
+    await fundWalletsForGas({
+      sender: defaultSigner,
+      recipients: [otherWallet.address, thirdWallet.address],
+      amountWei: fundAmount,
     });
-    await fundTx1.wait();
 
-    const fundTx2 = await defaultSigner.sendTransaction({
-      to: thirdWallet.address,
-      value: fundAmount
-    });
-    await fundTx2.wait();
-
-    const MockTokenFactory = await hre.ethers.getContractFactory("TUSDC", defaultSigner);
-    mockToken = await MockTokenFactory.deploy("Test USDC", "TUSDC");
-    await mockToken.waitForDeployment();
-
+    mockToken = await deployMockToken(hre, defaultSigner);
     await delay(DELAY_STANDARD_MS);
 
-    const underlying = await mockToken.getAddress();
     privateToken = await deployPrivateToken(hre, defaultSigner, {
-      underlyingAddress: underlying,
+      underlyingAddress: await mockToken.getAddress(),
       ownerAddress: defaultSigner.address,
       masterAddress: defaultSigner.address,
     });
@@ -546,4 +538,3 @@ describe("PrivateERC20Contract256 Upgradability", function () {
     });
   });
 });
-

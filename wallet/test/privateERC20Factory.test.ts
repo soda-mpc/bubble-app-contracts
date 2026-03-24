@@ -1,9 +1,13 @@
 import { expect } from "chai";
 import hre from "hardhat";
-import { Signer } from "ethers";
 
 import { PrivateERC20Contract256 } from "../typechain-types";
-import { deployPrivateTokenImplementation, mintAndApprove } from "./testHelpers";
+import {
+  deployMockToken,
+  deployPrivateTokenImplementation,
+  fundWalletsForGas,
+  mintAndApprove,
+} from "./helpers/testHelpers";
 
 /** Latest TokenCreated event from the factory (tests assume at least one exists). */
 async function getLastTokenCreatedEvent(factory: any) {
@@ -36,10 +40,6 @@ async function createTokenAndGetAddress(
   return event.args.token;
 }
 
-async function sendEthForGas(from: Signer, to: string, valueWei: bigint) {
-  await (await from.sendTransaction({ to, value: valueWei })).wait();
-}
-
 describe("PrivateERC20Factory", function () {
   // Default Mocha/Hardhat timeout (~40s) is too low for several deploys on public testnets (e.g. Sepolia).
   this.timeout(300000);
@@ -47,8 +47,8 @@ describe("PrivateERC20Factory", function () {
   let factory: any;
   let mockToken1: any;
   let mockToken2: any;
-  let owner: Signer;
-  let otherUser: Signer;
+  let owner: any;
+  let otherUser: any;
   let userAddress: string;
 
   before(async function () {
@@ -57,13 +57,8 @@ describe("PrivateERC20Factory", function () {
     otherUser = signers[1];
     userAddress = await owner.getAddress();
 
-    const MockTokenFactory = await hre.ethers.getContractFactory("TUSDC", owner);
-
-    mockToken1 = await MockTokenFactory.deploy("Test USDC 1", "TUSDC1");
-    await mockToken1.waitForDeployment();
-
-    mockToken2 = await MockTokenFactory.deploy("Test USDC 2", "TUSDC2");
-    await mockToken2.waitForDeployment();
+    mockToken1 = await deployMockToken(hre, owner, "Test USDC 1", "TUSDC1");
+    mockToken2 = await deployMockToken(hre, owner, "Test USDC 2", "TUSDC2");
 
     const implementation = await deployPrivateTokenImplementation(hre, owner);
     const implAddress = await implementation.getAddress();
@@ -119,7 +114,11 @@ describe("PrivateERC20Factory", function () {
 
       await createTokenAndGetAddress(factory, "User1 Token", "U1T", underlyingAddress);
 
-      await sendEthForGas(owner, await otherUser.getAddress(), hre.ethers.parseEther("0.1"));
+      await fundWalletsForGas({
+        sender: owner,
+        recipients: [await otherUser.getAddress()],
+        amountWei: hre.ethers.parseEther("0.1"),
+      });
 
       const factoryWithOtherUser = factory.connect(otherUser);
       await createTokenAndGetAddress(
@@ -220,7 +219,7 @@ describe("PrivateERC20Factory", function () {
     });
   });
 
-  describe.only("Integration with PrivateERC20Contract256", function () {
+  describe("Integration with PrivateERC20Contract256", function () {
     let privateTokenAddress: string;
     let privateToken: PrivateERC20Contract256;
 

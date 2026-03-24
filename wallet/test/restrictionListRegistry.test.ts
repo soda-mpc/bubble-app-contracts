@@ -2,12 +2,12 @@ import { expect } from "chai";
 import hre from "hardhat";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 import {
+  deployRestrictionListRegistry,
   expectReverted,
   findParsedLogInReceiptWhere,
   findParsedLogsInReceipt,
   waitForCondition,
-  waitForDeploymentConfirmation,
-} from "./testHelpers";
+} from "./helpers/testHelpers";
 
 describe("RestrictionListRegistry", function () {
   this.timeout(180000);
@@ -21,10 +21,7 @@ describe("RestrictionListRegistry", function () {
   beforeEach(async function () {
     [owner, user1, user2, user3, nonOwner] = await hre.ethers.getSigners();
     
-    const RestrictionListRegistryFactory = await hre.ethers.getContractFactory("RestrictionListRegistry");
-    restrictionListRegistry = await (RestrictionListRegistryFactory as any).deploy(owner.address, "Test Restriction List");
-    await restrictionListRegistry.waitForDeployment();
-    await waitForDeploymentConfirmation(restrictionListRegistry, hre);
+    restrictionListRegistry = await deployRestrictionListRegistry(hre, owner, "Test Restriction List");
   });
 
   describe("Deployment", function () {

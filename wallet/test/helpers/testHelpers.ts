@@ -1,6 +1,6 @@
 /**
  * Shared test harness: Hardhat deploy, delays, receipt/event helpers, chai-style helpers.
- * Transport + crypto (proxy HTTP, encrypt/decrypt message prep) live in `bubbleCryptoTransport.ts`.
+ * Transport + crypto (proxy HTTP, encrypt/decrypt message prep): sibling `bubbleCryptoTransport.ts` in this folder.
  */
 import type { HDNodeWallet, Wallet } from "ethers";
 import {
@@ -38,9 +38,18 @@ export async function waitForCondition(
 /** Hardhat runtime (`import hre from "hardhat"`) — typed loosely for reuse across test suites. */
 export type HardhatRuntime = {
   ethers: {
-    provider: { getBlockNumber: () => Promise<number>; getCode: (address: string) => Promise<string> };
+    provider: {
+      getBlockNumber: () => Promise<number>;
+      getCode: (address: string) => Promise<string>;
+      getBalance: (address: string) => Promise<bigint>;
+    };
     getContractFactory: (name: string, signer?: any) => Promise<any>;
     getSigners?: () => Promise<any[]>;
+    Wallet: {
+      createRandom: () => HDNodeWallet;
+      fromPhrase?: (phrase: string) => HDNodeWallet;
+    };
+    parseEther: (value: string) => bigint;
   };
 };
 
@@ -98,6 +107,34 @@ export async function waitForDeploymentConfirmation(
   await waitForContractCode(address, hre, maxAttempts * pollIntervalMs, pollIntervalMs);
 }
 
+async function deployProxyBackedContract(params: {
+  hre: HardhatRuntime;
+  signer: any;
+  contractFqn: string;
+  initData?: (factory: any) => string;
+  postDeploy?: (contract: any, factory: any) => Promise<void>;
+}): Promise<any> {
+  const { hre, signer, contractFqn, initData, postDeploy } = params;
+  const ContractFactory = await hre.ethers.getContractFactory(contractFqn, signer);
+  const implementation = await ContractFactory.deploy();
+  await implementation.waitForDeployment();
+  await waitForDeploymentConfirmation(implementation, hre);
+
+  const ProxyFactory = await hre.ethers.getContractFactory(ERC1967_PROXY_FQN, signer);
+  const proxy = await ProxyFactory.deploy(
+    await implementation.getAddress(),
+    initData ? initData(ContractFactory) : "0x"
+  );
+  await proxy.waitForDeployment();
+  await waitForDeploymentConfirmation(proxy, hre);
+
+  const contract = ContractFactory.attach(await proxy.getAddress()) as any;
+  if (postDeploy) {
+    await postDeploy(contract, ContractFactory);
+  }
+  return contract;
+}
+
 export async function deployPrivateToken(
   hre: HardhatRuntime,
   defaultSigner: any,
@@ -110,25 +147,18 @@ export async function deployPrivateToken(
   }
 ): Promise<any> {
   const { underlyingAddress, ownerAddress, masterAddress, name = "BubbleToken", symbol = "BUB" } = params;
-
-  const ImplementationFactory = await hre.ethers.getContractFactory(PRIVATE_ERC20_256_FQN, defaultSigner);
-  const implementation = await ImplementationFactory.deploy();
-  await implementation.waitForDeployment();
-  const implementationAddress = await implementation.getAddress();
-
-  const initData = ImplementationFactory.interface.encodeFunctionData("initialize", [
-    name,
-    symbol,
-    underlyingAddress,
-    ownerAddress,
-    masterAddress,
-  ]);
-
-  const ProxyFactory = await hre.ethers.getContractFactory(ERC1967_PROXY_FQN, defaultSigner);
-  const proxy = await ProxyFactory.deploy(implementationAddress, initData);
-  await proxy.waitForDeployment();
-
-  return ImplementationFactory.attach(await proxy.getAddress()) as any;
+  return deployProxyBackedContract({
+    hre,
+    signer: defaultSigner,
+    contractFqn: PRIVATE_ERC20_256_FQN,
+    initData: (factory) => factory.interface.encodeFunctionData("initialize", [
+      name,
+      symbol,
+      underlyingAddress,
+      ownerAddress,
+      masterAddress,
+    ]),
+  });
 }
 
 export async function deployPrivateTokenImplementation(
@@ -139,6 +169,118 @@ export async function deployPrivateTokenImplementation(
   const implementation = await ImplementationFactory.deploy();
   await implementation.waitForDeployment();
   return implementation;
+}
+
+export async function deployMockToken(
+  hre: HardhatRuntime,
+  signer: any,
+  name = "Test USDC",
+  symbol = "TUSDC"
+): Promise<any> {
+  const MockTokenFactory = await hre.ethers.getContractFactory("TUSDC", signer);
+  const mockToken = await MockTokenFactory.deploy(name, symbol);
+  await mockToken.waitForDeployment();
+  return mockToken;
+}
+
+async function fundRecipients(params: {
+  sender: { sendTransaction: (tx: { to: string; value: bigint }) => Promise<{ wait: () => Promise<unknown> }> };
+  recipients: string[];
+  amountWei: bigint;
+}): Promise<void> {
+  const { sender, recipients, amountWei } = params;
+  for (const recipient of recipients) {
+    await (await sender.sendTransaction({ to: recipient, value: amountWei })).wait();
+  }
+}
+
+export async function fundWalletsForGas(params: {
+  sender: { sendTransaction: (tx: { to: string; value: bigint }) => Promise<{ wait: () => Promise<unknown> }> };
+  recipients: string[];
+  amountWei: bigint;
+}): Promise<void> {
+  await fundRecipients(params);
+}
+
+export async function createRandomWalletsAndFund(params: {
+  hre: HardhatRuntime;
+  sender: { sendTransaction: (tx: { to: string; value: bigint }) => Promise<{ wait: () => Promise<unknown> }> };
+  count: number;
+  amountWei: bigint;
+}): Promise<HDNodeWallet[]> {
+  const { hre, sender, count, amountWei } = params;
+  const wallets = Array.from({ length: count }, () => hre.ethers.Wallet.createRandom().connect(hre.ethers.provider as any));
+  await fundWalletsForGas({
+    sender,
+    recipients: wallets.map((wallet) => wallet.address),
+    amountWei,
+  });
+  return wallets;
+}
+
+export async function ensureWalletHasGas(params: {
+  hre: HardhatRuntime;
+  sender: { sendTransaction: (tx: { to: string; value: bigint }) => Promise<{ wait: () => Promise<unknown> }> };
+  recipient: string;
+  minimumWei: bigint;
+  topUpWei: bigint;
+}): Promise<void> {
+  const { hre, sender, recipient, minimumWei, topUpWei } = params;
+  const balance = await hre.ethers.provider.getBalance(recipient);
+  if (balance < minimumWei) {
+    await fundWalletsForGas({
+      sender,
+      recipients: [recipient],
+      amountWei: topUpWei,
+    });
+  }
+}
+
+export async function deployRestrictionListRegistry(
+  hre: HardhatRuntime,
+  owner: any,
+  name: string
+): Promise<any> {
+  const RestrictionListRegistryFactory = await hre.ethers.getContractFactory("RestrictionListRegistry", owner);
+  const registry = await RestrictionListRegistryFactory.deploy(owner.address, name);
+  await registry.waitForDeployment();
+  await waitForDeploymentConfirmation(registry, hre);
+  return registry;
+}
+
+export async function deployPrivateTokenWithRestrictionList(params: {
+  hre: HardhatRuntime;
+  signer: any;
+  underlyingAddress: string;
+  ownerAddress: string;
+  masterAddress: string;
+  name?: string;
+  symbol?: string;
+}): Promise<any> {
+  const {
+    hre,
+    signer,
+    underlyingAddress,
+    ownerAddress,
+    masterAddress,
+    name = "Restricted Private Token",
+    symbol = "RPT",
+  } = params;
+
+  return deployProxyBackedContract({
+    hre,
+    signer,
+    contractFqn: "PrivateERC20WithRestrictionList256",
+    postDeploy: async (privateToken) => {
+      await (await privateToken["initialize(string,string,address,address,address)"](
+        name,
+        symbol,
+        underlyingAddress,
+        ownerAddress,
+        masterAddress
+      )).wait();
+    },
+  });
 }
 
 export async function mintAndApprove(params: {
@@ -176,8 +318,13 @@ export async function mintApproveAndShield(params: {
   amount: bigint;
 }): Promise<void> {
   const { mockToken, privateToken, recipient, amount } = params;
-  await (await mockToken.mint(recipient, amount)).wait();
-  await (await mockToken.approve(await privateToken.getAddress(), amount)).wait();
+  await mintAndApprove({
+    mockToken,
+    privateToken,
+    userAddress: recipient,
+    amount,
+    delayAfterApproveMs: 0,
+  });
   await (await privateToken.shield(amount)).wait();
 }
 
@@ -249,6 +396,21 @@ export async function getEventsInReceiptBlock(
   return privateToken.queryFilter(filter, receipt?.blockNumber, receipt?.blockNumber);
 }
 
+function parseReceiptLogs(
+  receipt: { logs?: readonly any[] } | null | undefined,
+  contract: { interface: { parseLog: (log: any) => { name?: string; args?: readonly unknown[] } } }
+): Array<{ log: any; parsed: { name?: string; args?: readonly unknown[] }; name?: string }> {
+  if (!receipt?.logs?.length) return [];
+  return receipt.logs.flatMap((log) => {
+    try {
+      const parsed = contract.interface.parseLog(log) as { name?: string; args?: readonly unknown[] };
+      return [{ log, parsed, name: parsed?.name }];
+    } catch {
+      return [];
+    }
+  });
+}
+
 /**
  * First receipt log that parses with `contract.interface` to the given event name.
  */
@@ -257,14 +419,7 @@ export function findParsedLogInReceipt(
   contract: { interface: { parseLog: (log: any) => { name?: string } } },
   eventName: string
 ): any | undefined {
-  return receipt?.logs?.find((log) => {
-    try {
-      const parsed = contract.interface.parseLog(log);
-      return parsed?.name === eventName;
-    } catch {
-      return false;
-    }
-  });
+  return parseReceiptLogs(receipt, contract).find((entry) => entry.name === eventName)?.log;
 }
 
 /** All receipt logs that parse to `eventName` (same parsing rules as `findParsedLogInReceipt`). */
@@ -273,15 +428,9 @@ export function findParsedLogsInReceipt(
   contract: Parameters<typeof findParsedLogInReceipt>[1],
   eventName: string
 ): any[] {
-  if (!receipt?.logs?.length) return [];
-  return receipt.logs.filter((log) => {
-    try {
-      const parsed = contract.interface.parseLog(log);
-      return parsed?.name === eventName;
-    } catch {
-      return false;
-    }
-  });
+  return parseReceiptLogs(receipt, contract)
+    .filter((entry) => entry.name === eventName)
+    .map((entry) => entry.log);
 }
 
 /** First receipt log for `eventName` where `predicate` holds on the parsed log (name + args). */
@@ -291,15 +440,9 @@ export function findParsedLogInReceiptWhere(
   eventName: string,
   predicate: (parsed: { name?: string; args?: readonly unknown[] }) => boolean
 ): any | undefined {
-  return receipt?.logs?.find((log) => {
-    try {
-      const parsed = contract.interface.parseLog(log) as { name?: string; args?: readonly unknown[] };
-      if (parsed?.name !== eventName) return false;
-      return predicate(parsed);
-    } catch {
-      return false;
-    }
-  });
+  return parseReceiptLogs(receipt, contract)
+    .find((entry) => entry.name === eventName && predicate(entry.parsed))
+    ?.log;
 }
 
 /** All `OPRFMinted` logs in a receipt decoded to `{ user, x, y, q }` (same arg order as the contract event). */

@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import hre from "hardhat";
-import { Wallet, HDNodeWallet } from "ethers";
+import { HDNodeWallet } from "ethers";
 import dotenv from "dotenv";
 
 import {
@@ -8,7 +8,7 @@ import {
   getDecryptionTxDataViaProxy,
   getUserKeyViaProxy,
   prepareMessageForBubble256,
-} from "./bubbleCryptoTransport";
+} from "./helpers/bubbleCryptoTransport";
 import {
   delay,
   DELAY_BALANCE_SYNC_MS,
@@ -16,10 +16,15 @@ import {
   DELAY_MPC_PROCESSING_MS,
   DELAY_SHORT_MS,
   DELAY_STANDARD_MS,
+  createRandomWalletsAndFund,
+  deployMockToken,
+  deployPrivateTokenWithRestrictionList,
+  deployRestrictionListRegistry,
+  ensureWalletHasGas,
   findParsedLogInReceipt,
   getPrivateTokenBalance,
   waitForDeploymentConfirmation,
-} from "./testHelpers";
+} from "./helpers/testHelpers";
 import { PrivateERC20WithRestrictionList256 } from "../typechain-types";
 
 dotenv.config();
@@ -61,64 +66,33 @@ describe("PrivateERC20WithRestrictionList", function () {
     console.log("Default signer address:", userAddress);
     console.log("Default signer ETH balance:", hre.ethers.formatEther(await hre.ethers.provider.getBalance(userAddress)));
 
-    // Create wallets for testing
-    otherWallet = Wallet.createRandom().connect(hre.ethers.provider) as HDNodeWallet;
-    restrictedWallet = Wallet.createRandom().connect(hre.ethers.provider) as HDNodeWallet;
-    
-    // Fund the random wallets with some ETH for gas fees
-    const fundAmount = hre.ethers.parseEther("0.01"); // 0.01 ETH for gas
-    await defaultSigner.sendTransaction({
-      to: otherWallet.address,
-      value: fundAmount
-    });
-    await defaultSigner.sendTransaction({
-      to: restrictedWallet.address,
-      value: fundAmount
-    });
+    [otherWallet, restrictedWallet] = await createRandomWalletsAndFund({
+      hre,
+      sender: defaultSigner,
+      count: 2,
+      amountWei: hre.ethers.parseEther("0.01"),
+    }) as [HDNodeWallet, HDNodeWallet];
     await delay(DELAY_STANDARD_MS);
 
-    // Deploy restriction list registries
-    const RestrictionListRegistryFactory = await hre.ethers.getContractFactory("RestrictionListRegistry", defaultSigner);
-    companyRegistry = await (RestrictionListRegistryFactory as any).deploy(userAddress, "Company Compliance List");
-    await companyRegistry.waitForDeployment();
-    await waitForDeploymentConfirmation(companyRegistry, hre);
-    
-    govRegistry = await (RestrictionListRegistryFactory as any).deploy(userAddress, "Government Sanctions List");
-    await govRegistry.waitForDeployment();
-    await waitForDeploymentConfirmation(govRegistry, hre);
+    companyRegistry = await deployRestrictionListRegistry(hre, defaultSigner, "Company Compliance List");
+    govRegistry = await deployRestrictionListRegistry(hre, defaultSigner, "Government Sanctions List");
 
     console.log("Company Registry deployed to:", await companyRegistry.getAddress());
     console.log("Government Registry deployed to:", await govRegistry.getAddress());
 
-    // Deploy mock token using the default signer
-    const MockTokenFactory = await hre.ethers.getContractFactory("TUSDC", defaultSigner);
-    mockToken = await MockTokenFactory.deploy("Test USDC", "TUSDC");
-    await mockToken.waitForDeployment();
+    mockToken = await deployMockToken(hre, defaultSigner);
     await waitForDeploymentConfirmation(mockToken, hre);
     await delay(DELAY_STANDARD_MS);
 
-    // Deploy private token implementation + proxy and initialize through proxy
-    const ContractFactory = await hre.ethers.getContractFactory("PrivateERC20WithRestrictionList256", defaultSigner);
-    const implementation = await ContractFactory.deploy();
-    await implementation.waitForDeployment();
-    await waitForDeploymentConfirmation(implementation, hre);
-
-    const ProxyFactory = await hre.ethers.getContractFactory(
-      "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy",
-      defaultSigner
-    );
-    const proxy = await ProxyFactory.deploy(await implementation.getAddress(), "0x");
-    await proxy.waitForDeployment();
-    await waitForDeploymentConfirmation(proxy, hre);
-    privateToken = ContractFactory.attach(await proxy.getAddress()) as PrivateERC20WithRestrictionList256;
-
-    await (await (privateToken as any)["initialize(string,string,address,address,address)"](
-      "ssbtUSDC",
-      "ssbtUSDC",
-      await mockToken.getAddress(),
-      userAddress,
-      userAddress
-    )).wait();
+    privateToken = await deployPrivateTokenWithRestrictionList({
+      hre,
+      signer: defaultSigner,
+      underlyingAddress: await mockToken.getAddress(),
+      ownerAddress: userAddress,
+      masterAddress: userAddress,
+      name: "ssbtUSDC",
+      symbol: "ssbtUSDC",
+    }) as PrivateERC20WithRestrictionList256;
 
     // Configure restriction registries post-initialization through owner-only functions.
     await (await privateToken.addRestrictionListRegistry(await companyRegistry.getAddress())).wait();
@@ -227,10 +201,7 @@ describe("PrivateERC20WithRestrictionList", function () {
 
     it("should allow owner to add/remove restriction list registries", async function () {
       // Create a new registry
-      const RestrictionListRegistryFactory = await hre.ethers.getContractFactory("RestrictionListRegistry");
-      const newRegistry = await (RestrictionListRegistryFactory as any).deploy(userAddress, "Internal Compliance List");
-      await newRegistry.waitForDeployment();
-      await waitForDeploymentConfirmation(newRegistry, hre);
+      const newRegistry = await deployRestrictionListRegistry(hre, defaultSigner, "Internal Compliance List");
 
       // Add registry to token
       await (await privateToken.addRestrictionListRegistry(await newRegistry.getAddress())).wait();
@@ -290,22 +261,20 @@ describe("PrivateERC20WithRestrictionList", function () {
 
       // Ensure random wallets have sufficient ETH for gas
       const minEthBalance = hre.ethers.parseEther("0.005"); // 0.005 ETH minimum
-      const restrictedWalletBalance = await hre.ethers.provider.getBalance(restrictedWallet.address);
-      const otherWalletBalance = await hre.ethers.provider.getBalance(otherWallet.address);
-      
-      if (restrictedWalletBalance < minEthBalance) {
-        await defaultSigner.sendTransaction({
-          to: restrictedWallet.address,
-          value: hre.ethers.parseEther("0.01")
-        });
-      }
-      
-      if (otherWalletBalance < minEthBalance) {
-        await defaultSigner.sendTransaction({
-          to: otherWallet.address,
-          value: hre.ethers.parseEther("0.01")
-        });
-      }
+      await ensureWalletHasGas({
+        hre,
+        sender: defaultSigner,
+        recipient: restrictedWallet.address,
+        minimumWei: minEthBalance,
+        topUpWei: hre.ethers.parseEther("0.01"),
+      });
+      await ensureWalletHasGas({
+        hre,
+        sender: defaultSigner,
+        recipient: otherWallet.address,
+        minimumWei: minEthBalance,
+        topUpWei: hre.ethers.parseEther("0.01"),
+      });
       await delay(DELAY_SHORT_MS);
 
       // Ensure mockToken is connected to the correct signer

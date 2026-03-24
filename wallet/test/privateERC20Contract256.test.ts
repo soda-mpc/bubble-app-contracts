@@ -3,14 +3,16 @@ import hre from "hardhat";
 import { Wallet, HDNodeWallet } from "ethers";
 import dotenv from "dotenv";
 
-import { prepareMessageForBubble256, getUserKeyViaProxy, getDecryptionTxDataViaProxy } from "./bubbleCryptoTransport";
+import { prepareMessageForBubble256, getUserKeyViaProxy, getDecryptionTxDataViaProxy } from "./helpers/bubbleCryptoTransport";
 import {
+  createRandomWalletsAndFund,
   delay,
   DELAY_BALANCE_SYNC_MS,
   DELAY_MPC_DECRYPTION_MS,
   DELAY_MPC_PROCESSING_MS,
   DELAY_SHORT_MS,
   DELAY_STANDARD_MS,
+  deployMockToken,
   deployPrivateToken,
   deployPrivateTokenImplementation,
   ensurePrivateBalanceClearedFor,
@@ -20,7 +22,7 @@ import {
   mintAndApprove,
   waitForContractCode,
   waitForUnshieldOutcome,
-} from "./testHelpers";
+} from "./helpers/testHelpers";
 
 dotenv.config();
 
@@ -51,16 +53,14 @@ let defaultSigner: any;
     userAesKeyHex = userAesKey.toString("hex");
     userAddress = await defaultSigner.getAddress();
 
-    // Create another wallet for testing transfers
-    otherWallet = Wallet.createRandom().connect(hre.ethers.provider) as HDNodeWallet;
+    [otherWallet, masterWallet] = await createRandomWalletsAndFund({
+      hre,
+      sender: defaultSigner,
+      count: 2,
+      amountWei: hre.ethers.parseEther("0.01"),
+    }) as [HDNodeWallet, HDNodeWallet];
 
-    // Create master wallet for unshieldForMaster tests
-    masterWallet = Wallet.createRandom().connect(hre.ethers.provider) as HDNodeWallet;
-
-    // Deploy mock token using the default signer
-    const MockTokenFactory = await hre.ethers.getContractFactory("TUSDC", defaultSigner);
-    mockToken = await MockTokenFactory.deploy("Test USDC", "TUSDC");
-    await mockToken.waitForDeployment();
+    mockToken = await deployMockToken(hre, defaultSigner);
     await delay(DELAY_STANDARD_MS);
 
     // Deploy private token using the upgradeable proxy pattern

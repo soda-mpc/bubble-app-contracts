@@ -1,6 +1,6 @@
 /**
  * Transport (HTTP proxy, provider) + crypto for Bubble tests.
- * Deploy, delays, receipt helpers, and chai-style helpers: `testHelpers.ts`.
+ * Deploy, delays, receipt helpers, and chai-style helpers: sibling `testHelpers.ts` in this folder.
  */
 import hre from "hardhat";
 import fetch from "node-fetch";
@@ -39,6 +39,8 @@ const UINT128_LOW_U64_BYTE_OFFSET = 8;
 
 /** 256-bit plaintext in big-endian wire format (bytes). */
 const UINT256_BYTES = 32;
+/** Exclusive upper bound for uint256 (`2^256`). */
+const UINT256_MAX = 2n ** 256n;
 /** Hex digits for a full uint256 value (no `0x`). */
 const UINT256_HEX_CHARS = 64;
 /** First / second half of a uint256 plaintext (bytes), one AES block each. */
@@ -54,6 +56,53 @@ function handleHexForLog(fullHandleHex: string): string {
     return fullHandleHex;
   }
   return `${fullHandleHex.slice(0, HANDLE_HEX_LOG_PREFIX_CHARS)}…`;
+}
+
+function normalizeProxyUrl(proxyUrl: string): string {
+  return proxyUrl.replace(/\/+$/, "");
+}
+
+function logDebug(enabled: boolean, message: string, ...args: unknown[]) {
+  if (enabled) {
+    console.log(message, ...args);
+  }
+}
+
+function logDebugError(enabled: boolean, message: string, ...args: unknown[]) {
+  if (enabled) {
+    console.error(message, ...args);
+  }
+}
+
+function bytesToBigInt(bytes: Uint8Array): bigint {
+  let result = 0n;
+  for (const byte of bytes) {
+    result = (result << 8n) | BigInt(byte);
+  }
+  return result;
+}
+
+function handleToHex(handle: bigint): string {
+  return `0x${handle.toString(16).padStart(64, "0")}`;
+}
+
+function handleToBytes(handle: bigint): Uint8Array {
+  return hre.ethers.getBytes(handleToHex(handle));
+}
+
+function base64EncodeBytes(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("base64");
+}
+
+function concatBytes(chunks: Uint8Array[]): Uint8Array {
+  const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+  const combined = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return combined;
 }
 
 async function getNetworkWithTimeout(timeoutMs: number, timeoutMessage: string) {
@@ -123,9 +172,10 @@ export async function retryWithBackoff<T>(
 }
 
 export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl: string) {
+  const normalizedProxyUrl = normalizeProxyUrl(proxyUrl);
   // Get signer's address
   const userAddress = await signer.getAddress();
-  console.log(`[getUserKeyViaProxy] Starting onboarding for address ${userAddress} via ${proxyUrl}`);
+  console.log(`[getUserKeyViaProxy] Starting onboarding for address ${userAddress} via ${normalizedProxyUrl}`);
 
   // 1. Generate RSA key pair (synchronous function)
   const { publicKey, privateKey } = generateRSAKeyPair();
@@ -156,8 +206,8 @@ export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl
     address: userAddress,
   };
   
-  console.log(`[getUserKeyViaProxy] Sending onboard request to ${proxyUrl}/onboard for address ${userAddress}...`);
-  const response = await fetch(`${proxyUrl}/onboard`, {
+  console.log(`[getUserKeyViaProxy] Sending onboard request to ${normalizedProxyUrl}/onboard for address ${userAddress}...`);
+  const response = await fetch(`${normalizedProxyUrl}/onboard`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(requestData),
@@ -175,7 +225,15 @@ export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl
   console.log(`[getUserKeyViaProxy] Successfully onboarded address ${userAddress}`);
 
   // 5. Process response
+  if (typeof result?.rsa_ciphertexts !== "string") {
+    throw new Error(`Onboarding response missing rsa_ciphertexts for address ${userAddress}`);
+  }
   const rsaCiphertexts = Buffer.from(result.rsa_ciphertexts, "base64");
+  if (rsaCiphertexts.length !== RSA_CIPHERTEXT_BYTES * 2) {
+    throw new Error(
+      `Invalid rsa_ciphertexts length: expected ${RSA_CIPHERTEXT_BYTES * 2} bytes, got ${rsaCiphertexts.length}`
+    );
+  }
   const encryptedKeyShare0 = rsaCiphertexts.slice(0, RSA_CIPHERTEXT_BYTES).toString("hex");
   const encryptedKeyShare1 = rsaCiphertexts.slice(RSA_CIPHERTEXT_BYTES).toString("hex");
   
@@ -198,12 +256,7 @@ function decryptEncryptedOutput(encryptedOutput: Buffer, userAesKey: Buffer): bi
     
     const decryptedMessage = decrypt(userKeyBytes, r, cipher);
     
-    // Convert decrypted bytes to bigint
-    let result = 0n;
-    for (let i = 0; i < decryptedMessage.length; i++) {
-      result = (result << 8n) | BigInt(decryptedMessage[i]);
-    }
-    return result;
+    return bytesToBigInt(decryptedMessage);
   } else if (encryptedOutput.length === ENCRYPTED_DOUBLE_OUTPUT_BYTES) {
     // Two blocks: [cipherHigh][rHigh][cipherLow][rLow]
     const cipher1 = new Uint8Array(encryptedOutput.slice(0, AES_LIMB_BYTES));
@@ -214,12 +267,7 @@ function decryptEncryptedOutput(encryptedOutput: Buffer, userAesKey: Buffer): bi
     // Use the 5-parameter version of decrypt for 256-bit values
     const decryptedMessage = decrypt(userKeyBytes, r1, cipher1, r2, cipher2);
     
-    // Convert decrypted bytes to bigint
-    let result = 0n;
-    for (let i = 0; i < decryptedMessage.length; i++) {
-      result = (result << 8n) | BigInt(decryptedMessage[i]);
-    }
-    return result;
+    return bytesToBigInt(decryptedMessage);
   } else {
     throw new Error(`Unexpected encrypted output length: ${encryptedOutput.length}`);
   }
@@ -232,13 +280,13 @@ export async function decryptValueViaProxy(
   proxyUrl: string,
   debugLogging: boolean = false
 ): Promise<bigint> {
+  const normalizedProxyUrl = normalizeProxyUrl(proxyUrl);
   const userAddress = await signer.getAddress();
-  const handleHex = `0x${handle.toString(16).padStart(64, "0")}`;
+  const handleHex = handleToHex(handle);
   const handleLabel = handleHexForLog(handleHex);
-  console.log(`[decryptValueViaProxy] Starting decryption for handle ${handleLabel} (address: ${userAddress})`);
+  logDebug(debugLogging, `[decryptValueViaProxy] Starting decryption for handle ${handleLabel} (address: ${userAddress})`);
 
-  // Convert handle to bytes (32-byte big-endian)
-  const handleBytes = hre.ethers.getBytes(handleHex);
+  const handleBytes = handleToBytes(handle);
 
   // Sign the handle bytes
   const signature = await signer.signMessage(handleBytes);
@@ -246,12 +294,12 @@ export async function decryptValueViaProxy(
   const chainId = await getChainIdForEncryptToUser("[decryptValueViaProxy]", `handle ${handleLabel}`);
 
   // Prepare request data
-  const handleBase64 = Buffer.from(handleBytes).toString("base64");
-  const userSignature = Buffer.from(hre.ethers.getBytes(signature)).toString("base64");
+  const handleBase64 = base64EncodeBytes(handleBytes);
+  const userSignature = base64EncodeBytes(hre.ethers.getBytes(signature));
 
-  console.log(`[decryptValueViaProxy] Sending encrypt-to-user request to ${proxyUrl}/encrypt-to-user for handle ${handleLabel}`);
+  logDebug(debugLogging, `[decryptValueViaProxy] Sending encrypt-to-user request to ${normalizedProxyUrl}/encrypt-to-user for handle ${handleLabel}`);
   const data = await retryWithBackoff(async () => {
-    const response = await fetch(`${proxyUrl}/encrypt-to-user`, {
+    const response = await fetch(`${normalizedProxyUrl}/encrypt-to-user`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -261,22 +309,25 @@ export async function decryptValueViaProxy(
       }),
     });
 
-    console.log(`[decryptValueViaProxy] Received response status ${response.status} for handle ${handleLabel}`);
+    logDebug(debugLogging, `[decryptValueViaProxy] Received response status ${response.status} for handle ${handleLabel}`);
     const bodyText = await response.text();
     if (!response.ok) {
-      console.error(`[decryptValueViaProxy] encrypt-to-user failed: status=${response.status} body=${bodyText} for handle ${handleLabel}`);
+      logDebugError(debugLogging, `[decryptValueViaProxy] encrypt-to-user failed: status=${response.status} body=${bodyText} for handle ${handleLabel}`);
       throw new Error(`HTTP ${response.status}: ${bodyText}`);
     }
 
     try {
       return JSON.parse(bodyText) as any;
     } catch (error) {
-      console.error(`[decryptValueViaProxy] encrypt-to-user invalid JSON response: ${bodyText} for handle ${handleLabel}`);
+      logDebugError(debugLogging, `[decryptValueViaProxy] encrypt-to-user invalid JSON response: ${bodyText} for handle ${handleLabel}`);
       throw error;
     }
   });
+  if (typeof data?.output !== "string") {
+    throw new Error(`Expected output string in response, got: ${JSON.stringify(data)}`);
+  }
   const encryptedOutput = Buffer.from(data.output, "base64");
-  console.log(`[decryptValueViaProxy] Successfully decrypted handle ${handleLabel}`);
+  logDebug(debugLogging, `[decryptValueViaProxy] Successfully decrypted handle ${handleLabel}`);
 
   return decryptEncryptedOutput(encryptedOutput, userAesKey);
 }
@@ -298,7 +349,7 @@ export async function getDecryptionTxDataViaProxy(
   contractAddress: string,
   userDecryptId: bigint | number
 ): Promise<string> {
-  const url = `${proxyUrl.replace(/\/$/, "")}/get-decryption`;
+  const url = `${normalizeProxyUrl(proxyUrl)}/get-decryption`;
   const body = {
     chain_id: Number(chainId),
     contract_address: contractAddress.startsWith("0x") ? contractAddress : `0x${contractAddress}`,
@@ -345,31 +396,16 @@ export async function decryptMultipleValuesViaProxy(
   proxyUrl: string,
   debugLogging: boolean = false
 ): Promise<bigint[]> {
+  const normalizedProxyUrl = normalizeProxyUrl(proxyUrl);
   const userAddress = await signer.getAddress();
-  console.log(`[decryptMultipleValuesViaProxy] Starting batch decryption for ${handles.length} handle(s) (address: ${userAddress})`);
+  logDebug(debugLogging, `[decryptMultipleValuesViaProxy] Starting batch decryption for ${handles.length} handle(s) (address: ${userAddress})`);
   
   if (handles.length === 0) {
     return [];
   }
 
-  // Convert all handles to bytes (32-byte big-endian each)
-  const handlesBytes: Uint8Array[] = [];
-  const handlesBytesToSign: Uint8Array[] = [];
-  
-  for (const handle of handles) {
-    const handleHex = `0x${handle.toString(16).padStart(64, '0')}`;
-    const handleBytes = hre.ethers.getBytes(handleHex);
-    handlesBytes.push(handleBytes);
-    handlesBytesToSign.push(handleBytes);
-  }
-
-  // Concatenate all handles for signing
-  const concatenatedHandles = new Uint8Array(handlesBytesToSign.reduce((acc, bytes) => acc + bytes.length, 0));
-  let offset = 0;
-  for (const bytes of handlesBytesToSign) {
-    concatenatedHandles.set(bytes, offset);
-    offset += bytes.length;
-  }
+  const handlesBytes = handles.map(handleToBytes);
+  const concatenatedHandles = concatBytes(handlesBytes);
 
   // Sign the concatenated handles
   const signature = await signer.signMessage(concatenatedHandles);
@@ -380,14 +416,14 @@ export async function decryptMultipleValuesViaProxy(
   );
 
   // Prepare request data with handles array
-  const handlesBase64 = handlesBytes.map(bytes => Buffer.from(bytes).toString('base64'));
-  const userSignature = Buffer.from(hre.ethers.getBytes(signature)).toString('base64');
+  const handlesBase64 = handlesBytes.map(base64EncodeBytes);
+  const userSignature = base64EncodeBytes(hre.ethers.getBytes(signature));
 
-  console.log(`[decryptMultipleValuesViaProxy] Sending batch encrypt-to-user request to ${proxyUrl}/encrypt-to-user for ${handles.length} handle(s)...`);
+  logDebug(debugLogging, `[decryptMultipleValuesViaProxy] Sending batch encrypt-to-user request to ${normalizedProxyUrl}/encrypt-to-user for ${handles.length} handle(s)...`);
   const data = await retryWithBackoff(async () => {
-    const response = await fetch(`${proxyUrl}/encrypt-to-user`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const response = await fetch(`${normalizedProxyUrl}/encrypt-to-user`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         handles: handlesBase64,
         chain_id: chainId,
@@ -395,21 +431,21 @@ export async function decryptMultipleValuesViaProxy(
       }),
     });
 
-    console.log(`[decryptMultipleValuesViaProxy] Received response status ${response.status} for ${handles.length} handle(s)`);
+    logDebug(debugLogging, `[decryptMultipleValuesViaProxy] Received response status ${response.status} for ${handles.length} handle(s)`);
     const bodyText = await response.text();
     if (!response.ok) {
-      console.error(`[decryptMultipleValuesViaProxy] encrypt-to-user (batch) failed: status=${response.status} body=${bodyText}`);
+      logDebugError(debugLogging, `[decryptMultipleValuesViaProxy] encrypt-to-user (batch) failed: status=${response.status} body=${bodyText}`);
       throw new Error(`HTTP ${response.status}: ${bodyText}`);
     }
 
     try {
       return JSON.parse(bodyText) as any;
     } catch (error) {
-      console.error(`[decryptMultipleValuesViaProxy] encrypt-to-user (batch) invalid JSON response: ${bodyText}`);
+      logDebugError(debugLogging, `[decryptMultipleValuesViaProxy] encrypt-to-user (batch) invalid JSON response: ${bodyText}`);
       throw error;
     }
   });
-  console.log(`[decryptMultipleValuesViaProxy] Successfully received batch response for ${handles.length} handle(s)`);
+  logDebug(debugLogging, `[decryptMultipleValuesViaProxy] Successfully received batch response for ${handles.length} handle(s)`);
 
   // Process all outputs
   if (!data.outputs || !Array.isArray(data.outputs)) {
@@ -507,6 +543,9 @@ export function prepareMessageForBubble256(
   }
   if (typeof contractAddress !== "string" || !isAddress(contractAddress)) {
     throw new TypeError("Invalid contract address");
+  }
+  if (plaintext < 0n || plaintext >= UINT256_MAX) {
+    throw new TypeError("Plaintext value must be >= 0 and < 2^256 for 256-bit values");
   }
 
   const plaintextBytes = Buffer.alloc(UINT256_BYTES);

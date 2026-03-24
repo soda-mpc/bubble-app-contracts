@@ -1,7 +1,11 @@
 import { expect } from "chai";
 import hre from "hardhat";
 
-import { waitForDeploymentConfirmation } from "./testHelpers";
+import {
+  deployMockToken,
+  deployPrivateTokenWithRestrictionList,
+  deployRestrictionListRegistry,
+} from "./helpers/testHelpers";
 
 describe("RestrictionListIntegration", function () {
   this.timeout(180000);
@@ -20,44 +24,21 @@ describe("RestrictionListIntegration", function () {
   beforeEach(async function () {
     [owner, user1, user2, user3, user4] = await hre.ethers.getSigners();
 
-    const RestrictionListRegistryFactory = await hre.ethers.getContractFactory("RestrictionListRegistry");
-    companyRegistry = await (RestrictionListRegistryFactory as any).deploy(owner.address, "Company Restriction List");
-    await companyRegistry.waitForDeployment();
-    await waitForDeploymentConfirmation(companyRegistry, hre);
+    companyRegistry = await deployRestrictionListRegistry(hre, owner, "Company Restriction List");
+    govRegistry = await deployRestrictionListRegistry(hre, owner, "Government Sanctions List");
+    internalRegistry = await deployRestrictionListRegistry(hre, owner, "Internal Compliance List");
 
-    govRegistry = await (RestrictionListRegistryFactory as any).deploy(owner.address, "Government Sanctions List");
-    await govRegistry.waitForDeployment();
-    await waitForDeploymentConfirmation(govRegistry, hre);
+    const underlying = await deployMockToken(hre, owner);
 
-    internalRegistry = await (RestrictionListRegistryFactory as any).deploy(owner.address, "Internal Compliance List");
-    await internalRegistry.waitForDeployment();
-    await waitForDeploymentConfirmation(internalRegistry, hre);
-
-    const UnderlyingFactory = await hre.ethers.getContractFactory("TUSDC");
-    const underlying = await (UnderlyingFactory as any).deploy("Test USDC", "TUSDC");
-    await underlying.waitForDeployment();
-    await waitForDeploymentConfirmation(underlying, hre);
-
-    const TokenFactory = await hre.ethers.getContractFactory("PrivateERC20WithRestrictionList256");
-    const implementation = await TokenFactory.deploy();
-    await implementation.waitForDeployment();
-    await waitForDeploymentConfirmation(implementation, hre);
-
-    const ProxyFactory = await hre.ethers.getContractFactory(
-      "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy"
-    );
-    const proxy = await ProxyFactory.deploy(await implementation.getAddress(), "0x");
-    await proxy.waitForDeployment();
-    await waitForDeploymentConfirmation(proxy, hre);
-
-    token = TokenFactory.attach(await proxy.getAddress());
-    await (await (token as any)["initialize(string,string,address,address,address)"](
-      "Restricted Private Token",
-      "RPT",
-      await underlying.getAddress(),
-      owner.address,
-      owner.address
-    )).wait();
+    token = await deployPrivateTokenWithRestrictionList({
+      hre,
+      signer: owner,
+      underlyingAddress: await underlying.getAddress(),
+      ownerAddress: owner.address,
+      masterAddress: owner.address,
+      name: "Restricted Private Token",
+      symbol: "RPT",
+    });
 
     await (await token.addRestrictionListRegistry(await companyRegistry.getAddress())).wait();
     await (await token.addRestrictionListRegistry(await govRegistry.getAddress())).wait();
@@ -128,7 +109,6 @@ describe("RestrictionListIntegration", function () {
       const RevertingRegistryFactory = await hre.ethers.getContractFactory("RevertingRestrictionList");
       const revertingRegistry = await (RevertingRegistryFactory as any).deploy();
       await revertingRegistry.waitForDeployment();
-      await waitForDeploymentConfirmation(revertingRegistry, hre);
 
       await (await token.addRestrictionListRegistry(await revertingRegistry.getAddress())).wait();
 
@@ -149,7 +129,6 @@ describe("RestrictionListIntegration", function () {
       const RevertingRegistryFactory = await hre.ethers.getContractFactory("RevertingRestrictionList");
       const revertingRegistry = await (RevertingRegistryFactory as any).deploy();
       await revertingRegistry.waitForDeployment();
-      await waitForDeploymentConfirmation(revertingRegistry, hre);
 
       const revertingRegistryAddress = await revertingRegistry.getAddress();
       await (await token.addRestrictionListRegistry(revertingRegistryAddress)).wait();
