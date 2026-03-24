@@ -13,6 +13,49 @@ import {
   encrypt
 } from "soda-sdk";
 
+/** One limb in soda-sdk encrypt output: ciphertext block or nonce `r` (bytes). */
+const AES_LIMB_BYTES = 16;
+/** Single-block payload: `[cipher][r]` (128-bit plaintext after decrypt). */
+const ENCRYPTED_SINGLE_OUTPUT_BYTES = AES_LIMB_BYTES * 2;
+/** Two-block payload: two `[cipher][r]` pairs (256-bit plaintext after decrypt). */
+const ENCRYPTED_DOUBLE_OUTPUT_BYTES = AES_LIMB_BYTES * 4;
+
+/** RSA-encrypted key share size in onboard response (bytes). */
+const RSA_CIPHERTEXT_BYTES = 256;
+
+/** AES-128 key as lowercase hex string (16 bytes → 32 hex characters). */
+const AES_KEY_HEX_CHARS = 32;
+
+/** 128-bit plaintext in big-endian wire format (bytes). */
+const UINT128_BYTES = 16;
+/** Exclusive upper bound for uint128 (`2^128`). */
+const UINT128_MAX = 2n ** 128n;
+/** Bits per uint64 limb when splitting a uint128. */
+const UINT64_BITS = 64n;
+/** Low 64 bits of a uint128: `(1 << 64) - 1`. */
+const UINT64_MASK = (1n << UINT64_BITS) - 1n;
+/** Byte offset of the low uint64 in a big-endian uint128. */
+const UINT128_LOW_U64_BYTE_OFFSET = 8;
+
+/** 256-bit plaintext in big-endian wire format (bytes). */
+const UINT256_BYTES = 32;
+/** Hex digits for a full uint256 value (no `0x`). */
+const UINT256_HEX_CHARS = 64;
+/** First / second half of a uint256 plaintext (bytes), one AES block each. */
+const UINT256_HALF_BYTES = AES_LIMB_BYTES;
+/** Concatenated [cipher][r] for one half of a uint256 encrypt (32 bytes). */
+const ENCRYPT_HALF_UINT256_BYTES = AES_LIMB_BYTES * 2;
+
+/** Truncate `0x`-prefixed handle hex for log lines (full value is 66 chars). */
+const HANDLE_HEX_LOG_PREFIX_CHARS = 20;
+
+function handleHexForLog(fullHandleHex: string): string {
+  if (fullHandleHex.length <= HANDLE_HEX_LOG_PREFIX_CHARS) {
+    return fullHandleHex;
+  }
+  return `${fullHandleHex.slice(0, HANDLE_HEX_LOG_PREFIX_CHARS)}…`;
+}
+
 async function getNetworkWithTimeout(timeoutMs: number, timeoutMessage: string) {
   let timeoutId: NodeJS.Timeout | undefined;
   try {
@@ -27,6 +70,27 @@ async function getNetworkWithTimeout(timeoutMs: number, timeoutMessage: string) 
     if (timeoutId) {
       clearTimeout(timeoutId);
     }
+  }
+}
+
+const PROVIDER_NETWORK_TIMEOUT_MS = 30_000;
+
+/**
+ * Read `chainId` from the Hardhat provider with timeout and logging (encrypt-to-user / proxy decrypt flows).
+ */
+async function getChainIdForEncryptToUser(logPrefix: string, contextLabel: string): Promise<number> {
+  try {
+    console.log(`${logPrefix} Getting network info for ${contextLabel}`);
+    const network = await getNetworkWithTimeout(
+      PROVIDER_NETWORK_TIMEOUT_MS,
+      `${logPrefix} Network call timeout after ${PROVIDER_NETWORK_TIMEOUT_MS / 1000}s for ${contextLabel}`
+    );
+    const chainId = Number(network.chainId);
+    console.log(`${logPrefix} Got network chainId: ${chainId} for ${contextLabel}`);
+    return chainId;
+  } catch (error) {
+    console.error(`${logPrefix} Network call failed for ${contextLabel}:`, error);
+    throw error;
   }
 }
 
@@ -66,7 +130,7 @@ export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl
   // 1. Generate RSA key pair (synchronous function)
   const { publicKey, privateKey } = generateRSAKeyPair();
 
-  // V2: Sign rsa_public_key + user_address (new behavior)
+  // V2: Sign rsa_public_key + user_address
   
   // NPM package returns publicKey in DER format (binary)
   const publicKeyDer = new Uint8Array(publicKey);
@@ -82,32 +146,14 @@ export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl
   const signature = await signer.signMessage(message);
   const signedEK = getBytes(signature);
 
-  // 3. Prepare request data - send DER bytes like the webapp implementation
+  // 3. Prepare request data - send DER bytes
   const rsaPublicKey = Buffer.from(publicKeyDer).toString("base64");
   const userSignature = Buffer.from(signedEK).toString("base64");
 
-  // Get chain ID from the provider (with timeout to avoid hanging)
-  let chainId: number;
-  try {
-    console.log(`[getUserKeyViaProxy] Getting network info for address ${userAddress}...`);
-    const network = await getNetworkWithTimeout(
-      30000,
-      `[getUserKeyViaProxy] Network call timeout after 30s for address ${userAddress}`
-    );
-    chainId = Number(network.chainId);
-    console.log(`[getUserKeyViaProxy] Got network chainId: ${chainId} for address ${userAddress}`);
-  } catch (error) {
-    console.error(error);
-    // Fallback to world-mobile-testnet chain ID if network call fails
-    console.warn(`[getUserKeyViaProxy] Network call failed, using fallback chainId 323432 for address ${userAddress}`);
-    chainId = 323432;
-  }
-  
   const requestData = {
     rsa_public_key: rsaPublicKey,
     user_signature: userSignature,
     address: userAddress,
-    chain_id: chainId
   };
   
   console.log(`[getUserKeyViaProxy] Sending onboard request to ${proxyUrl}/onboard for address ${userAddress}...`);
@@ -130,9 +176,8 @@ export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl
 
   // 5. Process response
   const rsaCiphertexts = Buffer.from(result.rsa_ciphertexts, "base64");
-  const RSA_CIPHERTEXT_SIZE = 256;
-  const encryptedKeyShare0 = rsaCiphertexts.slice(0, RSA_CIPHERTEXT_SIZE).toString("hex");
-  const encryptedKeyShare1 = rsaCiphertexts.slice(RSA_CIPHERTEXT_SIZE).toString("hex");
+  const encryptedKeyShare0 = rsaCiphertexts.slice(0, RSA_CIPHERTEXT_BYTES).toString("hex");
+  const encryptedKeyShare1 = rsaCiphertexts.slice(RSA_CIPHERTEXT_BYTES).toString("hex");
   
   // 6. Reconstruct user key
   const decryptedAESKey = reconstructUserKey(privateKey, encryptedKeyShare0, encryptedKeyShare1);
@@ -146,10 +191,10 @@ export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl
 function decryptEncryptedOutput(encryptedOutput: Buffer, userAesKey: Buffer): bigint {
   const userKeyBytes = new Uint8Array(userAesKey);
   
-  if (encryptedOutput.length === 32) {
-    // 32-byte format: single block [cipher (16), r (16)]
-    const cipher = new Uint8Array(encryptedOutput.slice(0, 16));
-    const r = new Uint8Array(encryptedOutput.slice(16, 32));
+  if (encryptedOutput.length === ENCRYPTED_SINGLE_OUTPUT_BYTES) {
+    // Single block [cipher][r]
+    const cipher = new Uint8Array(encryptedOutput.slice(0, AES_LIMB_BYTES));
+    const r = new Uint8Array(encryptedOutput.slice(AES_LIMB_BYTES, ENCRYPTED_SINGLE_OUTPUT_BYTES));
     
     const decryptedMessage = decrypt(userKeyBytes, r, cipher);
     
@@ -159,12 +204,12 @@ function decryptEncryptedOutput(encryptedOutput: Buffer, userAesKey: Buffer): bi
       result = (result << 8n) | BigInt(decryptedMessage[i]);
     }
     return result;
-  } else if (encryptedOutput.length === 64) {
-    // 64-byte format: two blocks [cipherHigh (16), rHigh (16), cipherLow (16), rLow (16)]
-    const cipher1 = new Uint8Array(encryptedOutput.slice(0, 16));
-    const r1 = new Uint8Array(encryptedOutput.slice(16, 32));
-    const cipher2 = new Uint8Array(encryptedOutput.slice(32, 48));
-    const r2 = new Uint8Array(encryptedOutput.slice(48, 64));
+  } else if (encryptedOutput.length === ENCRYPTED_DOUBLE_OUTPUT_BYTES) {
+    // Two blocks: [cipherHigh][rHigh][cipherLow][rLow]
+    const cipher1 = new Uint8Array(encryptedOutput.slice(0, AES_LIMB_BYTES));
+    const r1 = new Uint8Array(encryptedOutput.slice(AES_LIMB_BYTES, AES_LIMB_BYTES * 2));
+    const cipher2 = new Uint8Array(encryptedOutput.slice(AES_LIMB_BYTES * 2, AES_LIMB_BYTES * 3));
+    const r2 = new Uint8Array(encryptedOutput.slice(AES_LIMB_BYTES * 3, ENCRYPTED_DOUBLE_OUTPUT_BYTES));
     
     // Use the 5-parameter version of decrypt for 256-bit values
     const decryptedMessage = decrypt(userKeyBytes, r1, cipher1, r2, cipher2);
@@ -188,8 +233,9 @@ export async function decryptValueViaProxy(
   debugLogging: boolean = false
 ): Promise<bigint> {
   const userAddress = await signer.getAddress();
-  const handleHex = `0x${handle.toString(16).padStart(64, '0')}`;
-  console.log(`[decryptValueViaProxy] Starting decryption for handle ${handleHex.substring(0, 20)}... (address: ${userAddress})`);
+  const handleHex = `0x${handle.toString(16).padStart(64, "0")}`;
+  const handleLabel = handleHexForLog(handleHex);
+  console.log(`[decryptValueViaProxy] Starting decryption for handle ${handleLabel} (address: ${userAddress})`);
 
   // Convert handle to bytes (32-byte big-endian)
   const handleBytes = hre.ethers.getBytes(handleHex);
@@ -197,31 +243,17 @@ export async function decryptValueViaProxy(
   // Sign the handle bytes
   const signature = await signer.signMessage(handleBytes);
 
-  // Get chain ID from the provider (with timeout to avoid hanging)
-  let chainId: number;
-  try {
-    console.log(`[decryptValueViaProxy] Getting network info for handle ${handleHex.substring(0, 20)}...`);
-    const network = await getNetworkWithTimeout(
-      30000,
-      `[decryptValueViaProxy] Network call timeout after 30s for handle ${handleHex.substring(0, 20)}`
-    );
-    chainId = Number(network.chainId);
-    console.log(`[decryptValueViaProxy] Got network chainId: ${chainId} for handle ${handleHex.substring(0, 20)}`);
-  } catch (error) {
-    console.error(`[decryptValueViaProxy] Network call failed for handle ${handleHex.substring(0, 20)}:`, error);
-    throw error;
-  }
-
+  const chainId = await getChainIdForEncryptToUser("[decryptValueViaProxy]", `handle ${handleLabel}`);
 
   // Prepare request data
-  const handleBase64 = Buffer.from(handleBytes).toString('base64');
-  const userSignature = Buffer.from(hre.ethers.getBytes(signature)).toString('base64');
+  const handleBase64 = Buffer.from(handleBytes).toString("base64");
+  const userSignature = Buffer.from(hre.ethers.getBytes(signature)).toString("base64");
 
-  console.log(`[decryptValueViaProxy] Sending encrypt-to-user request to ${proxyUrl}/encrypt-to-user for handle ${handleHex.substring(0, 20)}...`);
+  console.log(`[decryptValueViaProxy] Sending encrypt-to-user request to ${proxyUrl}/encrypt-to-user for handle ${handleLabel}`);
   const data = await retryWithBackoff(async () => {
     const response = await fetch(`${proxyUrl}/encrypt-to-user`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         handle: handleBase64,
         chain_id: chainId,
@@ -229,22 +261,22 @@ export async function decryptValueViaProxy(
       }),
     });
 
-    console.log(`[decryptValueViaProxy] Received response status ${response.status} for handle ${handleHex.substring(0, 20)}`);
+    console.log(`[decryptValueViaProxy] Received response status ${response.status} for handle ${handleLabel}`);
     const bodyText = await response.text();
     if (!response.ok) {
-      console.error(`[decryptValueViaProxy] encrypt-to-user failed: status=${response.status} body=${bodyText} for handle ${handleHex.substring(0, 20)}`);
+      console.error(`[decryptValueViaProxy] encrypt-to-user failed: status=${response.status} body=${bodyText} for handle ${handleLabel}`);
       throw new Error(`HTTP ${response.status}: ${bodyText}`);
     }
 
     try {
       return JSON.parse(bodyText) as any;
     } catch (error) {
-      console.error(`[decryptValueViaProxy] encrypt-to-user invalid JSON response: ${bodyText} for handle ${handleHex.substring(0, 20)}`);
+      console.error(`[decryptValueViaProxy] encrypt-to-user invalid JSON response: ${bodyText} for handle ${handleLabel}`);
       throw error;
     }
   });
-  const encryptedOutput = Buffer.from(data.output, 'base64');
-  console.log(`[decryptValueViaProxy] Successfully decrypted handle ${handleHex.substring(0, 20)}`);
+  const encryptedOutput = Buffer.from(data.output, "base64");
+  console.log(`[decryptValueViaProxy] Successfully decrypted handle ${handleLabel}`);
 
   return decryptEncryptedOutput(encryptedOutput, userAesKey);
 }
@@ -331,7 +363,7 @@ export async function decryptMultipleValuesViaProxy(
     handlesBytesToSign.push(handleBytes);
   }
 
-  // Concatenate all handles for signing (same order as Python implementation)
+  // Concatenate all handles for signing
   const concatenatedHandles = new Uint8Array(handlesBytesToSign.reduce((acc, bytes) => acc + bytes.length, 0));
   let offset = 0;
   for (const bytes of handlesBytesToSign) {
@@ -342,20 +374,10 @@ export async function decryptMultipleValuesViaProxy(
   // Sign the concatenated handles
   const signature = await signer.signMessage(concatenatedHandles);
 
-  // Get chain ID from the provider (with timeout to avoid hanging)
-  let chainId: number;
-  try {
-    console.log(`[decryptMultipleValuesViaProxy] Getting network info for ${handles.length} handle(s)...`);
-    const network = await getNetworkWithTimeout(
-      30000,
-      `[decryptMultipleValuesViaProxy] Network call timeout after 30s for ${handles.length} handle(s)`
-    );
-    chainId = Number(network.chainId);
-    console.log(`[decryptMultipleValuesViaProxy] Got network chainId: ${chainId} for ${handles.length} handle(s)`);
-  } catch (error) {
-    console.error(`[decryptMultipleValuesViaProxy] Network call failed for ${handles.length} handle(s):`, error);
-    throw error;
-  }
+  const chainId = await getChainIdForEncryptToUser(
+    "[decryptMultipleValuesViaProxy]",
+    `${handles.length} handle(s)`
+  );
 
   // Prepare request data with handles array
   const handlesBase64 = handlesBytes.map(bytes => Buffer.from(bytes).toString('base64'));
@@ -416,6 +438,15 @@ export const decryptBalanceViaProxy = decryptValueViaProxy;
 // --- Bubble-specific message preparation for ValidateCiphertext / ValidateCiphertext256 ---
 
 /**
+ * Encrypt one ≤16-byte block and interpret `ciphertext ‖ r` as a uint256 (Bubble wire format for `itUint128` limbs).
+ */
+function encryptBlockToEncryptedUint256(keyBytes: Uint8Array, plaintextBlock: Uint8Array): bigint {
+  const { ciphertext, r } = encrypt(keyBytes, plaintextBlock);
+  const ct = Buffer.concat([ciphertext, r]);
+  return BigInt("0x" + ct.toString("hex"));
+}
+
+/**
  * Prepares a message for ValidateCiphertext for 128-bit values.
  */
 export function prepareMessageForBubble128(
@@ -430,27 +461,22 @@ export function prepareMessageForBubble128(
   if (!isAddress(signerAddress)) {
     throw new TypeError("Invalid signer address");
   }
-  if (typeof aesKey !== "string" || aesKey.length !== 32) {
+  if (typeof aesKey !== "string" || aesKey.length !== AES_KEY_HEX_CHARS) {
     throw new TypeError("Invalid AES key length. Expected 16 bytes as hex string (32 characters).");
   }
   if (typeof contractAddress !== "string" || !isAddress(contractAddress)) {
     throw new TypeError("Invalid contract address");
   }
-  if (plaintext < 0n || plaintext >= 2n ** 128n) {
+  if (plaintext < 0n || plaintext >= UINT128_MAX) {
     throw new TypeError("Plaintext value must be >= 0 and < 2^128 for 128-bit values");
   }
 
-  const plaintextBytes = Buffer.alloc(16);
-  plaintextBytes.writeBigUInt64BE(plaintext >> 64n, 0);
-  plaintextBytes.writeBigUInt64BE(plaintext & ((1n << 64n) - 1n), 8);
+  const plaintextBytes = Buffer.alloc(UINT128_BYTES);
+  plaintextBytes.writeBigUInt64BE(plaintext >> UINT64_BITS, 0);
+  plaintextBytes.writeBigUInt64BE(plaintext & UINT64_MASK, UINT128_LOW_U64_BYTE_OFFSET);
 
   const keyBytes = new Uint8Array(Buffer.from(aesKey, "hex"));
-  const { ciphertext, r } = encrypt(keyBytes, new Uint8Array(plaintextBytes));
-  const ct = new Uint8Array(ciphertext.length + r.length);
-  ct.set(ciphertext, 0);
-  ct.set(r, ciphertext.length);
-
-  const encryptedInt = BigInt("0x" + Buffer.from(ct).toString("hex"));
+  const encryptedInt = encryptBlockToEncryptedUint256(keyBytes, new Uint8Array(plaintextBytes));
   const messageBytes = solidityPacked(
     ["address", "address", "uint256"],
     [signerAddress, contractAddress, encryptedInt]
@@ -476,33 +502,27 @@ export function prepareMessageForBubble256(
   if (!isAddress(signerAddress)) {
     throw new TypeError("Invalid signer address");
   }
-  if (typeof aesKey !== "string" || aesKey.length !== 32) {
+  if (typeof aesKey !== "string" || aesKey.length !== AES_KEY_HEX_CHARS) {
     throw new TypeError("Invalid AES key length. Expected 16 bytes as hex string (32 characters).");
   }
   if (typeof contractAddress !== "string" || !isAddress(contractAddress)) {
     throw new TypeError("Invalid contract address");
   }
 
-  const plaintextBytes = Buffer.alloc(32);
-  const hexString = plaintext.toString(16).padStart(64, "0");
+  const plaintextBytes = Buffer.alloc(UINT256_BYTES);
+  const hexString = plaintext.toString(16).padStart(UINT256_HEX_CHARS, "0");
   const valueBytes = Buffer.from(hexString, "hex");
-  valueBytes.copy(plaintextBytes, 32 - valueBytes.length);
+  valueBytes.copy(plaintextBytes, UINT256_BYTES - valueBytes.length);
 
   const keyBytes = new Uint8Array(Buffer.from(aesKey, "hex"));
-  const resultHigh = encrypt(keyBytes, new Uint8Array(plaintextBytes.slice(0, 16)));
-  const resultLow = encrypt(keyBytes, new Uint8Array(plaintextBytes.slice(16)));
-
-  const ct = Buffer.concat([
-    resultHigh.ciphertext,
-    resultHigh.r,
-    resultLow.ciphertext,
-    resultLow.r,
-  ]);
-  const ciphertextHigh = ct.slice(0, 32);
-  const ciphertextLow = ct.slice(32);
-
-  const encryptedHigh = BigInt("0x" + ciphertextHigh.toString("hex"));
-  const encryptedLow = BigInt("0x" + ciphertextLow.toString("hex"));
+  const encryptedHigh = encryptBlockToEncryptedUint256(
+    keyBytes,
+    new Uint8Array(plaintextBytes.subarray(0, UINT256_HALF_BYTES))
+  );
+  const encryptedLow = encryptBlockToEncryptedUint256(
+    keyBytes,
+    new Uint8Array(plaintextBytes.subarray(UINT256_HALF_BYTES))
+  );
 
   const messageBytes = solidityPacked(
     ["address", "address", "uint256", "uint256"],

@@ -322,8 +322,9 @@ describe("RestrictionListRegistry", function () {
     });
 
     it("should allow transferring ownership to non-restricted address", async function () {
-      await restrictionListRegistry.transferOwnership(user2.address);
-      
+      const tx = await restrictionListRegistry.transferOwnership(user2.address);
+      await tx.wait();
+
       expect(await restrictionListRegistry.owner()).to.equal(user2.address);
     });
   });
