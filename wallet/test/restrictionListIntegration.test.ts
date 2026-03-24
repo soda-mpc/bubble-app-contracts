@@ -1,6 +1,8 @@
 import { expect } from "chai";
 import hre from "hardhat";
 
+import { waitForDeploymentConfirmation } from "./testHelpers";
+
 describe("RestrictionListIntegration", function () {
   this.timeout(180000);
 
@@ -21,26 +23,32 @@ describe("RestrictionListIntegration", function () {
     const RestrictionListRegistryFactory = await hre.ethers.getContractFactory("RestrictionListRegistry");
     companyRegistry = await (RestrictionListRegistryFactory as any).deploy(owner.address, "Company Restriction List");
     await companyRegistry.waitForDeployment();
+    await waitForDeploymentConfirmation(companyRegistry, hre);
 
     govRegistry = await (RestrictionListRegistryFactory as any).deploy(owner.address, "Government Sanctions List");
     await govRegistry.waitForDeployment();
+    await waitForDeploymentConfirmation(govRegistry, hre);
 
     internalRegistry = await (RestrictionListRegistryFactory as any).deploy(owner.address, "Internal Compliance List");
     await internalRegistry.waitForDeployment();
+    await waitForDeploymentConfirmation(internalRegistry, hre);
 
     const UnderlyingFactory = await hre.ethers.getContractFactory("TUSDC");
     const underlying = await (UnderlyingFactory as any).deploy("Test USDC", "TUSDC");
     await underlying.waitForDeployment();
+    await waitForDeploymentConfirmation(underlying, hre);
 
     const TokenFactory = await hre.ethers.getContractFactory("PrivateERC20WithRestrictionList256");
     const implementation = await TokenFactory.deploy();
     await implementation.waitForDeployment();
+    await waitForDeploymentConfirmation(implementation, hre);
 
     const ProxyFactory = await hre.ethers.getContractFactory(
       "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy"
     );
     const proxy = await ProxyFactory.deploy(await implementation.getAddress(), "0x");
     await proxy.waitForDeployment();
+    await waitForDeploymentConfirmation(proxy, hre);
 
     token = TokenFactory.attach(await proxy.getAddress());
     await (await (token as any)["initialize(string,string,address,address,address)"](
@@ -120,6 +128,7 @@ describe("RestrictionListIntegration", function () {
       const RevertingRegistryFactory = await hre.ethers.getContractFactory("RevertingRestrictionList");
       const revertingRegistry = await (RevertingRegistryFactory as any).deploy();
       await revertingRegistry.waitForDeployment();
+      await waitForDeploymentConfirmation(revertingRegistry, hre);
 
       await (await token.addRestrictionListRegistry(await revertingRegistry.getAddress())).wait();
 
@@ -136,10 +145,11 @@ describe("RestrictionListIntegration", function () {
         .withArgs(await revertingRegistry.getAddress());
     });
 
-    it.only("should allow owner to remove a deficient registry and recover checks", async function () {
+    it("should allow owner to remove a deficient registry and recover checks", async function () {
       const RevertingRegistryFactory = await hre.ethers.getContractFactory("RevertingRestrictionList");
       const revertingRegistry = await (RevertingRegistryFactory as any).deploy();
       await revertingRegistry.waitForDeployment();
+      await waitForDeploymentConfirmation(revertingRegistry, hre);
 
       const revertingRegistryAddress = await revertingRegistry.getAddress();
       await (await token.addRestrictionListRegistry(revertingRegistryAddress)).wait();

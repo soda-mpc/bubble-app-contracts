@@ -2,6 +2,7 @@ import { expect } from "chai";
 import hre from "hardhat";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 import { expectReverted, waitForCondition } from "./testUtils";
+import { findParsedLogInReceiptWhere, findParsedLogsInReceipt, waitForDeploymentConfirmation } from "./testHelpers";
 
 describe("RestrictionListRegistry", function () {
   this.timeout(180000);
@@ -18,8 +19,7 @@ describe("RestrictionListRegistry", function () {
     const RestrictionListRegistryFactory = await hre.ethers.getContractFactory("RestrictionListRegistry");
     restrictionListRegistry = await (RestrictionListRegistryFactory as any).deploy(owner.address, "Test Restriction List");
     await restrictionListRegistry.waitForDeployment();
-    
-    console.log("RestrictionListRegistry deployed to:", await restrictionListRegistry.getAddress());
+    await waitForDeploymentConfirmation(restrictionListRegistry, hre);
   });
 
   describe("Deployment", function () {
@@ -61,17 +61,16 @@ describe("RestrictionListRegistry", function () {
       it("should emit AddedToRestrictionList event when adding address", async function () {
         const tx = await restrictionListRegistry.addToRestrictionList(user1.address);
         const receipt = await tx.wait();
-        const hasAddedEvent = receipt?.logs.some((log: any) => {
-          try {
-            const parsed = restrictionListRegistry.interface.parseLog(log);
-            return parsed?.name === "AddedToRestrictionList" &&
-              parsed?.args?.account === user1.address &&
-              parsed?.args?.admin === owner.address;
-          } catch {
-            return false;
+        const addedLog = findParsedLogInReceiptWhere(
+          receipt,
+          restrictionListRegistry as any,
+          "AddedToRestrictionList",
+          (p) => {
+            const args = (p as { args?: { account?: string; admin?: string } }).args;
+            return args?.account === user1.address && args?.admin === owner.address;
           }
-        });
-        expect(hasAddedEvent).to.equal(true);
+        );
+        expect(addedLog).to.not.be.undefined;
       });
 
       it("should revert when non-owner tries to add address", async function () {
@@ -111,17 +110,16 @@ describe("RestrictionListRegistry", function () {
       it("should emit RemovedFromRestrictionList event when removing address", async function () {
         const tx = await restrictionListRegistry.removeFromRestrictionList(user1.address);
         const receipt = await tx.wait();
-        const hasRemovedEvent = receipt?.logs.some((log: any) => {
-          try {
-            const parsed = restrictionListRegistry.interface.parseLog(log);
-            return parsed?.name === "RemovedFromRestrictionList" &&
-              parsed?.args?.account === user1.address &&
-              parsed?.args?.admin === owner.address;
-          } catch {
-            return false;
+        const removedLog = findParsedLogInReceiptWhere(
+          receipt,
+          restrictionListRegistry as any,
+          "RemovedFromRestrictionList",
+          (p) => {
+            const args = (p as { args?: { account?: string; admin?: string } }).args;
+            return args?.account === user1.address && args?.admin === owner.address;
           }
-        });
-        expect(hasRemovedEvent).to.equal(true);
+        );
+        expect(removedLog).to.not.be.undefined;
       });
 
       it("should revert when non-owner tries to remove address", async function () {
@@ -153,16 +151,7 @@ describe("RestrictionListRegistry", function () {
         const tx = await restrictionListRegistry.addMultipleToRestrictionList(addresses);
         const receipt = await tx.wait();
 
-        // Filter for AddedToRestrictionList events
-        const events = receipt?.logs.filter((log: any) => {
-          try {
-            const parsed = restrictionListRegistry.interface.parseLog(log);
-            return parsed?.name === "AddedToRestrictionList";
-          } catch {
-            return false;
-          }
-        });
-
+        const events = findParsedLogsInReceipt(receipt, restrictionListRegistry as any, "AddedToRestrictionList");
         expect(events).to.have.length(2);
         
       });
@@ -219,16 +208,7 @@ describe("RestrictionListRegistry", function () {
         const tx = await restrictionListRegistry.removeMultipleFromRestrictionList(addresses);
         const receipt = await tx.wait();
 
-        // Filter for RemovedFromRestrictionList events
-        const events = receipt?.logs.filter((log: any) => {
-          try {
-            const parsed = restrictionListRegistry.interface.parseLog(log);
-            return parsed?.name === "RemovedFromRestrictionList";
-          } catch {
-            return false;
-          }
-        });
-
+        const events = findParsedLogsInReceipt(receipt, restrictionListRegistry as any, "RemovedFromRestrictionList");
         expect(events).to.have.length(2);
 
       });
@@ -318,14 +298,7 @@ describe("RestrictionListRegistry", function () {
     it("should emit individual RemovedFromRestrictionList events when clearing", async function () {
       const tx = await restrictionListRegistry.clearRestrictionList();
       const receipt = await tx.wait();
-      const removedEvents = receipt?.logs.filter((log: any) => {
-        try {
-          const parsed = restrictionListRegistry.interface.parseLog(log);
-          return parsed?.name === "RemovedFromRestrictionList";
-        } catch {
-          return false;
-        }
-      });
+      const removedEvents = findParsedLogsInReceipt(receipt, restrictionListRegistry as any, "RemovedFromRestrictionList");
       expect(removedEvents).to.have.length(3);
     });
 
