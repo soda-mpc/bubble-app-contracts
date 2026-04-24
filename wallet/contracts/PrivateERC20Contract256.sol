@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 import "./bubble/MpcCore.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
@@ -69,7 +70,8 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     // OPRF Merge Events
     event OPRFMerged(address indexed user, gtUint128 xrMerged, gtUint256 qMerged, gtUint128 yMerged);
     
-    // OPRF Burn Events
+    // OPRF Transfer/Burn Events
+    event OPRFTransferred(address indexed sender, address indexed recipient, gtUint256 amount);
     event OPRFBurned(address indexed user, address indexed recipient, gtUint256 burnedAmount);
     
     // Token Invalidation Events (using encrypted handles instead of IDs)
@@ -109,6 +111,10 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         gtUint128 _oprfKey;
         /// @notice Storage for unshield requests
         mapping(uint256 => UnshieldRequest) unshieldRequests;
+        /// @notice Decimals used by the underlying token for shield/unshield conversion
+        uint8 underlyingDecimals;
+        /// @notice Whether underlying decimals were initialized in storage
+        bool underlyingDecimalsInitialized;
     }
     
     /// @notice Storage for unshield requests
@@ -160,6 +166,9 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         $._symbol = symbol_;
         $.master = master_;
         $.underlying = IERC20(underlying_);
+        $.underlyingDecimals = IERC20Metadata(underlying_).decimals();
+        require($.underlyingDecimals <= _decimals, "Underlying decimals too high");
+        $.underlyingDecimalsInitialized = true;
         $.zero = MpcCore.setPublic256(0);
         // Permit the contract to use the zero handle
         MpcCore.permitThis($.zero);
@@ -241,6 +250,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @notice Emergency recovery function to transfer all underlying tokens to the owner
     /// @dev Only the owner can call this function
     /// @dev This function transfers all underlying ERC20 tokens held by the contract to the owner
+    ///      and resets totalSupply to zero.
     /// @dev Use this function only in emergency situations
     /// @return The amount of tokens recovered
     function emergencyRecovery() external onlyOwner nonReentrant returns (uint256) {
@@ -252,6 +262,8 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
             require($.underlying.transfer(ownerAddress, balance), "Transfer failed");
             emit EmergencyRecovery(ownerAddress, balance);
         }
+
+        $._totalSupply = 0;
         
         return balance;
     }
@@ -496,16 +508,38 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         MpcCore.permitThis(_value);
         MpcCore.permit(_value, _owner);
     }
+
+    /// @notice Returns the underlying token decimals, defaulting to 18 for pre-existing upgraded proxies.
+    function _getUnderlyingDecimals() private view returns (uint8) {
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        return $.underlyingDecimalsInitialized ? $.underlyingDecimals : _decimals;
+    }
+
+    /// @notice Converts an underlying-token amount into this private token's 18-decimal amount.
+    function _toPrivateAmount(uint256 underlyingAmount) private view returns (uint256) {
+        uint8 underlyingDecimals_ = _getUnderlyingDecimals();
+        return underlyingAmount * (10 ** uint256(_decimals - underlyingDecimals_));
+    }
+
+    /// @notice Converts this private token's 18-decimal amount into an underlying-token amount.
+    function _toUnderlyingAmount(uint256 privateAmount) private view returns (uint256) {
+        uint8 underlyingDecimals_ = _getUnderlyingDecimals();
+        uint256 factor = 10 ** uint256(_decimals - underlyingDecimals_);
+        require(privateAmount % factor == 0, "Amount not representable in underlying decimals");
+        return privateAmount / factor;
+    }
+
     /// @notice Shield standard ERC20 tokens into private tokens
-    /// @dev Both underlying and private tokens use 18 decimals, so amounts are 1:1
+    /// @dev The input amount is denominated in underlying token units and converted to 18-decimal private token units.
     function shield(uint256 amount) public virtual nonReentrant returns (bool) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         require(amount > 0, "Amount must be greater than 0");
+        uint256 privateAmount = _toPrivateAmount(amount);
         require($.underlying.transferFrom(msg.sender, address(this), amount), "Transfer failed");
         gtUint256 balanceGt = _balanceOf(msg.sender);
-        gtUint256 newBalanceGt = MpcCore.add(balanceGt, MpcCore.setPublic256(amount));
+        gtUint256 newBalanceGt = MpcCore.add(balanceGt, MpcCore.setPublic256(privateAmount));
         $.balances[msg.sender] = newBalanceGt;
-        $._totalSupply += amount;
+        $._totalSupply += privateAmount;
         // Permit the contract and the user to use the new balance handle
         MpcCore.permitThis(newBalanceGt);
         MpcCore.permit(newBalanceGt, msg.sender);
@@ -527,6 +561,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     function _unshieldTo(uint256 privateAmount, address recipient) internal returns (bool) {
        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
        require(privateAmount > 0, "Amount must be greater than 0");
+       _toUnderlyingAmount(privateAmount);
        gtUint256 balanceGt = _balanceOf(msg.sender);
        gtUint256 amountGt = MpcCore.setPublic256(privateAmount);
 
@@ -561,15 +596,15 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         UnshieldRequest storage request = $.unshieldRequests[decryptID];
         require(request.user != address(0), "Invalid request ID");
 
-        // output[0] contains amountToUnshield
-        // Both underlying and private tokens use 18 decimals, so amounts are 1:1
-        uint256 amountToUnshield = abi.decode(output[0], (uint256));
-        if (amountToUnshield > 0) {
-            $._totalSupply -= amountToUnshield;
-            require($.underlying.transfer(request.user, amountToUnshield), "Transfer failed");
-            emit Unshield(request.user, amountToUnshield);
+        // output[0] contains the 18-decimal private amount to unshield.
+        uint256 privateAmountToUnshield = abi.decode(output[0], (uint256));
+        if (privateAmountToUnshield > 0) {
+            uint256 underlyingAmountToUnshield = _toUnderlyingAmount(privateAmountToUnshield);
+            $._totalSupply -= privateAmountToUnshield;
+            require($.underlying.transfer(request.user, underlyingAmountToUnshield), "Transfer failed");
+            emit Unshield(request.user, underlyingAmountToUnshield);
         } else {
-            emit UnshieldFailed(request.user, amountToUnshield);
+            emit UnshieldFailed(request.user, privateAmountToUnshield);
         }
 
         // Clean up the request
@@ -874,6 +909,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         MpcCore.permit(xRecipient, recipient);
         MpcCore.permit(yRecipient, recipient);
         MpcCore.permit(recipientAmount, recipient);
+        MpcCore.permit(recipientAmount, msg.sender);
         
         MpcCore.permit(xSender, msg.sender);
         MpcCore.permit(ySender, msg.sender);
@@ -883,6 +919,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         qSender = senderAmount;
         
         // Emit events
+        emit OPRFTransferred(msg.sender, recipient, recipientAmount);
         emit OPRFMinted(recipient, xRecipient, yRecipient, qRecipient);
         emit OPRFMinted(msg.sender, xSender, ySender, qSender);
     }
