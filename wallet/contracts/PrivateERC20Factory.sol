@@ -21,7 +21,8 @@ contract PrivateERC20Factory {
         string name,
         string symbol,
         address indexed underlying,
-        address indexed creator
+        address indexed creator,
+        bool underlyingIsWrappedNative
     );
 
     /// @notice The implementation contract address for PrivateERC20Contract256
@@ -42,7 +43,7 @@ contract PrivateERC20Factory {
 
     /// @notice Creates a new PrivateERC20 token using UUPS proxy pattern
     /// @param name The name of the new token
-    /// @param symbol The symbol of the new token  
+    /// @param symbol The symbol of the new token
     /// @param underlying The address of the underlying ERC20 token to wrap
     /// @return token The address of the newly created PrivateERC20Contract256 token (proxy address)
     function createToken(
@@ -50,6 +51,30 @@ contract PrivateERC20Factory {
         string memory symbol,
         address underlying
     ) external returns (address token) {
+        return _createToken(name, symbol, underlying, false);
+    }
+
+    /// @notice Creates a new PrivateERC20 token and configures whether underlying is wrapped-native.
+    /// @param name The name of the new token
+    /// @param symbol The symbol of the new token
+    /// @param underlying The address of the underlying ERC20 token to wrap
+    /// @param underlyingIsWrappedNative Whether underlying supports unwrap to native coin (WETH/WPOL style)
+    /// @return token The address of the newly created PrivateERC20Contract256 token (proxy address)
+    function createToken(
+        string memory name,
+        string memory symbol,
+        address underlying,
+        bool underlyingIsWrappedNative
+    ) external returns (address token) {
+        return _createToken(name, symbol, underlying, underlyingIsWrappedNative);
+    }
+
+    function _createToken(
+        string memory name,
+        string memory symbol,
+        address underlying,
+        bool underlyingIsWrappedNative
+    ) internal returns (address token) {
         require(bytes(name).length > 0, "Name cannot be empty");
         require(bytes(symbol).length > 0, "Symbol cannot be empty");
         require(underlying != address(0), "Underlying cannot be zero address");
@@ -61,12 +86,13 @@ contract PrivateERC20Factory {
 
         // Encode the initialize function call
         bytes memory initData = abi.encodeWithSelector(
-            PrivateERC20Contract256.initialize.selector,
+            PrivateERC20Contract256.initializeWithWrappedNative.selector,
             name,
             symbol,
             underlying,
             msg.sender,
-            msg.sender
+            msg.sender,
+            underlyingIsWrappedNative
         );
 
         // Deploy the proxy pointing to the implementation
@@ -77,6 +103,6 @@ contract PrivateERC20Factory {
         isTokenFromFactory[token] = true;
         totalTokensCreated++;
 
-        emit TokenCreated(token, name, symbol, underlying, msg.sender);
+        emit TokenCreated(token, name, symbol, underlying, msg.sender, underlyingIsWrappedNative);
     }
-} 
+}
