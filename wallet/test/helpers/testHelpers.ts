@@ -144,19 +144,28 @@ export async function deployPrivateToken(
     masterAddress: string;
     name?: string;
     symbol?: string;
+    underlyingIsWrappedNative?: boolean;
   }
 ): Promise<any> {
-  const { underlyingAddress, ownerAddress, masterAddress, name = "BubbleToken", symbol = "BUB" } = params;
+  const {
+    underlyingAddress,
+    ownerAddress,
+    masterAddress,
+    name = "BubbleToken",
+    symbol = "BUB",
+    underlyingIsWrappedNative = false,
+  } = params;
   return deployProxyBackedContract({
     hre,
     signer: defaultSigner,
     contractFqn: PRIVATE_ERC20_256_FQN,
-    initData: (factory) => factory.interface.encodeFunctionData("initialize", [
+    initData: (factory) => factory.interface.encodeFunctionData("initializeWithWrappedNative", [
       name,
       symbol,
       underlyingAddress,
       ownerAddress,
       masterAddress,
+      underlyingIsWrappedNative,
     ]),
   });
 }

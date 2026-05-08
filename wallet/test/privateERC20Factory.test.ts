@@ -23,7 +23,7 @@ async function createTokenAndGetEvent(
   factoryForQuery?: any
 ) {
   const q = factoryForQuery ?? factoryForTx;
-  const tx = await factoryForTx.createToken(name, symbol, underlying);
+  const tx = await factoryForTx["createToken(string,string,address)"](name, symbol, underlying);
   const receipt = await tx.wait();
   const event = await getLastTokenCreatedEvent(q);
   return { receipt, event };
@@ -86,6 +86,7 @@ describe("PrivateERC20Factory", function () {
       expect(lastEvent.args.symbol).to.equal(tokenSymbol);
       expect(lastEvent.args.underlying).to.equal(underlyingAddress);
       expect(lastEvent.args.creator).to.equal(userAddress);
+      expect(lastEvent.args.underlyingIsWrappedNative).to.equal(false);
 
       const tokenAddress = lastEvent.args.token;
       const privateToken = await hre.ethers.getContractAt("PrivateERC20Contract256", tokenAddress);
@@ -93,6 +94,7 @@ describe("PrivateERC20Factory", function () {
       expect(await privateToken.name()).to.equal(tokenName);
       expect(await privateToken.symbol()).to.equal(tokenSymbol);
       expect(await (privateToken as any).underlying()).to.equal(underlyingAddress);
+      expect(await (privateToken as any).underlyingIsWrappedNative()).to.equal(false);
     });
 
     it("should create multiple tokens for the same underlying", async function () {
@@ -139,26 +141,26 @@ describe("PrivateERC20Factory", function () {
     });
 
     it("should fail with empty name", async function () {
-      await expect(factory.createToken("", "TEST", await mockToken1.getAddress())).to.be.revertedWith(
+      await expect(factory["createToken(string,string,address)"]("", "TEST", await mockToken1.getAddress())).to.be.revertedWith(
         "Name cannot be empty"
       );
     });
 
     it("should fail with empty symbol", async function () {
-      await expect(factory.createToken("Test Token", "", await mockToken1.getAddress())).to.be.revertedWith(
+      await expect(factory["createToken(string,string,address)"]("Test Token", "", await mockToken1.getAddress())).to.be.revertedWith(
         "Symbol cannot be empty"
       );
     });
 
     it("should fail with zero address for underlying", async function () {
-      await expect(factory.createToken("Test Token", "TEST", hre.ethers.ZeroAddress)).to.be.revertedWith(
+      await expect(factory["createToken(string,string,address)"]("Test Token", "TEST", hre.ethers.ZeroAddress)).to.be.revertedWith(
         "Underlying cannot be zero address"
       );
     });
 
     it("should fail with invalid ERC20 contract", async function () {
       // Revert fails eth_estimateGas on live networks; explicit gasLimit + failed receipt handling (ethers v6).
-      const tx = await factory.createToken("Test Token", "TEST", await factory.getAddress(), {
+      const tx = await factory["createToken(string,string,address)"]("Test Token", "TEST", await factory.getAddress(), {
         gasLimit: 1_000_000n,
       });
       try {
@@ -214,6 +216,7 @@ describe("PrivateERC20Factory", function () {
       expect(lastEvent.args.symbol).to.equal("ETT");
       expect(lastEvent.args.underlying).to.equal(await mockToken1.getAddress());
       expect(lastEvent.args.creator).to.equal(userAddress);
+      expect(lastEvent.args.underlyingIsWrappedNative).to.equal(false);
 
       expect(await factory.totalTokensCreated()).to.equal(initialCount + 1n);
     });
@@ -262,6 +265,66 @@ describe("PrivateERC20Factory", function () {
       const expectedPrivateAmount = 100n * 10n ** 18n;
       expect(await privateToken.totalSupply()).to.equal(expectedPrivateAmount);
       expect(await mockToken1.balanceOf(privateTokenAddress)).to.equal(shieldAmount);
+    });
+  });
+
+  describe("Wrapped-native metadata", function () {
+    it("emits underlyingIsWrappedNative=true for wrapped-native token creation", async function () {
+      const { event: lastEvent } = await createTokenAndGetEvent(
+        factory,
+        "Wrapped Token",
+        "WTK",
+        await mockToken1.getAddress()
+      );
+      expect(lastEvent.args.underlyingIsWrappedNative).to.equal(false);
+
+      const tx = await factory["createToken(string,string,address,bool)"](
+        "Wrapped Token 2",
+        "WTK2",
+        await mockToken1.getAddress(),
+        true
+      );
+      await tx.wait();
+      const wrappedEvent = await getLastTokenCreatedEvent(factory);
+      expect(wrappedEvent.args.underlyingIsWrappedNative).to.equal(true);
+
+      const wrappedToken = await hre.ethers.getContractAt("PrivateERC20Contract256", wrappedEvent.args.token);
+      expect(await (wrappedToken as any).underlyingIsWrappedNative()).to.equal(true);
+    });
+  });
+
+  describe("Sepolia factory integration", function () {
+    it("creates wrapped-native token with Sepolia WETH and persists config", async function () {
+      const network = await hre.ethers.provider.getNetwork();
+      const chainId = Number(network.chainId);
+      if (chainId !== 11155111) {
+        this.skip();
+      }
+
+      const WETH_SEPOLIA = "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9";
+      const tokenName = "Sepolia Wrapped Native";
+      const tokenSymbol = "sWN";
+
+      const tx = await factory["createToken(string,string,address,bool)"](
+        tokenName,
+        tokenSymbol,
+        WETH_SEPOLIA,
+        true
+      );
+      const receipt = await tx.wait();
+      expect(receipt?.status).to.equal(1);
+
+      const createdEvent = await getLastTokenCreatedEvent(factory);
+      expect(createdEvent.args.name).to.equal(tokenName);
+      expect(createdEvent.args.symbol).to.equal(tokenSymbol);
+      expect(createdEvent.args.underlying).to.equal(WETH_SEPOLIA);
+      expect(createdEvent.args.underlyingIsWrappedNative).to.equal(true);
+
+      const deployed = await hre.ethers.getContractAt("PrivateERC20Contract256", createdEvent.args.token);
+      expect(await deployed.name()).to.equal(tokenName);
+      expect(await deployed.symbol()).to.equal(tokenSymbol);
+      expect(await (deployed as any).underlying()).to.equal(WETH_SEPOLIA);
+      expect(await (deployed as any).underlyingIsWrappedNative()).to.equal(true);
     });
   });
 });
