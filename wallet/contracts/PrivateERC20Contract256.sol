@@ -7,6 +7,10 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import "@sodalabs/bubble-core-contracts/contracts/bubble/DecryptionCaller.sol";
+
+interface IWrappedNative is IERC20 {
+    function withdraw(uint256 wad) external;
+}
 /// @title PrivateERC20Contract
 /// @notice Implementation of ERC20 token standard with enhanced privacy features using MPC
 /// @dev This contract implements the ERC20 standard while ensuring confidentiality of token transactions through encryption.
@@ -60,6 +64,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     event UnshieldFailed(address indexed to, uint256 amount);
     event MasterUpdated(address indexed oldMaster, address indexed newMaster);
     event EmergencyRecovery(address indexed owner, uint256 amount);
+    event NativeRecovered(address indexed to, uint256 amount);
     
     // OPRF Minting Events
     event OPRFMinted(address indexed user, gtUint128 x, gtUint128 y, gtUint256 q);
@@ -106,11 +111,16 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         mapping(uint256 => UnshieldRequest) unshieldRequests;
         /// @notice Decimals used by the underlying token for shield/unshield conversion
         uint8 underlyingDecimals;
+        /// @notice Whether underlying decimals were initialized in storage
+        bool underlyingDecimalsInitialized;
+        /// @notice Whether underlying token supports unwrap to native token (WETH/WPOL style)
+        bool underlyingIsWrappedNative;
     }
     
     /// @notice Storage for unshield requests
     struct UnshieldRequest {
         address user;
+        bool unwrapNative;
     }
 
     /// The storage location of the PrivateERC20Contract256Storage struct.
@@ -145,6 +155,41 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         address owner_,
         address master_
     ) public initializer {
+        _initialize(name_, symbol_, underlying_, owner_, master_, false);
+    }
+
+    /// @notice Initializes the token contract with wrapped-native configuration.
+    function initialize(
+        string memory name_,
+        string memory symbol_,
+        address underlying_,
+        address owner_,
+        address master_,
+        bool underlyingIsWrappedNative_
+    ) public initializer {
+        _initialize(name_, symbol_, underlying_, owner_, master_, underlyingIsWrappedNative_);
+    }
+
+    /// @notice Initializes the token contract with wrapped-native configuration.
+    function initializeWithWrappedNative(
+        string memory name_,
+        string memory symbol_,
+        address underlying_,
+        address owner_,
+        address master_,
+        bool underlyingIsWrappedNative_
+    ) public initializer {
+        _initialize(name_, symbol_, underlying_, owner_, master_, underlyingIsWrappedNative_);
+    }
+
+    function _initialize(
+        string memory name_,
+        string memory symbol_,
+        address underlying_,
+        address owner_,
+        address master_,
+        bool underlyingIsWrappedNative_
+    ) internal {
         require(underlying_ != address(0), "Underlying cannot be zero address");
         require(owner_ != address(0), "Owner cannot be zero address");
         require(master_ != address(0), "Master cannot be zero address");
@@ -157,6 +202,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         $._symbol = symbol_;
         $.master = master_;
         $.underlying = IERC20(underlying_);
+        $.underlyingIsWrappedNative = underlyingIsWrappedNative_;
         $.underlyingDecimals = IERC20Metadata(underlying_).decimals();
         $.zero = MpcCore.setPublic256(0);
         // Permit the contract to use the zero handle
@@ -165,6 +211,11 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         // Initialize OPRF key using MPC's secure random generation
         $._oprfKey = MpcCore.rand128();
         MpcCore.permitThis($._oprfKey);
+    }
+
+    receive() external payable {
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        require($.underlyingIsWrappedNative && msg.sender == address($.underlying), "Unexpected native sender");
     }
     
     /**
@@ -217,6 +268,12 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         return address($.underlying);
     }
 
+    /// @notice Returns whether underlying token is configured as wrapped-native (WETH/WPOL style).
+    function underlyingIsWrappedNative() public view returns (bool) {
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        return $.underlyingIsWrappedNative;
+    }
+
     /// @notice Returns the decrypt ID of the most recently created decryption request (e.g. from unshield).
     /// @dev Used by off-chain tests and relayers to fetch callback tx_data via GetDecryption and submit the callback.
     /// @return The decrypt ID, or 0 if no request has been made yet.
@@ -255,6 +312,21 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         $._totalSupply = 0;
         
         return balance;
+    }
+
+    /// @notice Recovers accidental native-token dust sent to the contract.
+    /// @dev Only owner can recover. Intended for operational cleanup.
+    /// @param to Recipient of recovered native tokens.
+    /// @param amount Amount to recover; set to 0 to recover full balance.
+    /// @return recoveredAmount The recovered native-token amount.
+    function recoverNative(address to, uint256 amount) external onlyOwner nonReentrant returns (uint256 recoveredAmount) {
+        require(to != address(0), "Recipient cannot be zero address");
+        uint256 nativeBalance = address(this).balance;
+        recoveredAmount = amount == 0 ? nativeBalance : amount;
+        require(recoveredAmount <= nativeBalance, "Insufficient native balance");
+        (bool sent, ) = payable(to).call{value: recoveredAmount}("");
+        require(sent, "Native transfer failed");
+        emit NativeRecovered(to, recoveredAmount);
     }
     /// @notice Returns the handle of the caller's balance
     /// @dev The balance is returned as a handle that requires encryption and decryption under the user's secret key to get the actual value
@@ -575,34 +647,58 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
        // user balance = 10, want to unshield 3. checkedSubWithOverflowBit(10, 3) = 7, amount to unshield = bal before 10 sub new balance 7 = 3
        // user balance = 5, want to unshield 7. checkedSubWithOverflowBit(5, 7) = 5, amount to unshield = bal before 5 sub new balance 5 = 0
 
-       // Create array for decryption request
-       uint256[] memory handles = new uint256[](1);
-       handles[0] = gtUint256.unwrap(amountToUnshieldGt);
-
-       // Store the request details
-       $.unshieldRequests[decryptCounter] = UnshieldRequest({
-           user: recipient
-       });
-       
-       // Request decryption
-       requestDecryption(handles, this.callbackUnshield.selector);
+       _requestUnshieldFromHandle(amountToUnshieldGt, recipient);
        
        emit UnshieldRequested(recipient, privateAmount);
        return true;
    }
+
+    /// @notice Requests unshielding for an encrypted private-token amount handle.
+    /// @param amountToUnshieldGt The encrypted private-token amount to decrypt and unshield.
+    /// @param recipient Recipient of the underlying token transfer in callback.
+    function _requestUnshieldFromHandle(gtUint256 amountToUnshieldGt, address recipient) internal {
+        _requestUnshieldFromHandle(amountToUnshieldGt, recipient, false);
+    }
+
+    /// @notice Requests unshielding for an encrypted private-token amount handle.
+    /// @param amountToUnshieldGt The encrypted private-token amount to decrypt and unshield.
+    /// @param recipient Recipient of the underlying token transfer in callback.
+    /// @param unwrapNative If true, unwrap wrapped-native token and send native token.
+    function _requestUnshieldFromHandle(gtUint256 amountToUnshieldGt, address recipient, bool unwrapNative) internal {
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+
+        uint256[] memory handles = new uint256[](1);
+        handles[0] = gtUint256.unwrap(amountToUnshieldGt);
+
+        $.unshieldRequests[decryptCounter] = UnshieldRequest({
+            user: recipient,
+            unwrapNative: unwrapNative
+        });
+
+        requestDecryption(handles, this.callbackUnshield.selector);
+    }
 
     function callbackUnshield(uint256 decryptID, bytes[] calldata output, bytes[] calldata signatures) public nonReentrant verifyCallback(decryptID, output, signatures) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         UnshieldRequest storage request = $.unshieldRequests[decryptID];
         require(request.user != address(0), "Invalid request ID");
 
-        uint256 amountToUnshield = abi.decode(output[0], (uint256));
-        if (amountToUnshield > 0) {
-            $._totalSupply -= amountToUnshield;
-            require($.underlying.transfer(request.user, amountToUnshield), "Transfer failed");
-            emit Unshield(request.user, amountToUnshield);
+        // output[0] contains the 18-decimal private amount to unshield.
+        uint256 privateAmountToUnshield = abi.decode(output[0], (uint256));
+        if (privateAmountToUnshield > 0) {
+            uint256 underlyingAmountToUnshield = _toUnderlyingAmount(privateAmountToUnshield);
+            $._totalSupply -= privateAmountToUnshield;
+            if (request.unwrapNative) {
+                require($.underlyingIsWrappedNative, "Underlying unwrap not configured");
+                IWrappedNative(address($.underlying)).withdraw(underlyingAmountToUnshield);
+                (bool sent, ) = payable(request.user).call{value: underlyingAmountToUnshield}("");
+                require(sent, "Native transfer failed");
+            } else {
+                require($.underlying.transfer(request.user, underlyingAmountToUnshield), "Transfer failed");
+            }
+            emit Unshield(request.user, underlyingAmountToUnshield);
         } else {
-            emit UnshieldFailed(request.user, amountToUnshield);
+            emit UnshieldFailed(request.user, privateAmountToUnshield);
         }
 
         // Clean up the request
@@ -974,6 +1070,61 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         qRemainder = senderRemainder;
         
         // Emit events (always emit OPRFMinted - consumer will decrypt to check if value is 0)
+        emit OPRFBurned(msg.sender, recipient, totalBurned);
+        emit OPRFMinted(msg.sender, xRemainder, yRemainder, qRemainder);
+    }
+
+    /// @notice Redeems multiple OPRF tokens and directly unshields the redeemed amount to underlying tokens for recipient.
+    /// @dev The redeemed amount never remains in recipient's private balance: it is credited and immediately debited before unshield callback.
+    /// @param tokens Array of OPRF token parameters to burn
+    /// @param amount Encrypted amount to redeem and unshield
+    /// @param recipient Address receiving the underlying tokens after callback
+    /// @return xRemainder The encrypted x value of the sender's remainder token (if any)
+    /// @return yRemainder The encrypted y value of the sender's remainder token (if any)
+    /// @return qRemainder The encrypted quantity of the sender's remainder token (if any)
+    function redeemManyToUnderlying(
+        OPRFToken[] calldata tokens,
+        itUint256 calldata amount,
+        address recipient,
+        bool unwrap
+    ) public virtual returns (
+        gtUint128 xRemainder,
+        gtUint128 yRemainder,
+        gtUint256 qRemainder
+    ) {
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        require(tokens.length > 0, "At least one token required");
+        require(recipient != address(0), "Recipient cannot be zero address");
+        if (unwrap) {
+            require($.underlyingIsWrappedNative, "Underlying unwrap not configured");
+        }
+
+        gtUint256 totalBurned = _burnTokensAndAccumulate(tokens);
+        gtUint256 amountToTransfer = MpcCore.validateCiphertext(amount);
+        (gtBool overflowBit, gtUint256 remainder) = MpcCore.checkedSubWithOverflowBit(totalBurned, amountToTransfer);
+
+        gtUint256 recipientAmount = MpcCore.mux(overflowBit, amountToTransfer, $.zero);
+        gtUint256 senderRemainder = MpcCore.mux(overflowBit, remainder, totalBurned);
+
+        // First credit recipient, then immediately debit the same encrypted amount and request unshield.
+        _transferFromContract(recipient, recipientAmount);
+        gtUint256 recipientBalance = _balanceOf(recipient);
+        (, gtUint256 recipientBalanceAfterDebit) = MpcCore.checkedSubWithOverflowBit(recipientBalance, recipientAmount);
+        (, gtUint256 amountToUnshieldGt) = MpcCore.checkedSubWithOverflowBit(recipientBalance, recipientBalanceAfterDebit);
+        MpcCore.permitThis(amountToUnshieldGt);
+        MpcCore.permitThis(recipientBalanceAfterDebit);
+        MpcCore.permit(recipientBalanceAfterDebit, recipient);
+        $.balances[recipient] = recipientBalanceAfterDebit;
+        _requestUnshieldFromHandle(amountToUnshieldGt, recipient, unwrap);
+
+        (xRemainder, yRemainder) = MpcCore.oprfMint($._oprfKey, senderRemainder);
+        MpcCore.permit(xRemainder, msg.sender);
+        MpcCore.permit(yRemainder, msg.sender);
+        MpcCore.permit(senderRemainder, msg.sender);
+        MpcCore.permit(recipientAmount, msg.sender);
+        MpcCore.permit(totalBurned, msg.sender);
+        qRemainder = senderRemainder;
+
         emit OPRFBurned(msg.sender, recipient, totalBurned);
         emit OPRFMinted(msg.sender, xRemainder, yRemainder, qRemainder);
     }

@@ -28,6 +28,7 @@ import {
   getOprfMintedHandlesFromReceipt,
   mintAndApprove,
   mintApproveAndShield,
+  waitForUnshieldOutcome,
   waitForContractCode,
 } from "./helpers/testHelpers";
 
@@ -2188,6 +2189,661 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       );
 
       expect(invalidatedEvents.length).to.equal(mintedTokens.length, "All input tokens should be invalidated");
+    });
+
+    it("Should redeemManyToUnderlying and unshield redeemed amount to recipient", async function () {
+      this.timeout(1200000); // 20 minutes — includes async unshield callback
+
+      const additionalShieldAmount = hre.ethers.parseEther("150");
+      await mintApproveAndShield({
+        mockToken,
+        privateToken,
+        recipient: userAddress,
+        amount: additionalShieldAmount,
+      });
+      await delay(DELAY_STANDARD_MS);
+
+      const recipientWallet = Wallet.createRandom().connect(hre.ethers.provider);
+      const recipientAddress = await recipientWallet.getAddress();
+
+      await defaultSigner.sendTransaction({
+        to: recipientAddress,
+        value: hre.ethers.parseEther("0.01"),
+      }).then((tx: any) => tx.wait());
+
+      const recipientAesKey = await getUserKeyViaProxy(recipientWallet as any, PROXY_URL);
+
+      const tokenQuantities = [30n, 40n, 50n]; // Total: 120
+      const redeemAmount = 100n; // Unshield 100 to underlying
+      const expectedRemainder = 20n;
+      const mintedTokens: Array<{ x: bigint; q: bigint; y: bigint }> = [];
+
+      for (let i = 0; i < tokenQuantities.length; i++) {
+        const quantityIT = buildUnsignedItUint256({
+          value: tokenQuantities[i],
+          userAddress,
+          userAesKeyHex,
+          contractAddress: await privateToken.getAddress(),
+        });
+
+        const mintTx = await privateToken.mintOPRFToken(quantityIT);
+        const mintReceipt = await mintTx.wait();
+        expect(mintReceipt?.status).to.equal(1);
+
+        await delay(DELAY_MPC_PROCESSING_MS);
+        const mintHandles = getOprfMintedHandlesFromReceipt(mintReceipt, privateToken);
+        expect(mintHandles).to.not.be.undefined;
+        const { xHandle, yHandle, qHandle } = mintHandles!;
+
+        await delay(DELAY_BALANCE_SYNC_MS);
+        const [decryptedX, decryptedY, decryptedQ] = await decryptMultipleValuesViaProxy(
+          [xHandle, yHandle, qHandle],
+          defaultSigner,
+          userAesKey,
+          PROXY_URL
+        );
+
+        mintedTokens.push({ x: decryptedX, q: decryptedQ, y: decryptedY });
+      }
+
+      const totalQuantity = mintedTokens.reduce((sum, token) => sum + token.q, 0n);
+      const recipientUnderlyingBefore = await mockToken.balanceOf(recipientAddress);
+
+      const tokensToRedeem = await Promise.all(
+        mintedTokens.map(async (token) => {
+          const x = buildUnsignedItUint128({
+            value: token.x,
+            userAddress,
+            userAesKeyHex,
+            contractAddress: await privateToken.getAddress(),
+          });
+          const q = buildUnsignedItUint256({
+            value: token.q,
+            userAddress,
+            userAesKeyHex,
+            contractAddress: await privateToken.getAddress(),
+          });
+          return {
+            x: { userAddress: x.userAddress, ciphertext: x.ciphertext },
+            q: { userAddress: q.userAddress, ciphertext: q.ciphertext },
+            y_clear: token.y,
+          };
+        })
+      );
+
+      const encryptedRedeemAmount = buildUnsignedItUint256({
+        value: redeemAmount,
+        userAddress,
+        userAesKeyHex,
+        contractAddress: await privateToken.getAddress(),
+      });
+
+      const startBlock = await hre.ethers.provider.getBlockNumber();
+      const redeemTx = await privateToken.redeemManyToUnderlying(
+        tokensToRedeem,
+        encryptedRedeemAmount,
+        recipientAddress,
+        false
+      );
+      const redeemReceipt = await redeemTx.wait();
+      expect(redeemReceipt?.status).to.equal(1);
+
+      await delay(DELAY_MPC_REDEEM_MS);
+
+      const { successEvents, failedEvents } = await waitForUnshieldOutcome(privateToken, hre, startBlock, {
+        timeoutMs: 180000,
+        pollIntervalMs: 3000,
+      });
+      expect(failedEvents.length).to.equal(0, "Unshield callback should not fail");
+      expect(successEvents.length).to.be.greaterThan(0, "Expected unshield success event");
+
+      const burnEvent = findParsedLogInReceiptWhere(
+        redeemReceipt,
+        privateToken,
+        "OPRFBurned",
+        (p) => String(p.args?.[1]).toLowerCase() === recipientAddress.toLowerCase()
+      );
+      expect(burnEvent).to.not.be.undefined;
+      const burnDecoded = privateToken.interface.parseLog(burnEvent!);
+      const burnedAmountHandle = burnDecoded?.args[2];
+
+      const remainderEvent = findParsedLogInReceiptWhere(
+        redeemReceipt,
+        privateToken,
+        "OPRFMinted",
+        (p) => String(p.args?.[0]).toLowerCase() === userAddress.toLowerCase()
+      );
+      expect(remainderEvent).to.not.be.undefined;
+      const remainderDecoded = privateToken.interface.parseLog(remainderEvent!);
+      const remainderQHandle = remainderDecoded?.args[3];
+
+      const [decryptedBurnedAmount, decryptedRemainderQ] = await decryptMultipleValuesViaProxy(
+        [burnedAmountHandle, remainderQHandle],
+        defaultSigner,
+        userAesKey,
+        PROXY_URL
+      );
+
+      const recipientPrivateBalanceHandle = await privateToken["balanceOf(address)"](recipientAddress);
+      await delay(DELAY_BALANCE_SYNC_MS);
+      const recipientPrivateBalance =
+        recipientPrivateBalanceHandle === 0n
+          ? 0n
+          : await decryptValueViaProxy(recipientPrivateBalanceHandle, recipientWallet, recipientAesKey, PROXY_URL);
+
+      const recipientUnderlyingAfter = await mockToken.balanceOf(recipientAddress);
+      const underlyingIncrease = recipientUnderlyingAfter - recipientUnderlyingBefore;
+
+      expect(decryptedBurnedAmount).to.equal(totalQuantity, "Burned amount should equal total burned OPRF quantity");
+      expect(decryptedRemainderQ).to.equal(expectedRemainder, "Sender remainder should be total minus redeemed amount");
+      expect(recipientPrivateBalance).to.equal(0n, "Recipient private balance should net to zero after immediate unshield");
+      expect(underlyingIncrease).to.equal(redeemAmount, "Recipient should receive redeemed amount as underlying tokens");
+      expect(underlyingIncrease + decryptedRemainderQ).to.equal(decryptedBurnedAmount, "Total should be preserved");
+
+      const invalidatedEvents = findParsedLogsInReceipt(redeemReceipt, privateToken, "OPRFTokenInvalidated").filter(
+        (log) => Number(privateToken.interface.parseLog(log)!.args[4]) === 3
+      );
+      expect(invalidatedEvents.length).to.equal(mintedTokens.length, "All input tokens should be invalidated");
+    });
+
+    it.only("Should redeemManyToUnderlying with unwrap=true using local MockWETH", async function () {
+      this.timeout(1200000);
+
+      const wrapAmount = hre.ethers.parseEther("0.001"); // 0.001 ETH -> WETH
+      const redeemAmount = hre.ethers.parseEther("0.0005"); // unwrap 0.0005 ETH
+      const expectedRemainder = wrapAmount - redeemAmount;
+
+      const MockWethFactory = await hre.ethers.getContractFactory("MockWETH", defaultSigner);
+      const weth = await MockWethFactory.deploy();
+      await weth.waitForDeployment();
+      const wethAddress = await weth.getAddress();
+
+      const wethBackedPrivateToken = await deployPrivateToken(hre, defaultSigner, {
+        underlyingAddress: wethAddress,
+        ownerAddress: userAddress,
+        masterAddress: userAddress,
+        name: "WETH Private Token",
+        symbol: "pWETH",
+        underlyingIsWrappedNative: true,
+      });
+
+      // Wrap small ETH amount before test execution.
+      await (await weth.deposit({ value: wrapAmount })).wait();
+      await (await weth.approve(await wethBackedPrivateToken.getAddress(), wrapAmount)).wait();
+      await (await wethBackedPrivateToken.shield(wrapAmount)).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+
+      const recipientWallet = Wallet.createRandom().connect(hre.ethers.provider);
+      const recipientAddress = await recipientWallet.getAddress();
+      const recipientAesKey = await getUserKeyViaProxy(recipientWallet as any, PROXY_URL);
+      const recipientEthBefore = await hre.ethers.provider.getBalance(recipientAddress);
+      const contractWethBefore = await weth.balanceOf(await wethBackedPrivateToken.getAddress());
+
+      const quantityIT = buildUnsignedItUint256({
+        value: wrapAmount,
+        userAddress,
+        userAesKeyHex,
+        contractAddress: await wethBackedPrivateToken.getAddress(),
+      });
+
+      const mintTx = await wethBackedPrivateToken.mintOPRFToken(quantityIT);
+      const mintReceipt = await mintTx.wait();
+      expect(mintReceipt?.status).to.equal(1);
+      await delay(DELAY_MPC_PROCESSING_MS);
+
+      const mintHandles = getOprfMintedHandlesFromReceipt(mintReceipt, wethBackedPrivateToken);
+      expect(mintHandles).to.not.be.undefined;
+      const { xHandle, yHandle, qHandle } = mintHandles!;
+
+      await delay(DELAY_BALANCE_SYNC_MS);
+      const [decryptedX, decryptedY, decryptedQ] = await decryptMultipleValuesViaProxy(
+        [xHandle, yHandle, qHandle],
+        defaultSigner,
+        userAesKey,
+        PROXY_URL
+      );
+      expect(decryptedQ).to.equal(wrapAmount);
+
+      const x = buildUnsignedItUint128({
+        value: decryptedX,
+        userAddress,
+        userAesKeyHex,
+        contractAddress: await wethBackedPrivateToken.getAddress(),
+      });
+      const q = buildUnsignedItUint256({
+        value: decryptedQ,
+        userAddress,
+        userAesKeyHex,
+        contractAddress: await wethBackedPrivateToken.getAddress(),
+      });
+      const tokensToRedeem = [
+        {
+          x: { userAddress: x.userAddress, ciphertext: x.ciphertext },
+          q: { userAddress: q.userAddress, ciphertext: q.ciphertext },
+          y_clear: decryptedY,
+        },
+      ];
+
+      const encryptedRedeemAmount = buildUnsignedItUint256({
+        value: redeemAmount,
+        userAddress,
+        userAesKeyHex,
+        contractAddress: await wethBackedPrivateToken.getAddress(),
+      });
+
+      const startBlock = await hre.ethers.provider.getBlockNumber();
+      const redeemTx = await wethBackedPrivateToken.redeemManyToUnderlying(
+        tokensToRedeem,
+        encryptedRedeemAmount,
+        recipientAddress,
+        true
+      );
+      const redeemReceipt = await redeemTx.wait();
+      expect(redeemReceipt?.status).to.equal(1);
+
+      const { successEvents, failedEvents } = await waitForUnshieldOutcome(wethBackedPrivateToken, hre, startBlock, {
+        timeoutMs: 180000,
+        pollIntervalMs: 3000,
+      });
+      expect(failedEvents.length).to.equal(0);
+      expect(successEvents.length).to.be.greaterThan(0);
+      const unshieldForRecipient = successEvents.find(
+        (e: any) => String(e.args?.[0]).toLowerCase() === recipientAddress.toLowerCase()
+      );
+      expect(unshieldForRecipient).to.not.be.undefined;
+      const unshieldAmount = unshieldForRecipient?.args?.[1];
+      expect(unshieldAmount).to.equal(redeemAmount, "Unshield event amount should equal redeemed amount");
+
+      const recipientEthAfter = await hre.ethers.provider.getBalance(recipientAddress);
+      expect(recipientEthAfter - recipientEthBefore).to.equal(redeemAmount, "Recipient should receive native ETH");
+      const contractWethAfter = await weth.balanceOf(await wethBackedPrivateToken.getAddress());
+      expect(contractWethBefore - contractWethAfter).to.equal(redeemAmount, "Contract WETH should decrease by unwrapped amount");
+
+      const recipientPrivateBalanceHandle = await wethBackedPrivateToken["balanceOf(address)"](recipientAddress);
+      await delay(DELAY_BALANCE_SYNC_MS);
+      const recipientPrivateBalance =
+        recipientPrivateBalanceHandle === 0n
+          ? 0n
+          : await decryptValueViaProxy(recipientPrivateBalanceHandle, recipientWallet, recipientAesKey, PROXY_URL);
+      expect(recipientPrivateBalance).to.equal(0n, "Recipient private balance should be zero after unwrap path");
+
+      const burnEvent = findParsedLogInReceiptWhere(
+        redeemReceipt,
+        wethBackedPrivateToken,
+        "OPRFBurned",
+        (p) => String(p.args?.[1]).toLowerCase() === recipientAddress.toLowerCase()
+      );
+      expect(burnEvent).to.not.be.undefined;
+      const burnDecoded = wethBackedPrivateToken.interface.parseLog(burnEvent!);
+      const burnedAmountHandle = burnDecoded?.args[2];
+      const decryptedBurnedAmount = await decryptValueViaProxy(burnedAmountHandle, defaultSigner, userAesKey, PROXY_URL);
+      expect(decryptedBurnedAmount).to.equal(wrapAmount, "Burned amount should equal total redeemed token quantity");
+
+      const remainderEvent = findParsedLogInReceiptWhere(
+        redeemReceipt,
+        wethBackedPrivateToken,
+        "OPRFMinted",
+        (p) => String(p.args?.[0]).toLowerCase() === userAddress.toLowerCase()
+      );
+      expect(remainderEvent).to.not.be.undefined;
+      const remainderDecoded = wethBackedPrivateToken.interface.parseLog(remainderEvent!);
+      const remainderQHandle = remainderDecoded?.args[3];
+      const decryptedRemainderQ = await decryptValueViaProxy(remainderQHandle, defaultSigner, userAesKey, PROXY_URL);
+      expect(decryptedRemainderQ).to.equal(expectedRemainder);
+      expect(redeemAmount + decryptedRemainderQ).to.equal(decryptedBurnedAmount, "Unwrapped amount + remainder should preserve total");
+
+      const invalidatedEvents = findParsedLogsInReceipt(redeemReceipt, wethBackedPrivateToken, "OPRFTokenInvalidated").filter(
+        (log) => Number(wethBackedPrivateToken.interface.parseLog(log)!.args[4]) === 3
+      );
+      expect(invalidatedEvents.length).to.equal(1, "Input OPRF token should be invalidated");
+    });
+
+    it("unwrap=true should revert when underlyingIsWrappedNative=false before burning", async function () {
+      this.timeout(600000);
+
+      const MockWethFactory = await hre.ethers.getContractFactory("MockWETH", defaultSigner);
+      const weth = await MockWethFactory.deploy();
+      await weth.waitForDeployment();
+
+      const nonWrappedConfiguredToken = await deployPrivateToken(hre, defaultSigner, {
+        underlyingAddress: await weth.getAddress(),
+        ownerAddress: userAddress,
+        masterAddress: userAddress,
+        name: "Not Wrapped Config",
+        symbol: "NWC",
+        underlyingIsWrappedNative: false,
+      });
+
+      const wrapAmount = hre.ethers.parseEther("0.0002");
+      await (await weth.deposit({ value: wrapAmount })).wait();
+      await (await weth.approve(await nonWrappedConfiguredToken.getAddress(), wrapAmount)).wait();
+      await (await nonWrappedConfiguredToken.shield(wrapAmount)).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+
+      const quantityIT = buildUnsignedItUint256({
+        value: wrapAmount,
+        userAddress,
+        userAesKeyHex,
+        contractAddress: await nonWrappedConfiguredToken.getAddress(),
+      });
+      const mintTx = await nonWrappedConfiguredToken.mintOPRFToken(quantityIT);
+      const mintReceipt = await mintTx.wait();
+      expect(mintReceipt?.status).to.equal(1);
+      await delay(DELAY_MPC_PROCESSING_MS);
+
+      const mintHandles = getOprfMintedHandlesFromReceipt(mintReceipt, nonWrappedConfiguredToken)!;
+      const [decryptedX, decryptedY, decryptedQ] = await decryptMultipleValuesViaProxy(
+        [mintHandles.xHandle, mintHandles.yHandle, mintHandles.qHandle],
+        defaultSigner,
+        userAesKey,
+        PROXY_URL
+      );
+
+      const tokenInput = [{
+        x: buildUnsignedItUint128({
+          value: decryptedX,
+          userAddress,
+          userAesKeyHex,
+          contractAddress: await nonWrappedConfiguredToken.getAddress(),
+        }),
+        q: buildUnsignedItUint256({
+          value: decryptedQ,
+          userAddress,
+          userAesKeyHex,
+          contractAddress: await nonWrappedConfiguredToken.getAddress(),
+        }),
+        y_clear: decryptedY,
+      }].map((t) => ({
+        x: { userAddress: t.x.userAddress, ciphertext: t.x.ciphertext },
+        q: { userAddress: t.q.userAddress, ciphertext: t.q.ciphertext },
+        y_clear: t.y_clear,
+      }));
+
+      const redeemAmountIT = buildUnsignedItUint256({
+        value: hre.ethers.parseEther("0.0001"),
+        userAddress,
+        userAesKeyHex,
+        contractAddress: await nonWrappedConfiguredToken.getAddress(),
+      });
+
+      await expect(
+        nonWrappedConfiguredToken.redeemManyToUnderlying(tokenInput, redeemAmountIT, userAddress, true)
+      ).to.be.revertedWith("Underlying unwrap not configured");
+    });
+
+    it("insufficient redeem with unwrap=true should emit UnshieldFailed and keep full remainder", async function () {
+      this.timeout(900000);
+
+      const MockWethFactory = await hre.ethers.getContractFactory("MockWETH", defaultSigner);
+      const weth = await MockWethFactory.deploy();
+      await weth.waitForDeployment();
+
+      const wrappedToken = await deployPrivateToken(hre, defaultSigner, {
+        underlyingAddress: await weth.getAddress(),
+        ownerAddress: userAddress,
+        masterAddress: userAddress,
+        name: "Wrapped Insufficient",
+        symbol: "WIN",
+        underlyingIsWrappedNative: true,
+      });
+
+      const wrapAmount = hre.ethers.parseEther("0.0002");
+      const requestedRedeem = hre.ethers.parseEther("0.0003"); // intentionally larger than burned
+      await (await weth.deposit({ value: wrapAmount })).wait();
+      await (await weth.approve(await wrappedToken.getAddress(), wrapAmount)).wait();
+      await (await wrappedToken.shield(wrapAmount)).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+
+      const quantityIT = buildUnsignedItUint256({
+        value: wrapAmount,
+        userAddress,
+        userAesKeyHex,
+        contractAddress: await wrappedToken.getAddress(),
+      });
+      const mintTx = await wrappedToken.mintOPRFToken(quantityIT);
+      const mintReceipt = await mintTx.wait();
+      expect(mintReceipt?.status).to.equal(1);
+      await delay(DELAY_MPC_PROCESSING_MS);
+
+      const mintHandles = getOprfMintedHandlesFromReceipt(mintReceipt, wrappedToken)!;
+      const [decryptedX, decryptedY, decryptedQ] = await decryptMultipleValuesViaProxy(
+        [mintHandles.xHandle, mintHandles.yHandle, mintHandles.qHandle],
+        defaultSigner,
+        userAesKey,
+        PROXY_URL
+      );
+
+      const tokenInput = [{
+        x: buildUnsignedItUint128({
+          value: decryptedX,
+          userAddress,
+          userAesKeyHex,
+          contractAddress: await wrappedToken.getAddress(),
+        }),
+        q: buildUnsignedItUint256({
+          value: decryptedQ,
+          userAddress,
+          userAesKeyHex,
+          contractAddress: await wrappedToken.getAddress(),
+        }),
+        y_clear: decryptedY,
+      }].map((t) => ({
+        x: { userAddress: t.x.userAddress, ciphertext: t.x.ciphertext },
+        q: { userAddress: t.q.userAddress, ciphertext: t.q.ciphertext },
+        y_clear: t.y_clear,
+      }));
+
+      const redeemAmountIT = buildUnsignedItUint256({
+        value: requestedRedeem,
+        userAddress,
+        userAesKeyHex,
+        contractAddress: await wrappedToken.getAddress(),
+      });
+
+      const recipientWallet = Wallet.createRandom().connect(hre.ethers.provider);
+      const startBlock = await hre.ethers.provider.getBlockNumber();
+      const tx = await wrappedToken.redeemManyToUnderlying(tokenInput, redeemAmountIT, await recipientWallet.getAddress(), true);
+      const receipt = await tx.wait();
+      expect(receipt?.status).to.equal(1);
+
+      const { successEvents, failedEvents } = await waitForUnshieldOutcome(wrappedToken, hre, startBlock, {
+        timeoutMs: 180000,
+        pollIntervalMs: 3000,
+      });
+      expect(successEvents.length).to.equal(0, "No successful unshield expected when recipient amount is zero");
+      expect(failedEvents.length).to.be.greaterThan(0, "Expected UnshieldFailed for zero unshield amount");
+
+      const remainderEvent = findParsedLogInReceiptWhere(
+        receipt,
+        wrappedToken,
+        "OPRFMinted",
+        (p) => String(p.args?.[0]).toLowerCase() === userAddress.toLowerCase()
+      );
+      expect(remainderEvent).to.not.be.undefined;
+      const remainderQHandle = wrappedToken.interface.parseLog(remainderEvent!).args[3];
+      const remainderQ = await decryptValueViaProxy(remainderQHandle, defaultSigner, userAesKey, PROXY_URL);
+      expect(remainderQ).to.equal(wrapAmount, "Sender should keep full amount as remainder");
+    });
+
+    it("recipient pre-existing private balance should be preserved in unwrap path", async function () {
+      this.timeout(900000);
+
+      const MockWethFactory = await hre.ethers.getContractFactory("MockWETH", defaultSigner);
+      const weth = await MockWethFactory.deploy();
+      await weth.waitForDeployment();
+
+      const wrappedToken = await deployPrivateToken(hre, defaultSigner, {
+        underlyingAddress: await weth.getAddress(),
+        ownerAddress: userAddress,
+        masterAddress: userAddress,
+        name: "Wrapped Preserve",
+        symbol: "WPR",
+        underlyingIsWrappedNative: true,
+      });
+
+      const recipientWallet = Wallet.createRandom().connect(hre.ethers.provider);
+      const recipientAddress = await recipientWallet.getAddress();
+      await (await defaultSigner.sendTransaction({ to: recipientAddress, value: hre.ethers.parseEther("0.01") })).wait();
+      const recipientAesKey = await getUserKeyViaProxy(recipientWallet as any, PROXY_URL);
+
+      const preExistingPrivate = hre.ethers.parseEther("0.0001");
+      const toRedeem = hre.ethers.parseEther("0.0003");
+      const totalWrap = preExistingPrivate + toRedeem;
+
+      await (await weth.deposit({ value: totalWrap })).wait();
+      await (await weth.approve(await wrappedToken.getAddress(), totalWrap)).wait();
+      await (await wrappedToken.shield(preExistingPrivate)).wait();
+      await (await wrappedToken.transfer(recipientAddress, preExistingPrivate)).wait();
+      await (await wrappedToken.shield(toRedeem)).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+
+      const recipientPrivateBeforeHandle = await wrappedToken["balanceOf(address)"](recipientAddress);
+      const recipientPrivateBefore = await decryptValueViaProxy(recipientPrivateBeforeHandle, recipientWallet, recipientAesKey, PROXY_URL);
+      expect(recipientPrivateBefore).to.equal(preExistingPrivate);
+
+      const quantityIT = buildUnsignedItUint256({
+        value: toRedeem,
+        userAddress,
+        userAesKeyHex,
+        contractAddress: await wrappedToken.getAddress(),
+      });
+      const mintTx = await wrappedToken.mintOPRFToken(quantityIT);
+      const mintReceipt = await mintTx.wait();
+      expect(mintReceipt?.status).to.equal(1);
+      await delay(DELAY_MPC_PROCESSING_MS);
+
+      const mintHandles = getOprfMintedHandlesFromReceipt(mintReceipt, wrappedToken)!;
+      const [decryptedX, decryptedY, decryptedQ] = await decryptMultipleValuesViaProxy(
+        [mintHandles.xHandle, mintHandles.yHandle, mintHandles.qHandle],
+        defaultSigner,
+        userAesKey,
+        PROXY_URL
+      );
+
+      const tokenInput = [{
+        x: buildUnsignedItUint128({
+          value: decryptedX,
+          userAddress,
+          userAesKeyHex,
+          contractAddress: await wrappedToken.getAddress(),
+        }),
+        q: buildUnsignedItUint256({
+          value: decryptedQ,
+          userAddress,
+          userAesKeyHex,
+          contractAddress: await wrappedToken.getAddress(),
+        }),
+        y_clear: decryptedY,
+      }].map((t) => ({
+        x: { userAddress: t.x.userAddress, ciphertext: t.x.ciphertext },
+        q: { userAddress: t.q.userAddress, ciphertext: t.q.ciphertext },
+        y_clear: t.y_clear,
+      }));
+
+      const redeemAmountIT = buildUnsignedItUint256({
+        value: toRedeem,
+        userAddress,
+        userAesKeyHex,
+        contractAddress: await wrappedToken.getAddress(),
+      });
+
+      const startBlock = await hre.ethers.provider.getBlockNumber();
+      const tx = await wrappedToken.redeemManyToUnderlying(tokenInput, redeemAmountIT, recipientAddress, true);
+      await tx.wait();
+      await waitForUnshieldOutcome(wrappedToken, hre, startBlock, {
+        timeoutMs: 180000,
+        pollIntervalMs: 3000,
+      });
+
+      const recipientPrivateAfterHandle = await wrappedToken["balanceOf(address)"](recipientAddress);
+      const recipientPrivateAfter = await decryptValueViaProxy(recipientPrivateAfterHandle, recipientWallet, recipientAesKey, PROXY_URL);
+      expect(recipientPrivateAfter).to.equal(preExistingPrivate, "Pre-existing private balance must remain unchanged");
+    });
+
+    it("recipient contract rejecting native ETH should prevent successful unshield callback", async function () {
+      this.timeout(900000);
+
+      const MockWethFactory = await hre.ethers.getContractFactory("MockWETH", defaultSigner);
+      const weth = await MockWethFactory.deploy();
+      await weth.waitForDeployment();
+
+      const RejectRecipientFactory = await hre.ethers.getContractFactory("RejectNativeRecipient", defaultSigner);
+      const rejectRecipient = await RejectRecipientFactory.deploy();
+      await rejectRecipient.waitForDeployment();
+      const rejectRecipientAddress = await rejectRecipient.getAddress();
+
+      const wrappedToken = await deployPrivateToken(hre, defaultSigner, {
+        underlyingAddress: await weth.getAddress(),
+        ownerAddress: userAddress,
+        masterAddress: userAddress,
+        name: "Wrapped Reject",
+        symbol: "WRJ",
+        underlyingIsWrappedNative: true,
+      });
+
+      const wrapAmount = hre.ethers.parseEther("0.0002");
+      await (await weth.deposit({ value: wrapAmount })).wait();
+      await (await weth.approve(await wrappedToken.getAddress(), wrapAmount)).wait();
+      await (await wrappedToken.shield(wrapAmount)).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+
+      const quantityIT = buildUnsignedItUint256({
+        value: wrapAmount,
+        userAddress,
+        userAesKeyHex,
+        contractAddress: await wrappedToken.getAddress(),
+      });
+      const mintTx = await wrappedToken.mintOPRFToken(quantityIT);
+      const mintReceipt = await mintTx.wait();
+      expect(mintReceipt?.status).to.equal(1);
+      await delay(DELAY_MPC_PROCESSING_MS);
+
+      const mintHandles = getOprfMintedHandlesFromReceipt(mintReceipt, wrappedToken)!;
+      const [decryptedX, decryptedY, decryptedQ] = await decryptMultipleValuesViaProxy(
+        [mintHandles.xHandle, mintHandles.yHandle, mintHandles.qHandle],
+        defaultSigner,
+        userAesKey,
+        PROXY_URL
+      );
+
+      const tokensToRedeem = [{
+        x: buildUnsignedItUint128({
+          value: decryptedX,
+          userAddress,
+          userAesKeyHex,
+          contractAddress: await wrappedToken.getAddress(),
+        }),
+        q: buildUnsignedItUint256({
+          value: decryptedQ,
+          userAddress,
+          userAesKeyHex,
+          contractAddress: await wrappedToken.getAddress(),
+        }),
+        y_clear: decryptedY,
+      }].map((t) => ({
+        x: { userAddress: t.x.userAddress, ciphertext: t.x.ciphertext },
+        q: { userAddress: t.q.userAddress, ciphertext: t.q.ciphertext },
+        y_clear: t.y_clear,
+      }));
+
+      const redeemAmountIT = buildUnsignedItUint256({
+        value: wrapAmount,
+        userAddress,
+        userAesKeyHex,
+        contractAddress: await wrappedToken.getAddress(),
+      });
+
+      const startBlock = await hre.ethers.provider.getBlockNumber();
+      const tx = await wrappedToken.redeemManyToUnderlying(tokensToRedeem, redeemAmountIT, rejectRecipientAddress, true);
+      await tx.wait();
+
+      const { successEvents, failedEvents } = await waitForUnshieldOutcome(wrappedToken, hre, startBlock, {
+        timeoutMs: 60000,
+        pollIntervalMs: 3000,
+      });
+
+      expect(successEvents.length).to.equal(0, "No successful unshield event expected for rejecting recipient");
+      expect(failedEvents.length).to.equal(0, "Callback reverts on native push failure, so UnshieldFailed is not emitted");
     });
 
     // Tests that redeemMany correctly handles insufficient balance:
