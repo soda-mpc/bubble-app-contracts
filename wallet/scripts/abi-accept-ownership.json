@@ -1,0 +1,9 @@
+[
+  {
+    "inputs": [],
+    "name": "upgradeToAndCall",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]
