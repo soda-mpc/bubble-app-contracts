@@ -1,4 +1,4 @@
-import { artifacts, ethers, network } from "hardhat";
+import { artifacts, ethers } from "hardhat";
 import { DeploymentResult } from "./deployment-types";
 
 interface DeployedContractInfo {
@@ -22,19 +22,6 @@ async function getContractSizeInfo(contractName: string) {
   };
 }
 
-function getKurtosisDeployOverrides(
-  sizeInfo: Awaited<ReturnType<typeof getContractSizeInfo>>,
-  minGas: number = 3_000_000
-) {
-  if (network.name !== "kurtosis") {
-    return {};
-  }
-
-  const baseGas = sizeInfo.codeDepositGas + sizeInfo.initCodeGas;
-  const gasLimit = Math.max(minGas, baseGas + 500_000);
-  return { gasLimit };
-}
-
 async function waitForDeploymentAndBlock(contract: any): Promise<{ address: string; blockNumber: number }> {
   const deployTx = contract.deploymentTransaction();
   if (deployTx) {
@@ -54,8 +41,7 @@ async function waitForDeploymentAndBlock(contract: any): Promise<{ address: stri
 
 async function deployWithSizeInfo(
   contractName: string,
-  deployArgs: any[],
-  minGas: number
+  deployArgs: any[]
 ): Promise<DeployedContractInfo> {
   const sizeInfo = await getContractSizeInfo(contractName);
   console.log(
@@ -65,13 +51,8 @@ async function deployWithSizeInfo(
     `   Est. gas: code deposit ${sizeInfo.codeDepositGas}, initcode ${sizeInfo.initCodeGas}`
   );
 
-  const deployOverrides = getKurtosisDeployOverrides(sizeInfo, minGas);
-  if ("gasLimit" in deployOverrides) {
-    console.log(`   Using gasLimit: ${deployOverrides.gasLimit}`);
-  }
-
   const Factory = await ethers.getContractFactory(contractName);
-  const contract = await Factory.deploy(...deployArgs, deployOverrides);
+  const contract = await Factory.deploy(...deployArgs);
   const { address, blockNumber } = await waitForDeploymentAndBlock(contract);
   return { contract, address, blockNumber };
 }
@@ -100,8 +81,7 @@ async function main(): Promise<DeploymentResult> {
 
   const { address: tusdcAddress, blockNumber: tusdcBlockNumber } = await deployWithSizeInfo(
     "TUSDC",
-    [tokenName, tokenSymbol],
-    3_000_000
+    [tokenName, tokenSymbol]
   );
   console.log(`   ✅ TUSDC deployed at: ${tusdcAddress}`);
   console.log(`   📦 Block number: ${tusdcBlockNumber}\n`);
@@ -114,7 +94,7 @@ async function main(): Promise<DeploymentResult> {
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   const { address: privateERC20ImplAddress, blockNumber: privateERC20ImplBlockNumber } =
-    await deployWithSizeInfo("PrivateERC20WithRestrictionList256", [], 3_000_000);
+    await deployWithSizeInfo("PrivateERC20WithRestrictionList256", []);
   console.log(`   ✅ Implementation deployed at: ${privateERC20ImplAddress}`);
   console.log(`   📦 Block number: ${privateERC20ImplBlockNumber}\n`);
 
@@ -131,8 +111,7 @@ async function main(): Promise<DeploymentResult> {
     blockNumber: privateERC20FactoryBlockNumber,
   } = await deployWithSizeInfo(
     "PrivateERC20WithRestrictionListFactory256",
-    [privateERC20ImplAddress],
-    3_000_000
+    [privateERC20ImplAddress]
   );
   console.log(`   ✅ Factory deployed at: ${privateERC20FactoryAddress}`);
   console.log(`   📦 Block number: ${privateERC20FactoryBlockNumber}\n`);
@@ -147,7 +126,7 @@ async function main(): Promise<DeploymentResult> {
   const {
     address: restrictionListFactoryAddress,
     blockNumber: restrictionListFactoryBlockNumber,
-  } = await deployWithSizeInfo("RestrictionListRegistryFactory", [], 3_000_000);
+  } = await deployWithSizeInfo("RestrictionListRegistryFactory", []);
   console.log(`   ✅ Factory deployed at: ${restrictionListFactoryAddress}`);
   console.log(`   📦 Block number: ${restrictionListFactoryBlockNumber}\n`);
 
@@ -161,18 +140,13 @@ async function main(): Promise<DeploymentResult> {
   const privateTokenName = "Private TUSDC";
   const privateTokenSymbol = "pTUSDC";
   const emptyRestrictionLists: string[] = []; // No restriction lists for now
-  const createTokenOverrides = network.name === "kurtosis" ? { gasLimit: 8_000_000 } : {};
-  if ("gasLimit" in createTokenOverrides) {
-    console.log(`   ⛽ Using gasLimit: ${createTokenOverrides.gasLimit}`);
-  }
 
   // @ts-ignore - TypeScript types may be stale
   const createTokenTx = await privateERC20Factory.createToken(
     privateTokenName,
     privateTokenSymbol,
     tusdcAddress,
-    emptyRestrictionLists,
-    createTokenOverrides
+    emptyRestrictionLists
   );
   const createTokenReceipt = await createTokenTx.wait(1);
   const privateTokenBlockNumber = createTokenReceipt?.blockNumber || 0;
