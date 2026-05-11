@@ -335,6 +335,22 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         return super.redeemMany(tokens, amount, recipient);
     }
 
+    /// @notice Override redeemManyToUnderlying to include restriction list checks
+    function redeemManyToUnderlying(
+        OPRFToken[] calldata tokens,
+        itUint256 calldata amount,
+        address recipient,
+        bool unwrap
+    )
+        public
+        override
+        whenNotPaused
+        returns (gtUint128 xRemainder, gtUint128 yRemainder, gtUint256 qRemainder)
+    {
+        _requireNotRestrictedPair(msg.sender, recipient);
+        return super.redeemManyToUnderlying(tokens, amount, recipient, unwrap);
+    }
+
     /// @dev Reverts if account is restricted by any active registry.
     function _requireNotRestrictedAccount(address account) internal view {
         PrivateERC20WithRestrictionList256Storage storage $ = _getPrivateERC20WithRestrictionList256Storage();
