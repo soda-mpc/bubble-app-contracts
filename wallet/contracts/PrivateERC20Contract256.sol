@@ -629,27 +629,35 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
 
     // Internal function to handle unshield logic
     function _unshieldTo(uint256 privateAmount, address recipient) internal returns (bool) {
-       PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
        require(privateAmount > 0, "Amount must be greater than 0");
        _toUnderlyingAmount(privateAmount);
-       gtUint256 balanceGt = _balanceOf(msg.sender);
        gtUint256 amountGt = MpcCore.setPublic256(privateAmount);
-
-       (, gtUint256 newBalanceGt) = MpcCore.checkedSubWithOverflowBit(balanceGt, amountGt);
-       (, gtUint256 amountToUnshieldGt) = MpcCore.checkedSubWithOverflowBit(balanceGt, newBalanceGt);
-       MpcCore.permitThis(amountToUnshieldGt);
-       MpcCore.permitThis(newBalanceGt);
-       MpcCore.permit(newBalanceGt, msg.sender);
-       $.balances[msg.sender] = newBalanceGt;
 
        // user balance = 10, want to unshield 3. checkedSubWithOverflowBit(10, 3) = 7, amount to unshield = bal before 10 sub new balance 7 = 3
        // user balance = 5, want to unshield 7. checkedSubWithOverflowBit(5, 7) = 5, amount to unshield = bal before 5 sub new balance 5 = 0
+       gtUint256 amountToUnshieldGt = _debitBalanceForUnshield(msg.sender, amountGt);
 
        _requestUnshieldFromHandle(amountToUnshieldGt, recipient);
        
        emit UnshieldRequested(recipient, privateAmount);
        return true;
    }
+
+    function _debitBalanceForUnshield(
+        address account,
+        gtUint256 amount
+    ) private returns (gtUint256 amountToUnshieldGt) {
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+
+        gtUint256 balanceBefore = _balanceOf(account);
+        (, gtUint256 balanceAfter) = MpcCore.checkedSubWithOverflowBit(balanceBefore, amount);
+        (, amountToUnshieldGt) = MpcCore.checkedSubWithOverflowBit(balanceBefore, balanceAfter);
+
+        MpcCore.permitThis(amountToUnshieldGt);
+        MpcCore.permitThis(balanceAfter);
+        MpcCore.permit(balanceAfter, account);
+        $.balances[account] = balanceAfter;
+    }
 
     /// @notice Requests unshielding for an encrypted private-token amount handle.
     /// @param amountToUnshieldGt The encrypted private-token amount to decrypt and unshield.
@@ -974,24 +982,9 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         gtUint256 qSender
     ) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        require(tokens.length > 0, "At least one token required");
-        require(recipient != address(0), "Recipient cannot be zero address");
-        
-        // Burn all tokens and get the total burned amount
-        gtUint256 totalBurned = _burnTokensAndAccumulate(tokens);
-        
-        // Validate the transfer amount (grants transient permission)
-        gtUint256 amountToTransfer = MpcCore.validateCiphertext(amount);
-        
-        // Check if we have enough tokens (operations grant transient permission)
-        (gtBool overflowBit, gtUint256 remainder) = MpcCore.checkedSubWithOverflowBit(totalBurned, amountToTransfer);
-        
-        // Calculate amounts using mux (grants transient permission for results)
-        // If overflowBit is false (sufficient): use amountToTransfer, otherwise use 0
-        gtUint256 recipientAmount = MpcCore.mux(overflowBit, amountToTransfer, $.zero);
-        
-        // If overflowBit is false (sufficient): use remainder, otherwise use totalBurned
-        gtUint256 senderAmount = MpcCore.mux(overflowBit, remainder, totalBurned);
+        _validateOPRFSpendInputs(tokens.length, recipient);
+
+        (, gtUint256 recipientAmount, gtUint256 senderAmount) = _calculateOPRFSpendAmounts(tokens, amount);
         
         // Mint OPRF tokens (oprfMint grants transient permission)
         (xRecipient, yRecipient) = MpcCore.oprfMint($._oprfKey, recipientAmount);
@@ -1016,6 +1009,64 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         emit OPRFMinted(msg.sender, xSender, ySender, qSender);
     }
 
+    function _validateOPRFSpendInputs(uint256 tokenCount, address recipient) private pure {
+        require(tokenCount > 0, "At least one token required");
+        require(recipient != address(0), "Recipient cannot be zero address");
+    }
+
+    function _calculateOPRFSpendAmounts(
+        OPRFToken[] calldata tokens,
+        itUint256 calldata amount
+    ) private returns (
+        gtUint256 totalBurned,
+        gtUint256 spendAmount,
+        gtUint256 remainderAmount
+    ) {
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+
+        totalBurned = _burnTokensAndAccumulate(tokens);
+        gtUint256 amountToTransfer = MpcCore.validateCiphertext(amount);
+        (gtBool overflowBit, gtUint256 remainder) = MpcCore.checkedSubWithOverflowBit(totalBurned, amountToTransfer);
+
+        spendAmount = MpcCore.mux(overflowBit, amountToTransfer, $.zero);
+        remainderAmount = MpcCore.mux(overflowBit, remainder, totalBurned);
+    }
+
+    function _mintRedeemRemainder(
+        address recipient,
+        gtUint256 totalBurned,
+        gtUint256 recipientAmount,
+        gtUint256 senderRemainder
+    ) private returns (
+        gtUint128 xRemainder,
+        gtUint128 yRemainder,
+        gtUint256 qRemainder
+    ) {
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+
+        (xRemainder, yRemainder) = MpcCore.oprfMint($._oprfKey, senderRemainder);
+
+        MpcCore.permit(xRemainder, msg.sender);
+        MpcCore.permit(yRemainder, msg.sender);
+        MpcCore.permit(senderRemainder, msg.sender);
+        MpcCore.permit(recipientAmount, msg.sender);
+        MpcCore.permit(totalBurned, msg.sender);
+
+        qRemainder = senderRemainder;
+
+        emit OPRFBurned(msg.sender, recipient, totalBurned);
+        emit OPRFMinted(msg.sender, xRemainder, yRemainder, qRemainder);
+    }
+
+    function _unshieldRedeemedRecipientAmount(
+        address recipient,
+        gtUint256 recipientAmount,
+        bool unwrap
+    ) private {
+        gtUint256 amountToUnshieldGt = _debitBalanceForUnshield(recipient, recipientAmount);
+        _requestUnshieldFromHandle(amountToUnshieldGt, recipient, unwrap);
+    }
+
     /// @notice Redeems multiple OPRF tokens by burning them all, transferring the specified amount as private tokens to recipient, and minting a leftover OPRF token if there's a remainder
     /// @param tokens Array of OPRF token parameters to burn
     /// @param amount Encrypted amount to transfer to recipient as private tokens
@@ -1032,44 +1083,14 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         gtUint128 yRemainder,
         gtUint256 qRemainder
     ) {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        require(tokens.length > 0, "At least one token required");
-        require(recipient != address(0), "Recipient cannot be zero address");
-        
-        // Burn all tokens and get the total burned amount
-        gtUint256 totalBurned = _burnTokensAndAccumulate(tokens);
-        
-        // Validate the transfer amount (grants transient permission)
-        gtUint256 amountToTransfer = MpcCore.validateCiphertext(amount);
-        
-        // Check if we have enough tokens (operations grant transient permission)
-        (gtBool overflowBit, gtUint256 remainder) = MpcCore.checkedSubWithOverflowBit(totalBurned, amountToTransfer);
-        
-        // Calculate amounts using mux (grants transient permission for results)
-        // If overflowBit is false (sufficient): use amountToTransfer, otherwise use 0
-        gtUint256 recipientAmount = MpcCore.mux(overflowBit, amountToTransfer, $.zero);
-        
-        // If overflowBit is false (sufficient): use remainder, otherwise use totalBurned (all back to sender)
-        gtUint256 senderRemainder = MpcCore.mux(overflowBit, remainder, totalBurned);
-        
-        // Transfer the redeemed amount to recipient
+        _validateOPRFSpendInputs(tokens.length, recipient);
+
+        (gtUint256 totalBurned, gtUint256 recipientAmount, gtUint256 senderRemainder) =
+            _calculateOPRFSpendAmounts(tokens, amount);
+
         _transferFromContract(recipient, recipientAmount);
-        
-        // Mint remainder OPRF token for sender (oprfMint grants transient permission)
-        (xRemainder, yRemainder) = MpcCore.oprfMint($._oprfKey, senderRemainder);
-        
-        // Only permit values that need to be decrypted AFTER the transaction
-        MpcCore.permit(xRemainder, msg.sender);
-        MpcCore.permit(yRemainder, msg.sender);
-        MpcCore.permit(senderRemainder, msg.sender);
-        MpcCore.permit(recipientAmount, msg.sender);
-        MpcCore.permit(totalBurned, msg.sender);
-        
-        qRemainder = senderRemainder;
-        
-        // Emit events (always emit OPRFMinted - consumer will decrypt to check if value is 0)
-        emit OPRFBurned(msg.sender, recipient, totalBurned);
-        emit OPRFMinted(msg.sender, xRemainder, yRemainder, qRemainder);
+
+        return _mintRedeemRemainder(recipient, totalBurned, recipientAmount, senderRemainder);
     }
 
     /// @notice Redeems multiple OPRF tokens and directly unshields the redeemed amount to underlying tokens for recipient.
@@ -1077,6 +1098,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param tokens Array of OPRF token parameters to burn
     /// @param amount Encrypted amount to redeem and unshield
     /// @param recipient Address receiving the underlying tokens after callback
+    /// @param unwrap If true, unwrap wrapped-native underlying and send native token
     /// @return xRemainder The encrypted x value of the sender's remainder token (if any)
     /// @return yRemainder The encrypted y value of the sender's remainder token (if any)
     /// @return qRemainder The encrypted quantity of the sender's remainder token (if any)
@@ -1091,40 +1113,19 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         gtUint256 qRemainder
     ) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        require(tokens.length > 0, "At least one token required");
-        require(recipient != address(0), "Recipient cannot be zero address");
+
+        _validateOPRFSpendInputs(tokens.length, recipient);
         if (unwrap) {
             require($.underlyingIsWrappedNative, "Underlying unwrap not configured");
         }
 
-        gtUint256 totalBurned = _burnTokensAndAccumulate(tokens);
-        gtUint256 amountToTransfer = MpcCore.validateCiphertext(amount);
-        (gtBool overflowBit, gtUint256 remainder) = MpcCore.checkedSubWithOverflowBit(totalBurned, amountToTransfer);
+        (gtUint256 totalBurned, gtUint256 recipientAmount, gtUint256 senderRemainder) =
+            _calculateOPRFSpendAmounts(tokens, amount);
 
-        gtUint256 recipientAmount = MpcCore.mux(overflowBit, amountToTransfer, $.zero);
-        gtUint256 senderRemainder = MpcCore.mux(overflowBit, remainder, totalBurned);
-
-        // First credit recipient, then immediately debit the same encrypted amount and request unshield.
         _transferFromContract(recipient, recipientAmount);
-        gtUint256 recipientBalance = _balanceOf(recipient);
-        (, gtUint256 recipientBalanceAfterDebit) = MpcCore.checkedSubWithOverflowBit(recipientBalance, recipientAmount);
-        (, gtUint256 amountToUnshieldGt) = MpcCore.checkedSubWithOverflowBit(recipientBalance, recipientBalanceAfterDebit);
-        MpcCore.permitThis(amountToUnshieldGt);
-        MpcCore.permitThis(recipientBalanceAfterDebit);
-        MpcCore.permit(recipientBalanceAfterDebit, recipient);
-        $.balances[recipient] = recipientBalanceAfterDebit;
-        _requestUnshieldFromHandle(amountToUnshieldGt, recipient, unwrap);
+        _unshieldRedeemedRecipientAmount(recipient, recipientAmount, unwrap);
 
-        (xRemainder, yRemainder) = MpcCore.oprfMint($._oprfKey, senderRemainder);
-        MpcCore.permit(xRemainder, msg.sender);
-        MpcCore.permit(yRemainder, msg.sender);
-        MpcCore.permit(senderRemainder, msg.sender);
-        MpcCore.permit(recipientAmount, msg.sender);
-        MpcCore.permit(totalBurned, msg.sender);
-        qRemainder = senderRemainder;
-
-        emit OPRFBurned(msg.sender, recipient, totalBurned);
-        emit OPRFMinted(msg.sender, xRemainder, yRemainder, qRemainder);
+        return _mintRedeemRemainder(recipient, totalBurned, recipientAmount, senderRemainder);
     }
 
 }
