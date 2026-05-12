@@ -507,29 +507,16 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         return $.underlyingDecimals;
     }
 
-    /// @notice Converts an underlying-token amount into this private token amount.
-    /// @dev Private token decimals always mirror the underlying token decimals.
-    function _toPrivateAmount(uint256 underlyingAmount) private pure returns (uint256) {
-        return underlyingAmount;
-    }
-
-    /// @notice Converts this private token amount into an underlying-token amount.
-    /// @dev Private token decimals always mirror the underlying token decimals.
-    function _toUnderlyingAmount(uint256 privateAmount) private pure returns (uint256) {
-        return privateAmount;
-    }
-
     /// @notice Shield standard ERC20 tokens into private tokens
     /// @dev The input amount is denominated in underlying token units and private tokens use the same decimals.
     function shield(uint256 amount) public virtual nonReentrant returns (bool) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         require(amount > 0, "Amount must be greater than 0");
-        uint256 privateAmount = _toPrivateAmount(amount);
         require($.underlying.transferFrom(msg.sender, address(this), amount), "Transfer failed");
         gtUint256 balanceGt = _balanceOf(msg.sender);
-        gtUint256 newBalanceGt = MpcCore.add(balanceGt, MpcCore.setPublic256(privateAmount));
+        gtUint256 newBalanceGt = MpcCore.add(balanceGt, MpcCore.setPublic256(amount));
         $.balances[msg.sender] = newBalanceGt;
-        $._totalSupply += privateAmount;
+        $._totalSupply += amount;
         // Permit the contract and the user to use the new balance handle
         MpcCore.permitThis(newBalanceGt);
         MpcCore.permit(newBalanceGt, msg.sender);
@@ -551,7 +538,6 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     function _unshieldTo(uint256 privateAmount, address recipient) internal returns (bool) {
        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
        require(privateAmount > 0, "Amount must be greater than 0");
-       _toUnderlyingAmount(privateAmount);
        gtUint256 balanceGt = _balanceOf(msg.sender);
        gtUint256 amountGt = MpcCore.setPublic256(privateAmount);
 
@@ -586,15 +572,13 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         UnshieldRequest storage request = $.unshieldRequests[decryptID];
         require(request.user != address(0), "Invalid request ID");
 
-        // output[0] contains the private amount to unshield.
-        uint256 privateAmountToUnshield = abi.decode(output[0], (uint256));
-        if (privateAmountToUnshield > 0) {
-            uint256 underlyingAmountToUnshield = _toUnderlyingAmount(privateAmountToUnshield);
-            $._totalSupply -= privateAmountToUnshield;
-            require($.underlying.transfer(request.user, underlyingAmountToUnshield), "Transfer failed");
-            emit Unshield(request.user, underlyingAmountToUnshield);
+        uint256 amountToUnshield = abi.decode(output[0], (uint256));
+        if (amountToUnshield > 0) {
+            $._totalSupply -= amountToUnshield;
+            require($.underlying.transfer(request.user, amountToUnshield), "Transfer failed");
+            emit Unshield(request.user, amountToUnshield);
         } else {
-            emit UnshieldFailed(request.user, privateAmountToUnshield);
+            emit UnshieldFailed(request.user, amountToUnshield);
         }
 
         // Clean up the request
