@@ -82,10 +82,6 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     // Private Token Withdrawal Events
     event PrivateTokensWithdrawn(address indexed user, address indexed recipient, gtUint256 amount);
     
-    /// @notice The number of decimal places for token amounts
-    /// @dev Fixed at 18 decimals to match standard ERC20 precision
-    uint8 private constant _decimals = 18;
-    
     /// @custom:storage-location erc7201:bubble.storage.PrivateERC20Contract256
     struct PrivateERC20Contract256Storage {
         /// @notice The name of the token
@@ -113,8 +109,6 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         mapping(uint256 => UnshieldRequest) unshieldRequests;
         /// @notice Decimals used by the underlying token for shield/unshield conversion
         uint8 underlyingDecimals;
-        /// @notice Whether underlying decimals were initialized in storage
-        bool underlyingDecimalsInitialized;
     }
     
     /// @notice Storage for unshield requests
@@ -167,8 +161,6 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         $.master = master_;
         $.underlying = IERC20(underlying_);
         $.underlyingDecimals = IERC20Metadata(underlying_).decimals();
-        require($.underlyingDecimals <= _decimals, "Underlying decimals too high");
-        $.underlyingDecimalsInitialized = true;
         $.zero = MpcCore.setPublic256(0);
         // Permit the contract to use the zero handle
         MpcCore.permitThis($.zero);
@@ -206,7 +198,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @notice Returns the number of decimals used to get its user representation
     /// @return The number of decimals
     function decimals() public view returns (uint8) {
-        return _decimals;
+        return _getUnderlyingDecimals();
     }
     /// @notice Returns the total supply of tokens
     /// @return The total supply
@@ -509,28 +501,26 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         MpcCore.permit(_value, _owner);
     }
 
-    /// @notice Returns the underlying token decimals, defaulting to 18 for pre-existing upgraded proxies.
+    /// @notice Returns the underlying token decimals captured during initialization.
     function _getUnderlyingDecimals() private view returns (uint8) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        return $.underlyingDecimalsInitialized ? $.underlyingDecimals : _decimals;
+        return $.underlyingDecimals;
     }
 
-    /// @notice Converts an underlying-token amount into this private token's 18-decimal amount.
-    function _toPrivateAmount(uint256 underlyingAmount) private view returns (uint256) {
-        uint8 underlyingDecimals_ = _getUnderlyingDecimals();
-        return underlyingAmount * (10 ** uint256(_decimals - underlyingDecimals_));
+    /// @notice Converts an underlying-token amount into this private token amount.
+    /// @dev Private token decimals always mirror the underlying token decimals.
+    function _toPrivateAmount(uint256 underlyingAmount) private pure returns (uint256) {
+        return underlyingAmount;
     }
 
-    /// @notice Converts this private token's 18-decimal amount into an underlying-token amount.
-    function _toUnderlyingAmount(uint256 privateAmount) private view returns (uint256) {
-        uint8 underlyingDecimals_ = _getUnderlyingDecimals();
-        uint256 factor = 10 ** uint256(_decimals - underlyingDecimals_);
-        require(privateAmount % factor == 0, "Amount not representable in underlying decimals");
-        return privateAmount / factor;
+    /// @notice Converts this private token amount into an underlying-token amount.
+    /// @dev Private token decimals always mirror the underlying token decimals.
+    function _toUnderlyingAmount(uint256 privateAmount) private pure returns (uint256) {
+        return privateAmount;
     }
 
     /// @notice Shield standard ERC20 tokens into private tokens
-    /// @dev The input amount is denominated in underlying token units and converted to 18-decimal private token units.
+    /// @dev The input amount is denominated in underlying token units and private tokens use the same decimals.
     function shield(uint256 amount) public virtual nonReentrant returns (bool) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         require(amount > 0, "Amount must be greater than 0");
@@ -596,7 +586,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         UnshieldRequest storage request = $.unshieldRequests[decryptID];
         require(request.user != address(0), "Invalid request ID");
 
-        // output[0] contains the 18-decimal private amount to unshield.
+        // output[0] contains the private amount to unshield.
         uint256 privateAmountToUnshield = abi.decode(output[0], (uint256));
         if (privateAmountToUnshield > 0) {
             uint256 underlyingAmountToUnshield = _toUnderlyingAmount(privateAmountToUnshield);

@@ -84,7 +84,7 @@ let defaultSigner: any;
       expect(symbol).to.equal("BUB");
 
       const decimals = await privateToken.decimals();
-      expect(decimals).to.equal(18);
+      expect(decimals).to.equal(await mockToken.decimals());
     });
 
     it("should start with zero total supply", async function () {
@@ -204,7 +204,7 @@ let defaultSigner: any;
         .to.be.revertedWithCustomError(mockToken, "ERC20InsufficientAllowance");
     });
 
-    it("should convert 6-decimal underlying amounts to 18-decimal private amounts", async function () {
+    it("should use underlying decimals for 6-decimal private tokens", async function () {
       const sixDecimalToken = await deployMockToken(hre, defaultSigner, "Six Decimal USDC", "SUSDC");
       await (await sixDecimalToken.setDecimals(6)).wait();
       const sixDecimalPrivateToken = await deployPrivateToken(hre, defaultSigner, {
@@ -215,11 +215,11 @@ let defaultSigner: any;
         symbol: "pSUSDC",
       });
 
-      expect(await sixDecimalPrivateToken.decimals()).to.equal(18);
+      expect(await sixDecimalPrivateToken.decimals()).to.equal(6);
       expect(await sixDecimalToken.decimals()).to.equal(6);
 
       const underlyingAmount = hre.ethers.parseUnits("1.5", 6);
-      const expectedPrivateAmount = hre.ethers.parseUnits("1.5", 18);
+      const expectedPrivateAmount = underlyingAmount;
 
       await mintAndApprove({
         mockToken: sixDecimalToken.connect(defaultSigner),
@@ -244,7 +244,7 @@ let defaultSigner: any;
       expect(privateBalance).to.equal(expectedPrivateAmount);
     });
 
-    it("should convert 18-decimal private amounts back to 6-decimal underlying amounts on unshield", async function () {
+    it("should unshield 6-decimal private amounts one-to-one with underlying amounts", async function () {
       this.timeout(300000);
       const sixDecimalToken = await deployMockToken(hre, defaultSigner, "Six Decimal USDC", "SUSDC");
       await (await sixDecimalToken.setDecimals(6)).wait();
@@ -257,7 +257,7 @@ let defaultSigner: any;
       });
 
       const underlyingAmount = hre.ethers.parseUnits("1.5", 6);
-      const privateAmount = hre.ethers.parseUnits("1.5", 18);
+      const privateAmount = underlyingAmount;
 
       await mintAndApprove({
         mockToken: sixDecimalToken.connect(defaultSigner),
@@ -284,7 +284,8 @@ let defaultSigner: any;
       expect(await sixDecimalPrivateToken.totalSupply()).to.equal(0n);
     });
 
-    it("should reject unshield amounts that cannot be represented by underlying decimals", async function () {
+    it("should allow transferring and unshielding the smallest 6-decimal private unit", async function () {
+      this.timeout(300000);
       const sixDecimalToken = await deployMockToken(hre, defaultSigner, "Six Decimal USDC", "SUSDC");
       await (await sixDecimalToken.setDecimals(6)).wait();
       const sixDecimalPrivateToken = await deployPrivateToken(hre, defaultSigner, {
@@ -295,8 +296,32 @@ let defaultSigner: any;
         symbol: "pSUSDC",
       });
 
-      await expect(sixDecimalPrivateToken.unshield(1n))
-        .to.be.revertedWith("Amount not representable in underlying decimals");
+      const underlyingAmount = hre.ethers.parseUnits("1.5", 6);
+      const smallestUnit = 1n;
+
+      await mintAndApprove({
+        mockToken: sixDecimalToken.connect(defaultSigner),
+        privateToken: sixDecimalPrivateToken,
+        userAddress,
+        amount: underlyingAmount,
+      });
+      await (await sixDecimalPrivateToken.shield(underlyingAmount)).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+
+      await (await sixDecimalPrivateToken["transfer(address,uint256)"](otherWallet.address, smallestUnit)).wait();
+
+      const otherUnderlyingBalanceBefore = await sixDecimalToken.balanceOf(otherWallet.address);
+      const startBlock = await hre.ethers.provider.getBlockNumber();
+      await (await sixDecimalPrivateToken.connect(otherWallet).unshield(smallestUnit)).wait();
+
+      const { successEvents, failedEvents } = await waitForUnshieldOutcome(sixDecimalPrivateToken, hre, startBlock, {
+        timeoutMs: 180000,
+      });
+      expect(successEvents.length, "Expected successful unshield event").to.be.greaterThan(0);
+      expect(failedEvents.length, "Expected no failed unshield events").to.equal(0);
+
+      const otherUnderlyingBalanceAfter = await sixDecimalToken.balanceOf(otherWallet.address);
+      expect(otherUnderlyingBalanceAfter - otherUnderlyingBalanceBefore).to.equal(smallestUnit);
     });
 
     it("should successfully unshield private tokens back to standard tokens", async function () {
