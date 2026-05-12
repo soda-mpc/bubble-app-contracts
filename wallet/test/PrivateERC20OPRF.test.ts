@@ -1224,7 +1224,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       }
     });
 
-    it.only("Should successfully merge many OPRF tokens into a single token", async function () {
+    it("Should successfully merge many OPRF tokens into a single token", async function () {
       // Increase timeout for this test since it processes multiple tokens + MPC
       this.timeout(300000); // 5 minutes
       
