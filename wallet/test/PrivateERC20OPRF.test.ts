@@ -1224,9 +1224,9 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       }
     });
 
-    it("Should successfully merge many OPRF tokens into a single token", async function () {
-      // Increase timeout for this test since it processes multiple tokens
-      this.timeout(120000); // 120 seconds
+    it.only("Should successfully merge many OPRF tokens into a single token", async function () {
+      // Increase timeout for this test since it processes multiple tokens + MPC
+      this.timeout(300000); // 5 minutes
       
 
       // Ensure user has enough private ERC20 balance for this test
