@@ -1195,12 +1195,12 @@
     "@nomicfoundation/solidity-analyzer-linux-x64-musl" "0.1.2"
     "@nomicfoundation/solidity-analyzer-win32-x64-msvc" "0.1.2"
 
-"@openzeppelin/contracts-upgradeable@^5.0.1":
+"@openzeppelin/contracts-upgradeable@5.4.0":
   version "5.4.0"
   resolved "https://registry.npmjs.org/@openzeppelin/contracts-upgradeable/-/contracts-upgradeable-5.4.0.tgz"
   integrity sha512-STJKyDzUcYuB35Zub1JpWW58JxvrFFVgQ+Ykdr8A9PGXgtq/obF5uoh07k2XmFyPxfnZdPdBdhkJ/n2YxJ87HQ==
 
-"@openzeppelin/contracts@^5.0.1", "@openzeppelin/contracts@5.4.0":
+"@openzeppelin/contracts@5.4.0":
   version "5.4.0"
   resolved "https://registry.npmjs.org/@openzeppelin/contracts/-/contracts-5.4.0.tgz"
   integrity sha512-eCYgWnLg6WO+X52I16TZt8uEjbtdkgLC0SUX/xnAksjjrQI4Xfn4iBRoI5j55dmlOhDv1Y7BoR3cU7e3WWhC6A==
@@ -1885,6 +1885,10 @@
   integrity sha512-4aUIteuyxtBUhVdiQqcDhKFitwfd9hqoSDYY2KRXiWtgoWJ9Bmise+KfEPDiVHWeJepvF8xJO9/9+WDIciMFFw==
   dependencies:
     tslib "^2.6.2"
+
+"@sodalabs/bubble-core-contracts@git+ssh://git@github.com/soda-mpc/bubble-core-contracts.git#initial-version":
+  version "0.0.1"
+  resolved "git+ssh://git@github.com/soda-mpc/bubble-core-contracts.git#686ed7d92a81850beef1de57bc27962ffccafc08"
 
 "@solidity-parser/parser@^0.14.0":
   version "0.14.5"
@@ -3486,7 +3490,7 @@ hardhat-gas-reporter@^1.0.10, hardhat-gas-reporter@^1.0.8:
     eth-gas-reporter "^0.2.25"
     sha1 "^1.1.1"
 
-hardhat@^2.0.2, hardhat@^2.11.0, hardhat@^2.24.1, hardhat@^2.24.2, hardhat@^2.26.0, hardhat@^2.9.9:
+hardhat@^2.0.2, hardhat@^2.11.0, hardhat@^2.24.1, hardhat@^2.26.0, hardhat@^2.9.9, hardhat@2.27.1:
   version "2.27.1"
   resolved "https://registry.npmjs.org/hardhat/-/hardhat-2.27.1.tgz"
   integrity sha512-0+AWlXgXd0fbPUsAJwp9x6kgYwNxFdZtHVE40bVqPO1WIpCZeWldvubxZl2yOGSzbufa6d9s0n+gNj7JSlTYCQ==
@@ -4825,7 +4829,7 @@ soda-sdk@0.0.3-test.20251024003447.0:
     ethers "^6.13.4"
     node-forge "^1.3.1"
 
-solc@^0.8.24, solc@0.8.26:
+solc@0.8.26:
   version "0.8.26"
   resolved "https://registry.npmjs.org/solc/-/solc-0.8.26.tgz"
   integrity sha512-yiPQNVf5rBFHwN6SIf3TUUvVAFKcQqmSUFeq+fb6pNRCo0ZCgpYOZDi3BVoezCPIAcKrVYd/qXlBLUP9wVrZ9g==

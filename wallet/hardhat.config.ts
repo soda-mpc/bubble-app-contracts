@@ -17,7 +17,7 @@ const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
 
 const config: HardhatUserConfig = {
     solidity: {
-        version: "0.8.24",
+        version: "0.8.26",
         settings: {
             optimizer: {
                 enabled: true,
