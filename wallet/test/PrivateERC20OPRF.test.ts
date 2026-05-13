@@ -1225,8 +1225,8 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     });
 
     it("Should successfully merge many OPRF tokens into a single token", async function () {
-      // Increase timeout for this test since it processes multiple tokens
-      this.timeout(120000); // 120 seconds
+      // Increase timeout for this test since it processes multiple tokens + MPC
+      this.timeout(300000); // 5 minutes
       
 
       // Ensure user has enough private ERC20 balance for this test
@@ -1637,6 +1637,15 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       // Wait for MPC computation to complete
       await delay(DELAY_MPC_REDEEM_MS);
 
+      // Validate OPRFTransferred event and ensure both parties can decrypt the transferred amount
+      const transferredEventLog = findParsedLogInReceipt(transferReceipt, privateToken, "OPRFTransferred");
+      expect(transferredEventLog).to.not.be.undefined;
+      const transferredEvent = privateToken.interface.parseLog(transferredEventLog!);
+      expect(transferredEvent?.args[0].toLowerCase()).to.equal(userAddress.toLowerCase());
+      expect(transferredEvent?.args[1].toLowerCase()).to.equal(recipientAddress.toLowerCase());
+      const transferredAmountHandle = transferredEvent?.args[2];
+      expect(transferredAmountHandle).to.not.be.undefined;
+
       // Extract OPRFMinted events
       const oprfMintedEvents = getOprfMintedEventsFromReceipt(transferReceipt, privateToken);
 
@@ -1651,8 +1660,11 @@ describe("PrivateERC20Contract OPRF Minting", function () {
 
       expect(recipientEvent).to.not.be.undefined;
       expect(senderEvent).to.not.be.undefined;
+      if (!recipientEvent || !senderEvent) {
+        throw new Error("Expected both recipient and sender OPRFMinted events");
+      }
 
-      // transferOPRF only emits OPRFMinted (no OPRFTransferred); amounts are verified via handles below
+      // transferOPRF emits OPRFTransferred and OPRFMinted; verify both event families
 
       // Decrypt and verify results
       await delay(DELAY_MPC_EXTENDED_MS);
@@ -1670,6 +1682,18 @@ describe("PrivateERC20Contract OPRF Minting", function () {
         userAesKey,
         PROXY_URL
       );
+      const transferredAmountForRecipient = await decryptValueViaProxy(
+        transferredAmountHandle,
+        recipientWallet,
+        recipientAesKey,
+        PROXY_URL
+      );
+      const transferredAmountForSender = await decryptValueViaProxy(
+        transferredAmountHandle,
+        defaultSigner,
+        userAesKey,
+        PROXY_URL
+      );
 
       // Verify correctness
       // Verify token values are non-zero
@@ -1682,6 +1706,9 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       expect(recipientQ).to.equal(transferAmount, "Recipient should receive the exact transfer amount");
       expect(senderQ).to.equal(expectedSenderRemainder, "Sender should keep the remainder");
       expect(recipientQ + senderQ).to.equal(totalQuantity, "Total should be preserved");
+      expect(transferredAmountForRecipient).to.equal(transferAmount, "Recipient should decrypt transferred event amount");
+      expect(transferredAmountForSender).to.equal(transferAmount, "Sender should decrypt transferred event amount");
+      expect(transferredAmountForRecipient).to.equal(recipientQ, "Transferred amount should match recipient OPRFMinted amount");
 
       // Verify all input tokens were invalidated (burned); reason 3 = burned per contract
       const invalidatedEvents = findParsedLogsInReceipt(transferReceipt, privateToken, "OPRFTokenInvalidated").filter(
@@ -1816,6 +1843,14 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       console.log("Step 5: Waiting for MPC computation (15s)...");
       await delay(DELAY_MPC_DECRYPTION_MS);
 
+      const transferredEventLog = findParsedLogInReceipt(transferReceipt, privateToken, "OPRFTransferred");
+      expect(transferredEventLog).to.not.be.undefined;
+      const transferredEvent = privateToken.interface.parseLog(transferredEventLog!);
+      expect(transferredEvent?.args[0].toLowerCase()).to.equal(userAddress.toLowerCase());
+      expect(transferredEvent?.args[1].toLowerCase()).to.equal(recipientAddress.toLowerCase());
+      const transferredAmountHandle = transferredEvent?.args[2];
+      expect(transferredAmountHandle).to.not.be.undefined;
+
       console.log("Step 6: Extracting events...");
       const oprfMintedEvents = getOprfMintedEventsFromReceipt(transferReceipt, privateToken);
 
@@ -1830,6 +1865,9 @@ describe("PrivateERC20Contract OPRF Minting", function () {
 
       expect(recipientEvent).to.not.be.undefined;
       expect(senderEvent).to.not.be.undefined;
+      if (!recipientEvent || !senderEvent) {
+        throw new Error("Expected both recipient and sender OPRFMinted events");
+      }
       console.log("   Events extracted");
 
       console.log("Step 7: Decrypting results (waiting 10s then decrypting 6 values)...");
@@ -1844,6 +1882,18 @@ describe("PrivateERC20Contract OPRF Minting", function () {
 
       const [senderQ, senderX, senderY] = await decryptMultipleValuesViaProxy(
         [senderEvent.q, senderEvent.x, senderEvent.y],
+        defaultSigner,
+        userAesKey,
+        PROXY_URL
+      );
+      const transferredAmountForRecipient = await decryptValueViaProxy(
+        transferredAmountHandle,
+        recipientWallet,
+        recipientAesKey,
+        PROXY_URL
+      );
+      const transferredAmountForSender = await decryptValueViaProxy(
+        transferredAmountHandle,
         defaultSigner,
         userAesKey,
         PROXY_URL
@@ -1876,6 +1926,15 @@ describe("PrivateERC20Contract OPRF Minting", function () {
         `Expected sender to retain full burned total ${expectedSenderAmount} when insufficient; got ${senderQ}`
       );
       expect(recipientQ + senderQ).to.equal(totalQuantity, "Total should be preserved");
+      expect(transferredAmountForRecipient).to.equal(
+        expectedRecipientAmount,
+        `Recipient should decrypt transferred event amount as ${expectedRecipientAmount}`
+      );
+      expect(transferredAmountForSender).to.equal(
+        expectedRecipientAmount,
+        `Sender should decrypt transferred event amount as ${expectedRecipientAmount}`
+      );
+      expect(transferredAmountForRecipient).to.equal(recipientQ, "Transferred amount should match recipient OPRFMinted amount");
 
       // Verify all input tokens were invalidated (burned); reason 3 = burned per contract
       const invalidatedEvents = findParsedLogsInReceipt(transferReceipt, privateToken, "OPRFTokenInvalidated").filter(

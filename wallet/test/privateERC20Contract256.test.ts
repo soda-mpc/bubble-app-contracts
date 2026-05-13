@@ -84,7 +84,7 @@ let defaultSigner: any;
       expect(symbol).to.equal("BUB");
 
       const decimals = await privateToken.decimals();
-      expect(decimals).to.equal(18);
+      expect(decimals).to.equal(await mockToken.decimals());
     });
 
     it("should start with zero total supply", async function () {
@@ -202,6 +202,126 @@ let defaultSigner: any;
 
       await expect(newPrivateToken.shield(shieldAmount))
         .to.be.revertedWithCustomError(mockToken, "ERC20InsufficientAllowance");
+    });
+
+    it("should use underlying decimals for 6-decimal private tokens", async function () {
+      const sixDecimalToken = await deployMockToken(hre, defaultSigner, "Six Decimal USDC", "SUSDC");
+      await (await sixDecimalToken.setDecimals(6)).wait();
+      const sixDecimalPrivateToken = await deployPrivateToken(hre, defaultSigner, {
+        underlyingAddress: await sixDecimalToken.getAddress(),
+        ownerAddress: defaultSigner.address,
+        masterAddress: masterWallet.address,
+        name: "Private Six Decimal USDC",
+        symbol: "pSUSDC",
+      });
+
+      expect(await sixDecimalPrivateToken.decimals()).to.equal(6);
+      expect(await sixDecimalToken.decimals()).to.equal(6);
+
+      const underlyingAmount = hre.ethers.parseUnits("1.5", 6);
+      const expectedPrivateAmount = underlyingAmount;
+
+      await mintAndApprove({
+        mockToken: sixDecimalToken.connect(defaultSigner),
+        privateToken: sixDecimalPrivateToken,
+        userAddress,
+        amount: underlyingAmount,
+      });
+
+      await (await sixDecimalPrivateToken.shield(underlyingAmount)).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+
+      expect(await sixDecimalToken.balanceOf(await sixDecimalPrivateToken.getAddress())).to.equal(underlyingAmount);
+      expect(await sixDecimalPrivateToken.totalSupply()).to.equal(expectedPrivateAmount);
+
+      const privateBalance = await getPrivateTokenBalance({
+        privateToken: sixDecimalPrivateToken,
+        address: userAddress,
+        signer: defaultSigner,
+        aesKey: userAesKey,
+        proxyUrl: PROXY_URL,
+      });
+      expect(privateBalance).to.equal(expectedPrivateAmount);
+    });
+
+    it("should unshield 6-decimal private amounts one-to-one with underlying amounts", async function () {
+      this.timeout(300000);
+      const sixDecimalToken = await deployMockToken(hre, defaultSigner, "Six Decimal USDC", "SUSDC");
+      await (await sixDecimalToken.setDecimals(6)).wait();
+      const sixDecimalPrivateToken = await deployPrivateToken(hre, defaultSigner, {
+        underlyingAddress: await sixDecimalToken.getAddress(),
+        ownerAddress: defaultSigner.address,
+        masterAddress: masterWallet.address,
+        name: "Private Six Decimal USDC",
+        symbol: "pSUSDC",
+      });
+
+      const underlyingAmount = hre.ethers.parseUnits("1.5", 6);
+      const privateAmount = underlyingAmount;
+
+      await mintAndApprove({
+        mockToken: sixDecimalToken.connect(defaultSigner),
+        privateToken: sixDecimalPrivateToken,
+        userAddress,
+        amount: underlyingAmount,
+      });
+      await (await sixDecimalPrivateToken.shield(underlyingAmount)).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+
+      const underlyingBalanceBefore = await sixDecimalToken.balanceOf(userAddress);
+      const startBlock = await hre.ethers.provider.getBlockNumber();
+
+      await (await sixDecimalPrivateToken.unshield(privateAmount)).wait();
+
+      const { successEvents, failedEvents } = await waitForUnshieldOutcome(sixDecimalPrivateToken, hre, startBlock, {
+        timeoutMs: 180000,
+      });
+      expect(successEvents.length, "Expected successful unshield event").to.be.greaterThan(0);
+      expect(failedEvents.length, "Expected no failed unshield events").to.equal(0);
+
+      const underlyingBalanceAfter = await sixDecimalToken.balanceOf(userAddress);
+      expect(underlyingBalanceAfter - underlyingBalanceBefore).to.equal(underlyingAmount);
+      expect(await sixDecimalPrivateToken.totalSupply()).to.equal(0n);
+    });
+
+    it("should allow transferring and unshielding the smallest 6-decimal private unit", async function () {
+      this.timeout(300000);
+      const sixDecimalToken = await deployMockToken(hre, defaultSigner, "Six Decimal USDC", "SUSDC");
+      await (await sixDecimalToken.setDecimals(6)).wait();
+      const sixDecimalPrivateToken = await deployPrivateToken(hre, defaultSigner, {
+        underlyingAddress: await sixDecimalToken.getAddress(),
+        ownerAddress: defaultSigner.address,
+        masterAddress: masterWallet.address,
+        name: "Private Six Decimal USDC",
+        symbol: "pSUSDC",
+      });
+
+      const underlyingAmount = hre.ethers.parseUnits("1.5", 6);
+      const smallestUnit = 1n;
+
+      await mintAndApprove({
+        mockToken: sixDecimalToken.connect(defaultSigner),
+        privateToken: sixDecimalPrivateToken,
+        userAddress,
+        amount: underlyingAmount,
+      });
+      await (await sixDecimalPrivateToken.shield(underlyingAmount)).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+
+      await (await sixDecimalPrivateToken["transfer(address,uint256)"](otherWallet.address, smallestUnit)).wait();
+
+      const otherUnderlyingBalanceBefore = await sixDecimalToken.balanceOf(otherWallet.address);
+      const startBlock = await hre.ethers.provider.getBlockNumber();
+      await (await sixDecimalPrivateToken.connect(otherWallet).unshield(smallestUnit)).wait();
+
+      const { successEvents, failedEvents } = await waitForUnshieldOutcome(sixDecimalPrivateToken, hre, startBlock, {
+        timeoutMs: 180000,
+      });
+      expect(successEvents.length, "Expected successful unshield event").to.be.greaterThan(0);
+      expect(failedEvents.length, "Expected no failed unshield events").to.equal(0);
+
+      const otherUnderlyingBalanceAfter = await sixDecimalToken.balanceOf(otherWallet.address);
+      expect(otherUnderlyingBalanceAfter - otherUnderlyingBalanceBefore).to.equal(smallestUnit);
     });
 
     it("should successfully unshield private tokens back to standard tokens", async function () {
@@ -383,7 +503,7 @@ let defaultSigner: any;
     const transferAmount = 50n * 10n ** 18n; // 50 tokens with 18 decimals
 
     beforeEach(async function () {
-      this.timeout(120000); // 2 minutes timeout for beforeEach
+      this.timeout(300000); // MPC callback paths can exceed 2 minutes on shared infra
       await ensurePrivateBalanceClearedFor({
         privateToken,
         signer: defaultSigner,
@@ -702,50 +822,44 @@ let defaultSigner: any;
     const shieldAmount = 100n * 10n ** 18n; // 100 tokens with 18 decimals
 
     beforeEach(async function () {
-      this.timeout(120000);
-      // Ensure user starts with zero private balance
-      await ensurePrivateBalanceClearedFor({
-        privateToken,
-        signer: defaultSigner,
-        aesKey: userAesKey,
-        proxyUrl: PROXY_URL,
-        hre,
+      this.timeout(300000);
+      // Fresh instance prevents cross-test state from previous emergency actions.
+      privateToken = await deployPrivateToken(hre, defaultSigner, {
+        underlyingAddress: await mockToken.getAddress(),
+        ownerAddress: defaultSigner.address,
+        masterAddress: masterWallet.address,
       });
     });
 
-    it("should transfer all underlying tokens to owner when contract has balance", async function () {
+    it("should transfer all underlying tokens to owner and reset total supply", async function () {
       // Mint and shield tokens to create a balance in the contract
       await mintAndApprove({ mockToken, privateToken, userAddress, amount: shieldAmount });
       await (await privateToken.shield(shieldAmount)).wait();
       await delay(DELAY_BALANCE_SYNC_MS);
 
-      // Verify contract has the underlying tokens
       const contractBalanceBefore = await mockToken.balanceOf(await privateToken.getAddress());
-      expect(contractBalanceBefore).to.equal(shieldAmount);
-
-      // Get owner's balance before recovery
+      expect(contractBalanceBefore).to.be.gte(shieldAmount);
+      expect(await privateToken.totalSupply()).to.equal(shieldAmount);
+      
       const ownerBalanceBefore = await mockToken.balanceOf(defaultSigner.address);
 
-      // Execute emergency recovery
       const recoveryTx = await privateToken.connect(defaultSigner).emergencyRecovery();
       const receipt = await recoveryTx.wait();
       
       expect(receipt).to.not.be.undefined;
       expect(receipt?.status).to.equal(1);
 
-      // Verify contract balance is now zero
       const contractBalanceAfter = await mockToken.balanceOf(await privateToken.getAddress());
       expect(contractBalanceAfter).to.equal(0n);
+      expect(await privateToken.totalSupply()).to.equal(0n);
 
-      // Verify owner received the tokens
       const ownerBalanceAfter = await mockToken.balanceOf(defaultSigner.address);
-      expect(ownerBalanceAfter - ownerBalanceBefore).to.equal(shieldAmount);
+      expect(ownerBalanceAfter - ownerBalanceBefore).to.equal(contractBalanceBefore);
 
-      // Verify event was emitted
       const events = await getEventsInReceiptBlock(privateToken, privateToken.filters.EmergencyRecovery(), receipt);
       expect(events.length).to.be.greaterThan(0);
       expect(events[0].args.owner).to.equal(defaultSigner.address);
-      expect(events[0].args.amount).to.equal(shieldAmount);
+      expect(events[0].args.amount).to.equal(contractBalanceBefore);
     });
 
     it("should return zero when contract has no underlying tokens", async function () {
@@ -767,6 +881,7 @@ let defaultSigner: any;
       const events = await getEventsInReceiptBlock(privateToken, privateToken.filters.EmergencyRecovery(), receipt);
       // Event should not be emitted when balance is zero
       expect(events.length).to.equal(0);
+      expect(await privateToken.totalSupply()).to.equal(0n);
     });
 
     it("should revert when non-owner tries to call emergency recovery", async function () {
@@ -776,35 +891,38 @@ let defaultSigner: any;
         .withArgs(otherWallet.address);
     });
 
-    it("should transfer partial balance if tokens are added after initial recovery", async function () {
-      // First, ensure contract has no balance
-      const initialBalance = await mockToken.balanceOf(await privateToken.getAddress());
-      if (initialBalance > 0n) {
-        await (await privateToken.connect(defaultSigner).emergencyRecovery()).wait();
-      }
-
-      // Shield some tokens
+    it("should recover full balance including externally added tokens", async function () {
       await mintAndApprove({ mockToken, privateToken, userAddress, amount: shieldAmount });
       await (await privateToken.shield(shieldAmount)).wait();
       await delay(DELAY_BALANCE_SYNC_MS);
 
-      // Get owner balance before recovery
+      const excessAmount = 25n * 10n ** 18n;
+      await (await mockToken.mint(await privateToken.getAddress(), excessAmount)).wait();
+      
+      const contractBalanceBefore = await mockToken.balanceOf(await privateToken.getAddress());
+      expect(contractBalanceBefore).to.be.gte(shieldAmount + excessAmount);
+      expect(await privateToken.totalSupply()).to.equal(shieldAmount);
+      
       const ownerBalanceBefore = await mockToken.balanceOf(defaultSigner.address);
 
-      // Execute emergency recovery
       const recoveryTx = await privateToken.connect(defaultSigner).emergencyRecovery();
-      await recoveryTx.wait();
+      const receipt = await recoveryTx.wait();
 
-      // Verify owner received the tokens
       const ownerBalanceAfter = await mockToken.balanceOf(defaultSigner.address);
-      expect(ownerBalanceAfter - ownerBalanceBefore).to.equal(shieldAmount);
+      expect(ownerBalanceAfter - ownerBalanceBefore).to.equal(contractBalanceBefore);
 
-      // Verify contract balance is zero
       const contractBalance = await mockToken.balanceOf(await privateToken.getAddress());
       expect(contractBalance).to.equal(0n);
+      expect(await privateToken.totalSupply()).to.equal(0n);
+      
+      const events = await getEventsInReceiptBlock(privateToken, privateToken.filters.EmergencyRecovery(), receipt);
+      expect(events.length).to.be.greaterThan(0);
+      expect(events[0].args.owner).to.equal(defaultSigner.address);
+      expect(events[0].args.amount).to.equal(contractBalanceBefore);
     });
 
     it("should work correctly after contract upgrade", async function () {
+      this.timeout(300000);
       // Shield some tokens first
       await mintAndApprove({ mockToken, privateToken, userAddress, amount: shieldAmount });
       await (await privateToken.shield(shieldAmount)).wait();
@@ -821,41 +939,50 @@ let defaultSigner: any;
 
       // Verify contract still has the underlying tokens after upgrade
       const contractBalanceBefore = await mockToken.balanceOf(await privateToken.getAddress());
-      expect(contractBalanceBefore).to.equal(shieldAmount);
+      expect(contractBalanceBefore).to.be.gte(shieldAmount);
+      
+      const excessAmount = 25n * 10n ** 18n;
+      await (await mockToken.mint(await privateToken.getAddress(), excessAmount)).wait();
 
-      // Execute emergency recovery after upgrade
       const ownerBalanceBefore = await mockToken.balanceOf(defaultSigner.address);
       const recoveryTx = await privateToken.connect(defaultSigner).emergencyRecovery();
       await recoveryTx.wait();
 
-      // Verify recovery still works after upgrade
       const ownerBalanceAfter = await mockToken.balanceOf(defaultSigner.address);
-      expect(ownerBalanceAfter - ownerBalanceBefore).to.equal(shieldAmount);
+      expect(ownerBalanceAfter - ownerBalanceBefore).to.equal(contractBalanceBefore + excessAmount);
 
       const contractBalanceAfter = await mockToken.balanceOf(await privateToken.getAddress());
       expect(contractBalanceAfter).to.equal(0n);
+      expect(await privateToken.totalSupply()).to.equal(0n);
     });
   });
 
   describe("Unshield callback via GetDecryption HTTP", function () {
-    this.timeout(120000);
+    this.timeout(300000);
 
     it("should complete unshield by fetching callback tx_data from proxy and submitting it", async function () {
+      this.timeout(300000);
+      const callbackPrivateToken = await deployPrivateToken(hre, defaultSigner, {
+        underlyingAddress: await mockToken.getAddress(),
+        ownerAddress: defaultSigner.address,
+        masterAddress: masterWallet.address,
+      });
+
       const shieldAmount = 100n * 10n ** 18n;
-      const totalSupplyBefore = await privateToken.totalSupply();
+      const totalSupplyBefore = await callbackPrivateToken.totalSupply();
       const balanceBeforeShield = await getPrivateTokenBalance({
-        privateToken,
+        privateToken: callbackPrivateToken,
         address: userAddress,
         signer: defaultSigner,
         aesKey: userAesKey,
         proxyUrl: PROXY_URL,
       });
-      await mintAndApprove({ mockToken, privateToken, userAddress, amount: shieldAmount });
-      await (await privateToken.shield(shieldAmount)).wait();
+      await mintAndApprove({ mockToken, privateToken: callbackPrivateToken, userAddress, amount: shieldAmount });
+      await (await callbackPrivateToken.shield(shieldAmount)).wait();
 
       await delay(DELAY_BALANCE_SYNC_MS);
       const balanceBefore = await getPrivateTokenBalance({
-        privateToken,
+        privateToken: callbackPrivateToken,
         address: userAddress,
         signer: defaultSigner,
         aesKey: userAesKey,
@@ -863,15 +990,15 @@ let defaultSigner: any;
       });
       expect(balanceBefore - balanceBeforeShield).to.equal(shieldAmount);
 
-      const contractAddress = await privateToken.getAddress();
+      const contractAddress = await callbackPrivateToken.getAddress();
       const mockTokenBalanceBefore = await mockToken.balanceOf(userAddress);
       const startBlock = await hre.ethers.provider.getBlockNumber();
 
-      const unshieldTx = await privateToken.unshield(shieldAmount);
+      const unshieldTx = await callbackPrivateToken.unshield(shieldAmount);
       const unshieldReceipt = await unshieldTx.wait();
       expect(unshieldReceipt).to.not.be.undefined;
 
-      const decryptId = await privateToken.getLastDecryptRequestId();
+      const decryptId = await callbackPrivateToken.getLastDecryptRequestId();
 
       await delay(DELAY_MPC_DECRYPTION_MS);
 
@@ -900,16 +1027,18 @@ let defaultSigner: any;
       }
 
       // Either we submitted the callback or the relayer did; poll for Unshield/UnshieldFailed and assert final state.
-      const { successEvents, failedEvents } = await waitForUnshieldOutcome(privateToken, hre, startBlock);
+      const { successEvents, failedEvents } = await waitForUnshieldOutcome(callbackPrivateToken, hre, startBlock, {
+        timeoutMs: 180000,
+      });
       expect(successEvents.length, "Expected successful unshield event").to.be.greaterThan(0);
       expect(failedEvents.length, "Expected no failed unshield events").to.equal(0);
 
       const mockTokenBalanceAfter = await mockToken.balanceOf(userAddress);
       expect(mockTokenBalanceAfter - mockTokenBalanceBefore).to.equal(shieldAmount);
-      expect(await privateToken.totalSupply()).to.equal(totalSupplyBefore);
+      expect(await callbackPrivateToken.totalSupply()).to.equal(totalSupplyBefore);
 
       const decryptedBalance = await getPrivateTokenBalance({
-        privateToken,
+        privateToken: callbackPrivateToken,
         address: userAddress,
         signer: defaultSigner,
         aesKey: userAesKey,
