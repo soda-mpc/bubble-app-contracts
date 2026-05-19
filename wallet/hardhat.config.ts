@@ -6,9 +6,6 @@ import dotenv from "dotenv";
 // Load environment variables
 dotenv.config();
 
-// Task: sync GCDecryptionVerifierAddress.sol for the selected network (run before compile when testing on live networks)
-import "./tasks/sync-gc-addresses";
-
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY || "";
 const QUICKNODE_ARBITRUM_SEPOLIA_URL = process.env.QUICKNODE_ARBITRUM_SEPOLIA_URL || "";
 const QUICKNODE_ARBITRUM_MAINNET_URL = process.env.QUICKNODE_ARBITRUM_MAINNET_URL || "";
