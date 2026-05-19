@@ -28,7 +28,7 @@ Packages that affect **compiled bytecode**, **storage layout**, **compiler outpu
 | `solc` | 0.8.26 | Must match `hardhat.config.ts` `solidity.version` and contract `pragma solidity ^0.8.26` |
 | `hardhat` | 2.27.1 | Compile/deploy/test runner |
 | `soda-sdk` | (see `package.json`) | MPC/crypto integration used in scripts and tests |
-| `@sodalabs/bubble-core-contracts` | git ref `initial-version` | Shared on-chain primitives (commit resolved in lockfile) |
+| `@sodalabs/bubble-core-contracts` | git ref `update-contracts-version` | Shared on-chain primitives (commit resolved in lockfile) |
 
 When bumping any pinned package, re-run `npm install`, `npm run compile`, and the full test suite. For OpenZeppelin contract bumps, run `prepare-upgrade` / storage checks against live proxy addresses before mainnet Safe transactions.
 
