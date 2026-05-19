@@ -25,7 +25,7 @@ Packages that affect **compiled bytecode**, **storage layout**, **compiler outpu
 | `@openzeppelin/contracts` | 5.4.0 | Imported Solidity libraries; bytecode and proxy helpers |
 | `@openzeppelin/contracts-upgradeable` | 5.4.0 | Upgradeable bases (`UUPSUpgradeable`, `Ownable2Step`, …) |
 | `@openzeppelin/hardhat-upgrades` | 3.9.1 | `deployProxy`, `prepareUpgrade`, storage validation |
-| `solc` | 0.8.26 | Must match `hardhat.config.ts` `solidity.version` |
+| `solc` | 0.8.26 | Must match `hardhat.config.ts` `solidity.version` and contract `pragma solidity ^0.8.26` |
 | `hardhat` | 2.27.1 | Compile/deploy/test runner |
 | `soda-sdk` | (see `package.json`) | MPC/crypto integration used in scripts and tests |
 | `@sodalabs/bubble-core-contracts` | git ref `initial-version` | Shared on-chain primitives (commit resolved in lockfile) |
