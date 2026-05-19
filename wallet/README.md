@@ -2,6 +2,10 @@
 
 Hardhat project for private ERC20 contracts (UUPS upgradeable proxies) with MPC integration.
 
+## Package manager
+
+This project uses **npm** only (`package-lock.json`). Do not add `yarn.lock`; use `npm install` / `npm ci` in CI.
+
 ## Setup
 
 ```bash
