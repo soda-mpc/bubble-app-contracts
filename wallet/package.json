@@ -4,8 +4,8 @@
   "description": "Private ERC20 contracts with MPC capabilities",
   "scripts": {
     "compile": "hardhat compile",
-    "compile:sepolia-base": "hardhat compile-for-network --network sepolia-base",
-    "compile:kurtosis": "hardhat compile-for-network --network kurtosis",
+    "compile:sepolia-base": "hardhat compile",
+    "compile:kurtosis": "hardhat compile",
     "test": "hardhat test",
     "test:oprf-private": "hardhat test test/PrivateERC20OPRF.test.ts --network world-mobile-testnet",
     "deploy:kurtosis": "hardhat run scripts/deploy-private-erc20.ts --network kurtosis",
@@ -20,11 +20,11 @@
     "verify:environment": "hardhat run scripts/verify-contracts.ts"
   },
   "dependencies": {
-    "@sodalabs/bubble-core-contracts": "git+ssh://git@github.com/soda-mpc/bubble-core-contracts.git#initial-version",
     "@grpc/grpc-js": "^1.9.14",
     "@grpc/proto-loader": "^0.7.10",
     "@openzeppelin/contracts": "5.4.0",
     "@openzeppelin/contracts-upgradeable": "5.4.0",
+    "@sodalabs/bubble-core-contracts": "github:soda-mpc/bubble-core-contracts#initial-version",
     "@types/node-forge": "^1.3.14",
     "dotenv": "^16.4.5",
     "ethereumjs-util": "^7.1.5",
@@ -42,7 +42,7 @@
     "@nomicfoundation/hardhat-network-helpers": "^1.0.12",
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "@nomicfoundation/hardhat-verify": "^2.0.14",
-    "@openzeppelin/hardhat-upgrades": "^3.0.0",
+    "@openzeppelin/hardhat-upgrades": "3.9.1",
     "@typechain/ethers-v6": "^0.5.1",
     "@typechain/hardhat": "^9.1.0",
     "@types/chai": "^4.3.20",
