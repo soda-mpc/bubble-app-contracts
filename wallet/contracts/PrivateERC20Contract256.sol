@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@sodalabs/bubble-core-contracts/contracts/bubble/DecryptionCaller.sol";
 
 interface IWrappedNative is IERC20 {
@@ -38,7 +39,7 @@ interface IWrappedNative is IERC20 {
 /// @notice Approval Mechanism:
 /// @dev An approval mechanism is implemented to allow token holders to grant spending permissions (allowances) to other addresses.
 /// Approvals are also stored in handles form within the contract's state variables.
-contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2StepUpgradeable, ReentrancyGuardUpgradeable {
+contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2StepUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable {
     /// @notice Emitted when tokens are transferred in the clear
     /// @param _from The address of the sender
     /// @param _to The address of the recipient
@@ -196,6 +197,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         
         __Ownable_init(owner_);
         __ReentrancyGuard_init();
+        __Pausable_init();
         
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         $._name = name_;
@@ -292,15 +294,29 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         $.master = newMaster;
         emit MasterUpdated(oldMaster, newMaster);
     }
+
+    /// @notice Pauses user-facing token operations.
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /// @notice Resumes user-facing token operations.
+    function unpause() external onlyOwner {
+        _unpause();
+    }
     
     /// @notice Emergency recovery function to transfer all underlying tokens to the owner
     /// @dev Only the owner can call this function
-    /// @dev This function transfers all underlying ERC20 tokens held by the contract to the owner
-    ///      and resets totalSupply to zero.
+    /// @dev This function pauses the contract, transfers all underlying ERC20 tokens held by the contract
+    ///      to the owner, and resets totalSupply to zero.
     /// @dev Use this function only in emergency situations
     /// @return The amount of tokens recovered
     function emergencyRecovery() external onlyOwner nonReentrant returns (uint256) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        if (!paused()) {
+            _pause();
+        }
+
         address ownerAddress = owner();
         uint256 balance = $.underlying.balanceOf(address(this));
         
@@ -362,7 +378,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param _to The address to transfer to
     /// @param _it The encrypted and signed transfer amount
     /// @return The handle to the transfer's result
-    function transfer(address _to, itUint256 calldata _it) public virtual returns (gtBool) {
+    function transfer(address _to, itUint256 calldata _it) public virtual whenNotPaused returns (gtBool) {
         gtUint256 value = MpcCore.validateCiphertext(_it);
         MpcCore.permitTransient(value, msg.sender); // Give transient permission the the sender, so the contractTransfer check will pass
         return contractTransfer(_to, value);
@@ -372,7 +388,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param _to The address to transfer to
     /// @param _value The amount of tokens to transfer
     /// @return The handle to the transfer's result
-    function transfer(address _to, uint256 _value) public virtual returns (gtBool) {
+    function transfer(address _to, uint256 _value) public virtual whenNotPaused returns (gtBool) {
         // Check for self-transfer
        if (msg.sender == _to) {
            emit Transfer(msg.sender, _to, _value);
@@ -389,7 +405,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param _to The address to transfer to
     /// @param _value The handle to the amount of tokens to transfer
     /// @return The handle to the transfer's result
-    function contractTransfer(address _to, gtUint256 _value) public virtual returns (gtBool) {
+    function contractTransfer(address _to, gtUint256 _value) public virtual whenNotPaused returns (gtBool) {
         // Check if the sender is permitted to use the _value handle
         require(MpcCore.isSenderPermitted(_value));
         
@@ -411,7 +427,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param _to The address to transfer to
     /// @param _it The encrypted and signed transfer amount
     /// @return The handle to the transfer's result
-    function transferFrom(address _from, address _to, itUint256 calldata _it) public virtual returns (gtBool) {
+    function transferFrom(address _from, address _to, itUint256 calldata _it) public virtual whenNotPaused returns (gtBool) {
         gtUint256 value = MpcCore.validateCiphertext(_it);
         MpcCore.permitTransient(value, msg.sender); // Give transient permission the the sender, so the contractTransferFrom check will pass
         return contractTransferFrom(_from, _to, value);
@@ -421,7 +437,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param _to The address to transfer to
     /// @param _value The amount of tokens to transfer
     /// @return The handle to the transfer's result
-    function transferFrom(address _from, address _to, uint256 _value) public virtual returns (gtBool) {
+    function transferFrom(address _from, address _to, uint256 _value) public virtual whenNotPaused returns (gtBool) {
         gtUint256 allowance = _getGTAllowance(_from, msg.sender);
 
         // Check for self-transfer
@@ -447,7 +463,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param _to The address to transfer to
     /// @param _value The encrypted transfer amount
     /// @return The handle to the transfer's result
-    function contractTransferFrom(address _from, address _to, gtUint256 _value) public virtual returns (gtBool) {
+    function contractTransferFrom(address _from, address _to, gtUint256 _value) public virtual whenNotPaused returns (gtBool) {
         // Check if the sender is permitted to use the _value handle
         require(MpcCore.isSenderPermitted(_value));
         gtUint256 allowance = _getGTAllowance(_from, msg.sender);
@@ -470,14 +486,14 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param _spender The address that will be approved
     /// @param _it The encrypted and signed approval amount
     /// @return True if the approval was successful
-    function approve(address _spender, itUint256 calldata _it) public virtual returns (bool) {
+    function approve(address _spender, itUint256 calldata _it) public virtual whenNotPaused returns (bool) {
         return contractApprove(_spender, MpcCore.validateCiphertext(_it));
     }
     /// @notice Approves a spender to transfer the amount of tokens given in the clear
     /// @param _spender The address that will be approved
     /// @param _value The amount of tokens to approve
     /// @return True if the approval was successful
-    function approve(address _spender, uint256 _value) public virtual returns (bool) {
+    function approve(address _spender, uint256 _value) public virtual whenNotPaused returns (bool) {
         address owner = msg.sender;
         gtUint256 gt = MpcCore.setPublic256(_value);
         _setApproveValue(owner, _spender, gt);
@@ -488,7 +504,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param _spender The address that will be approved
     /// @param _value The handle to the approval amount
     /// @return True if the approval was successful
-    function contractApprove(address _spender, gtUint256 _value) public virtual returns (bool) {
+    function contractApprove(address _spender, gtUint256 _value) public virtual whenNotPaused returns (bool) {
         // Check if the sender is permitted to use the _value handle
         require(MpcCore.isSenderPermitted(_value));
         address owner = msg.sender;
@@ -605,7 +621,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
 
     /// @notice Shield standard ERC20 tokens into private tokens
     /// @dev Private tokens mirror the underlying token decimals, so shielded amounts are one-to-one.
-    function shield(uint256 amount) public virtual nonReentrant returns (bool) {
+    function shield(uint256 amount) public virtual nonReentrant whenNotPaused returns (bool) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         require(amount > 0, "Amount must be greater than 0");
         require($.underlying.transferFrom(msg.sender, address(this), amount), "Transfer failed");
@@ -620,12 +636,12 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         return true;
     }
     // Function to unshield private tokens back to standard ERC20 tokens
-    function unshield(uint256 privateAmount) public virtual returns (bool) {
+    function unshield(uint256 privateAmount) public virtual whenNotPaused returns (bool) {
         return _unshieldTo(privateAmount, msg.sender);
     }
 
     // Function to unshield private tokens back to standard ERC20 tokens for master address
-    function unshieldForMaster(uint256 privateAmount) public virtual returns (bool) {
+    function unshieldForMaster(uint256 privateAmount) public virtual whenNotPaused returns (bool) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         return _unshieldTo(privateAmount, $.master);
     }
@@ -715,7 +731,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     
     /// @notice Mints an OPRF token for the caller using encrypted parameters
     /// @param quantity The encrypted quantity/amount for the OPRF token
-    function mintOPRFToken(itUint256 calldata quantity) public virtual {
+    function mintOPRFToken(itUint256 calldata quantity) public virtual whenNotPaused {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         gtUint256 qGT = MpcCore.validateCiphertext(quantity);
         
@@ -798,7 +814,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         itUint256 calldata q,
         uint128 y_clear,
         itUint256 calldata qSplit
-    ) public virtual {
+    ) public virtual whenNotPaused {
         // Validate and decrypt the encrypted parameters
         gtUint128 xGT = MpcCore.validateCiphertext(x);
         gtUint256 qGT = MpcCore.validateCiphertext(q);
@@ -836,7 +852,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         uint128 y_clear,
         itUint256 calldata qSplit,
         address recipient
-    ) public virtual {
+    ) public virtual whenNotPaused {
         // Validate and decrypt the encrypted parameters
         gtUint128 xGT = MpcCore.validateCiphertext(x);
         gtUint256 qGT = MpcCore.validateCiphertext(q);
@@ -875,7 +891,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         itUint256 calldata q,
         uint128 y_clear,
         address recipient
-    ) public virtual {
+    ) public virtual whenNotPaused {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         // Validate and decrypt the encrypted parameters
         gtUint128 xGT = MpcCore.validateCiphertext(x);
@@ -937,7 +953,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @return qMerged The encrypted quantity of the newly minted token (total of all burned tokens)
     function mergeMany(
         OPRFToken[] calldata tokens
-    ) public virtual returns (gtUint128 x, gtUint128 y, gtUint256 qMerged) {
+    ) public virtual whenNotPaused returns (gtUint128 x, gtUint128 y, gtUint256 qMerged) {
         require(tokens.length > 0, "At least one token required");
         
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
@@ -974,7 +990,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         OPRFToken[] calldata tokens,
         itUint256 calldata amount,
         address recipient
-    ) public virtual returns (
+    ) public virtual whenNotPaused returns (
         gtUint128 xRecipient,
         gtUint128 yRecipient,
         gtUint256 qRecipient,
@@ -1079,7 +1095,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         OPRFToken[] calldata tokens,
         itUint256 calldata amount,
         address recipient
-    ) public virtual returns (
+    ) public virtual whenNotPaused returns (
         gtUint128 xRemainder,
         gtUint128 yRemainder,
         gtUint256 qRemainder
@@ -1108,7 +1124,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         itUint256 calldata amount,
         address recipient,
         bool unwrap
-    ) public virtual returns (
+    ) public virtual whenNotPaused returns (
         gtUint128 xRemainder,
         gtUint128 yRemainder,
         gtUint256 qRemainder

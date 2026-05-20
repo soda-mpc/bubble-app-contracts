@@ -3,14 +3,13 @@ pragma solidity ^0.8.26;
 
 import "../PrivateERC20Contract256.sol";
 import "./RestrictionListIntegration.sol";
-import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 /// @title PrivateERC20WithRestrictionList256
 /// @notice Enhanced PrivateERC20Contract256 with multiple restriction list functionality and pause capability
 /// @dev This contract demonstrates how to integrate multiple restriction list registries with 256-bit contract
 /// Restricted addresses cannot send, receive, approve, or perform other token operations
 /// The contract can be paused by the owner to halt all operations
-contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, RestrictionListIntegration, PausableUpgradeable {
+contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, RestrictionListIntegration {
     /// @notice Custom errors for gas-efficient reverts
     error NewOwnerIsZeroAddress();
     error NoRegistriesActive();
@@ -67,7 +66,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     ) public initializer {
         // Initialize parent contract
         PrivateERC20Contract256.initialize(name_, symbol_, underlying_, owner_, master_);
-        __Pausable_init();
         // Initialize restriction list registries
         _initializeRestrictionListRegistries(restrictionListRegistries_);
         PrivateERC20WithRestrictionList256Storage storage $ = _getPrivateERC20WithRestrictionList256Storage();
@@ -81,7 +79,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     function transfer(address _to, itUint256 calldata _it) 
         public 
         override 
-        whenNotPaused
         returns (gtBool) 
     {
         _requireNotRestrictedPair(msg.sender, _to);
@@ -95,7 +92,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     function transfer(address _to, uint256 _value) 
         public 
         override 
-        whenNotPaused
         returns (gtBool) 
     {
         _requireNotRestrictedPair(msg.sender, _to);
@@ -109,7 +105,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     function contractTransfer(address _to, gtUint256 _value) 
         public 
         override 
-        whenNotPaused
         returns (gtBool) 
     {
         _requireNotRestrictedPair(msg.sender, _to);
@@ -124,7 +119,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     function transferFrom(address _from, address _to, itUint256 calldata _it) 
         public 
         override 
-        whenNotPaused
         returns (gtBool) 
     {
         _requireNotRestrictedTriple(msg.sender, _from, _to);
@@ -139,7 +133,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     function transferFrom(address _from, address _to, uint256 _value) 
         public 
         override 
-        whenNotPaused
         returns (gtBool) 
     {
         _requireNotRestrictedTriple(msg.sender, _from, _to);
@@ -154,7 +147,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     function contractTransferFrom(address _from, address _to, gtUint256 _value) 
         public 
         override 
-        whenNotPaused
         returns (gtBool) 
     {
         _requireNotRestrictedTriple(msg.sender, _from, _to);
@@ -168,7 +160,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     function approve(address _spender, itUint256 calldata _it) 
         public 
         override 
-        whenNotPaused
         returns (bool) 
     {
         _requireNotRestrictedPair(msg.sender, _spender);
@@ -182,7 +173,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     function approve(address _spender, uint256 _value) 
         public 
         override 
-        whenNotPaused
         returns (bool) 
     {
         _requireNotRestrictedPair(msg.sender, _spender);
@@ -196,7 +186,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     function contractApprove(address _spender, gtUint256 _value) 
         public 
         override 
-        whenNotPaused
         returns (bool) 
     {
         _requireNotRestrictedPair(msg.sender, _spender);
@@ -209,7 +198,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     function shield(uint256 amount) 
         public 
         override 
-        whenNotPaused
         returns (bool) 
     {
         _requireNotRestrictedAccount(msg.sender);
@@ -222,7 +210,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     function unshield(uint256 privateAmount) 
         public 
         override 
-        whenNotPaused
         returns (bool) 
     {
         _requireNotRestrictedAccount(msg.sender);
@@ -235,7 +222,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     function unshieldForMaster(uint256 privateAmount)
         public
         override
-        whenNotPaused
         returns (bool)
     {
         _requireNotRestrictedAccount(msg.sender);
@@ -246,8 +232,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     /// @param quantity The encrypted quantity/amount for the OPRF token
     function mintOPRFToken(itUint256 calldata quantity) 
         public 
-        override 
-        whenNotPaused
+        override
     {
         _requireNotRestrictedAccount(msg.sender);
         super.mintOPRFToken(quantity);
@@ -259,7 +244,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         itUint256 calldata q,
         uint128 y_clear,
         itUint256 calldata qSplit
-    ) public override whenNotPaused {
+    ) public override {
         _requireNotRestrictedAccount(msg.sender);
         super.splitToken(x, q, y_clear, qSplit);
     }
@@ -271,7 +256,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         uint128 y_clear,
         itUint256 calldata qSplit,
         address recipient
-    ) public override whenNotPaused {
+    ) public override {
         _requireNotRestrictedPair(msg.sender, recipient);
         super.splitTokenForRecipient(x, q, y_clear, qSplit, recipient);
     }
@@ -282,7 +267,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         itUint256 calldata q,
         uint128 y_clear,
         address recipient
-    ) public override whenNotPaused {
+    ) public override {
         _requireNotRestrictedPair(msg.sender, recipient);
         super.burnToken(x, q, y_clear, recipient);
     }
@@ -291,7 +276,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     function mergeMany(OPRFToken[] calldata tokens)
         public
         override
-        whenNotPaused
         returns (gtUint128 x, gtUint128 y, gtUint256 qMerged)
     {
         _requireNotRestrictedAccount(msg.sender);
@@ -306,7 +290,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     )
         public
         override
-        whenNotPaused
         returns (
             gtUint128 xRecipient,
             gtUint128 yRecipient,
@@ -328,7 +311,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     )
         public
         override
-        whenNotPaused
         returns (gtUint128 xRemainder, gtUint128 yRemainder, gtUint256 qRemainder)
     {
         _requireNotRestrictedPair(msg.sender, recipient);
@@ -344,7 +326,6 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
     )
         public
         override
-        whenNotPaused
         returns (gtUint128 xRemainder, gtUint128 yRemainder, gtUint256 qRemainder)
     {
         _requireNotRestrictedPair(msg.sender, recipient);
@@ -465,15 +446,4 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         super.transferOwnership(newOwner);
     }
 
-    /// @notice Pause the contract (only owner)
-    /// @dev Pauses all token operations
-    function pause() external onlyOwner {
-        _pause();
-    }
-
-    /// @notice Unpause the contract (only owner)
-    /// @dev Resumes all token operations
-    function unpause() external onlyOwner {
-        _unpause();
-    }
 }

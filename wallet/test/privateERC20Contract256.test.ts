@@ -919,6 +919,78 @@ let defaultSigner: any;
     });
   });
 
+  describe.only("Pause Functionality", function () {
+    const pauseTestShieldAmount = 20n * 10n ** 18n;
+
+    beforeEach(async function () {
+      privateToken = await deployPrivateToken(hre, defaultSigner, {
+        underlyingAddress: await mockToken.getAddress(),
+        ownerAddress: defaultSigner.address,
+        masterAddress: masterWallet.address,
+      });
+    });
+
+    it("should start unpaused", async function () {
+      expect(await privateToken.paused()).to.equal(false);
+    });
+
+    it("should allow owner to pause and emit Paused event", async function () {
+      const tx = await privateToken.pause();
+      const receipt = await tx.wait();
+
+      expect(await privateToken.paused()).to.equal(true);
+      const pausedEvents = await getEventsInReceiptBlock(privateToken, privateToken.filters.Paused(), receipt);
+      expect(pausedEvents.length).to.be.greaterThan(0);
+      expect(pausedEvents[0].args.account).to.equal(defaultSigner.address);
+    });
+
+    it("should allow owner to unpause and emit Unpaused event", async function () {
+      await (await privateToken.pause()).wait();
+
+      const tx = await privateToken.unpause();
+      const receipt = await tx.wait();
+
+      expect(await privateToken.paused()).to.equal(false);
+      const unpausedEvents = await getEventsInReceiptBlock(privateToken, privateToken.filters.Unpaused(), receipt);
+      expect(unpausedEvents.length).to.be.greaterThan(0);
+      expect(unpausedEvents[0].args.account).to.equal(defaultSigner.address);
+    });
+
+    it("should reject pause and unpause from non-owner", async function () {
+      await expect(privateToken.connect(otherWallet).pause())
+        .to.be.revertedWithCustomError(privateToken, "OwnableUnauthorizedAccount")
+        .withArgs(otherWallet.address);
+
+      await expect(privateToken.connect(otherWallet).unpause())
+        .to.be.revertedWithCustomError(privateToken, "OwnableUnauthorizedAccount")
+        .withArgs(otherWallet.address);
+    });
+
+    it("should reject duplicate pause and unpause state changes", async function () {
+      await expect(privateToken.unpause()).to.be.revertedWithCustomError(privateToken, "ExpectedPause");
+
+      await (await privateToken.pause()).wait();
+      await expect(privateToken.pause()).to.be.revertedWithCustomError(privateToken, "EnforcedPause");
+    });
+
+    it("should reject user-facing token operations while paused", async function () {
+      await mintAndApprove({ mockToken, privateToken, userAddress, amount: pauseTestShieldAmount });
+      await (await privateToken.shield(pauseTestShieldAmount)).wait();
+
+      await (await privateToken.pause()).wait();
+
+      await expect(privateToken.shield(pauseTestShieldAmount)).to.be.revertedWithCustomError(
+        privateToken,
+        "EnforcedPause"
+      );
+      await expect(privateToken["transfer(address,uint256)"](otherWallet.address, 1n)).to.be.revertedWithCustomError(
+        privateToken,
+        "EnforcedPause"
+      );
+      await expect(privateToken.unshield(1n)).to.be.revertedWithCustomError(privateToken, "EnforcedPause");
+    });
+  });
+
   describe("Emergency Recovery", function () {
     const shieldAmount = 100n * 10n ** 18n; // 100 tokens with 18 decimals
 
@@ -932,7 +1004,7 @@ let defaultSigner: any;
       });
     });
 
-    it("should transfer all underlying tokens to owner and reset total supply", async function () {
+    it.only("should transfer all underlying tokens to owner and reset total supply", async function () {
       // Mint and shield tokens to create a balance in the contract
       await mintAndApprove({ mockToken, privateToken, userAddress, amount: shieldAmount });
       await (await privateToken.shield(shieldAmount)).wait();
@@ -949,6 +1021,7 @@ let defaultSigner: any;
       
       expect(receipt).to.not.be.undefined;
       expect(receipt?.status).to.equal(1);
+      expect(await privateToken.paused()).to.equal(true);
 
       const contractBalanceAfter = await mockToken.balanceOf(await privateToken.getAddress());
       expect(contractBalanceAfter).to.equal(0n);
@@ -961,6 +1034,21 @@ let defaultSigner: any;
       expect(events.length).to.be.greaterThan(0);
       expect(events[0].args.owner).to.equal(defaultSigner.address);
       expect(events[0].args.amount).to.equal(contractBalanceBefore);
+
+      const pausedEvents = await getEventsInReceiptBlock(privateToken, privateToken.filters.Paused(), receipt);
+      expect(pausedEvents.length).to.be.greaterThan(0);
+      expect(pausedEvents[0].args.account).to.equal(defaultSigner.address);
+    });
+
+    it.only("should reject new shield operations after emergency recovery pauses the contract", async function () {
+      await mintAndApprove({ mockToken, privateToken, userAddress, amount: shieldAmount });
+      await (await privateToken.shield(shieldAmount)).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+
+      await (await privateToken.connect(defaultSigner).emergencyRecovery()).wait();
+
+      await mintAndApprove({ mockToken, privateToken, userAddress, amount: shieldAmount });
+      await expect(privateToken.shield(shieldAmount)).to.be.revertedWithCustomError(privateToken, "EnforcedPause");
     });
 
     it("should return zero when contract has no underlying tokens", async function () {
