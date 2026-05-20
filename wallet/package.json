@@ -24,7 +24,7 @@
     "@grpc/proto-loader": "^0.7.10",
     "@openzeppelin/contracts": "5.4.0",
     "@openzeppelin/contracts-upgradeable": "5.4.0",
-    "@sodalabs/bubble-core-contracts": "github:soda-mpc/bubble-core-contracts#initial-version",
+    "@sodalabs/bubble-core-contracts": "github:soda-mpc/bubble-core-contracts#update-contracts-version",
     "@types/node-forge": "^1.3.14",
     "dotenv": "^16.4.5",
     "ethereumjs-util": "^7.1.5",
