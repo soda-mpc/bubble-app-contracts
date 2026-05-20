@@ -1516,7 +1516,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       }
     });
 
-    it.only("Should successfully transfer OPRF tokens to recipient with sufficient balance", async function () {
+    it("Should successfully transfer OPRF tokens to recipient with sufficient balance", async function () {
       this.timeout(300000); // 300 seconds (5 minutes) - MPC operations take time
 
       // ========== Setup: Prepare balances and recipient ==========
@@ -1721,7 +1721,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
 
     // Tests that transferOPRF correctly handles insufficient balance:
     // When transfer amount exceeds available tokens, recipient should get 0 and sender keeps all tokens
-    it.only("transferOPRF with insufficient balance should return 0 to recipient", async function () {
+    it("transferOPRF with insufficient balance should return 0 to recipient", async function () {
       this.timeout(300000); // 5 minutes - MPC operations take time
       
       console.log("Step 1: Setup - preparing balances and recipient...");
@@ -1945,7 +1945,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       expect(invalidatedEvents.length).to.equal(mintedTokens.length, "All input tokens should be invalidated");
     });
 
-    it.only("Should successfully redeem multiple OPRF tokens with sufficient balance", async function () {
+    it("Should successfully redeem multiple OPRF tokens with sufficient balance", async function () {
       this.timeout(1200000); // 20 minutes — multiple mints + redeemMany + MPC can exceed 10m on remote networks
 
       console.log("\n[TEST] Starting redeemMany test...");
@@ -2191,7 +2191,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       expect(invalidatedEvents.length).to.equal(mintedTokens.length, "All input tokens should be invalidated");
     });
 
-    it.only("Should redeemManyToUnderlying and unshield redeemed amount to recipient", async function () {
+    it("Should redeemManyToUnderlying and unshield redeemed amount to recipient", async function () {
       this.timeout(1200000); // 20 minutes — includes async unshield callback
 
       const additionalShieldAmount = hre.ethers.parseEther("150");
@@ -2346,7 +2346,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       expect(invalidatedEvents.length).to.equal(mintedTokens.length, "All input tokens should be invalidated");
     });
 
-    it.only("Should redeemManyToUnderlying with unwrap=true using local MockWETH", async function () {
+    it("Should redeemManyToUnderlying with unwrap=true using local MockWETH", async function () {
       this.timeout(1200000);
 
       const wrapAmount = hre.ethers.parseEther("0.001"); // 0.001 ETH -> WETH
@@ -2498,7 +2498,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       expect(invalidatedEvents.length).to.equal(1, "Input OPRF token should be invalidated");
     });
 
-    it.only("unwrap=true should revert when underlyingIsWrappedNative=false before burning", async function () {
+    it("unwrap=true should revert when underlyingIsWrappedNative=false before burning", async function () {
       this.timeout(600000);
 
       const MockWethFactory = await hre.ethers.getContractFactory("MockWETH", defaultSigner);
@@ -2571,7 +2571,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       ).to.be.revertedWith("Underlying unwrap not configured");
     });
 
-    it.only("insufficient redeem with unwrap=true should emit UnshieldFailed and keep full remainder", async function () {
+    it("insufficient redeem with unwrap=true should emit UnshieldFailed and keep full remainder", async function () {
       this.timeout(900000);
 
       const MockWethFactory = await hre.ethers.getContractFactory("MockWETH", defaultSigner);
@@ -2665,7 +2665,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       expect(remainderQ).to.equal(wrapAmount, "Sender should keep full amount as remainder");
     });
 
-    it.only("recipient pre-existing private balance should be preserved in unwrap path", async function () {
+    it("recipient pre-existing private balance should be preserved in unwrap path", async function () {
       this.timeout(900000);
 
       const MockWethFactory = await hre.ethers.getContractFactory("MockWETH", defaultSigner);
@@ -2760,7 +2760,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       expect(recipientPrivateAfter).to.equal(preExistingPrivate, "Pre-existing private balance must remain unchanged");
     });
 
-    it.only("recipient contract rejecting native ETH should prevent successful unshield callback", async function () {
+    it("recipient contract rejecting native ETH should prevent successful unshield callback", async function () {
       this.timeout(900000);
 
       const MockWethFactory = await hre.ethers.getContractFactory("MockWETH", defaultSigner);
@@ -2848,7 +2848,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
 
     // Tests that redeemMany correctly handles insufficient balance:
     // When redeem amount exceeds available tokens, recipient should get 0 and sender keeps all tokens
-    it.only("redeemMany with insufficient balance should return 0 to recipient", async function () {
+    it("redeemMany with insufficient balance should return 0 to recipient", async function () {
       this.timeout(300000); // 5 minutes - MPC operations take time
 
       console.log("Step 1: Setup - preparing balances and recipient...");
