@@ -604,7 +604,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     }
 
     /// @notice Shield standard ERC20 tokens into private tokens
-    /// @dev The input amount is denominated in underlying token units and private tokens use the same decimals.
+    /// @dev Private tokens mirror the underlying token decimals, so shielded amounts are one-to-one.
     function shield(uint256 amount) public virtual nonReentrant returns (bool) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         require(amount > 0, "Amount must be greater than 0");
@@ -633,7 +633,6 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     // Internal function to handle unshield logic
     function _unshieldTo(uint256 privateAmount, address recipient) internal returns (bool) {
        require(privateAmount > 0, "Amount must be greater than 0");
-       _toUnderlyingAmount(privateAmount);
        gtUint256 amountGt = MpcCore.setPublic256(privateAmount);
 
        // user balance = 10, want to unshield 3. checkedSubWithOverflowBit(10, 3) = 7, amount to unshield = bal before 10 sub new balance 7 = 3
@@ -692,20 +691,19 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         UnshieldRequest storage request = $.unshieldRequests[decryptID];
         require(request.user != address(0), "Invalid request ID");
 
-        // output[0] contains the 18-decimal private amount to unshield.
+        // output[0] contains the private amount to unshield, denominated like the underlying token.
         uint256 privateAmountToUnshield = abi.decode(output[0], (uint256));
         if (privateAmountToUnshield > 0) {
-            uint256 underlyingAmountToUnshield = _toUnderlyingAmount(privateAmountToUnshield);
             $._totalSupply -= privateAmountToUnshield;
             if (request.unwrapNative) {
                 require($.underlyingIsWrappedNative, "Underlying unwrap not configured");
-                IWrappedNative(address($.underlying)).withdraw(underlyingAmountToUnshield);
-                (bool sent, ) = payable(request.user).call{value: underlyingAmountToUnshield}("");
+                IWrappedNative(address($.underlying)).withdraw(privateAmountToUnshield);
+                (bool sent, ) = payable(request.user).call{value: privateAmountToUnshield}("");
                 require(sent, "Native transfer failed");
             } else {
-                require($.underlying.transfer(request.user, underlyingAmountToUnshield), "Transfer failed");
+                require($.underlying.transfer(request.user, privateAmountToUnshield), "Transfer failed");
             }
-            emit Unshield(request.user, underlyingAmountToUnshield);
+            emit Unshield(request.user, privateAmountToUnshield);
         } else {
             emit UnshieldFailed(request.user, privateAmountToUnshield);
         }
