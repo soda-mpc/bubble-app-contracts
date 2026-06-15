@@ -411,6 +411,17 @@ Test doubles needed:
 - mock private modular compliance with configurable allow/deny behavior
 - existing mock ERC20/underlying token
 
+Runtime test target:
+
+- Static ABI and artifact checks can run on the default local Hardhat network.
+- Any test that executes `MpcCore` operations must run against a real MPC-enabled network.
+- The intended runtime target is `sepolia-arbitrum` from `hardhat.config.ts`.
+- Runtime tests should follow the existing live-MPC test style:
+  - use the real proxy/encryption helpers
+  - use encrypted inputs for private operations
+  - wait for MPC processing/decryption where callbacks are involved
+  - avoid local-only assumptions about mocked MPC precompiles
+
 ## Task List
 
 ### Phase 1: Extract Reduced Wrapper Base

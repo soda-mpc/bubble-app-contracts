@@ -3,7 +3,6 @@
  * Deploy, delays, receipt helpers, and chai-style helpers: sibling `testHelpers.ts` in this folder.
  */
 import hre from "hardhat";
-import fetch from "node-fetch";
 import { Wallet, getBytes, HDNodeWallet, solidityPacked, isAddress } from "ethers";
 
 import {
@@ -12,6 +11,9 @@ import {
   decrypt,
   encrypt
 } from "soda-sdk";
+
+const fetch = (...args: Parameters<typeof globalThis.fetch>) =>
+  import("node-fetch").then(({ default: fetchFn }) => fetchFn(...args));
 
 /** One limb in soda-sdk encrypt output: ciphertext block or nonce `r` (bytes). */
 const AES_LIMB_BYTES = 16;
