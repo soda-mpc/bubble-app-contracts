@@ -53,6 +53,7 @@ The implementation should reuse the useful ERC-3643 controls without changing th
   - recipient must be verified before receiving private balances
   - shielder must be verified before shielding
 - Add modular compliance integration:
+  - `canCreate(address to, uint256 amount)` gates shield/create before underlying is pulled
   - `canTransfer(address from, address to, gtUint256 amount)` gates encrypted transfers
   - `transferred(from, to, effectiveAmount)` is called after private transfers
   - `created(to, clearAmount)` is called after successful shield
@@ -61,7 +62,7 @@ The implementation should reuse the useful ERC-3643 controls without changing th
   - owner can add/remove agents
   - agents can pause/unpause and manage freezing
 - Add freeze behavior:
-  - full wallet freeze blocks sending, receiving, shielding, and unshielding
+  - full wallet freeze blocks sending, receiving, shielding, and new unshield requests
   - partial freeze limits spendable encrypted balance
 - Add batch helpers only if they are low-risk wrappers around single-account operations.
 - Add tests for identity, compliance, freezing, backing, and upgrade/storage behavior.
@@ -75,14 +76,19 @@ The implementation should reuse the useful ERC-3643 controls without changing th
 - TREX factory/gateway integration.
 - Migration of existing deployed `PrivateERC20Contract256` proxies unless separately planned.
 - Rewriting the base `PrivateERC20Contract256` unless needed for a small internal hook.
+- Supporting fee-on-transfer, rebasing, elastic-supply, reflection, or otherwise balance-mutating underlying tokens.
+- Canceling, quarantining, or blocking an unshield request that was already accepted before the wallet was frozen.
 
 ## Assumptions
 
 - This token remains fully underlying-backed. Private supply must correspond to underlying ERC20 held by the contract.
+- The underlying token is a standard, non-rebasing ERC20 that transfers exact requested amounts.
+- Fee-on-transfer, rebasing, elastic-supply, reflection, and upgradeable tokens that can later introduce those behaviors are not supported.
 - Shielding is the only way to create private wrapper supply.
 - Unshielding is the only way to destroy private wrapper supply and release underlying.
+- A full wallet freeze blocks new unshield requests. It does not retroactively cancel an already accepted asynchronous unshield request.
 - Compliance modules can handle the wrapper model:
-  - `address(0) -> user` for shield/create
+  - clear `canCreate(user, amount)` checks for shield/create, because shield amount is public
   - `user -> address(0)` for unshield/destroy
   - `user -> user` for private transfers
 - The identity registry and compliance contracts are already deployed and managed externally.
@@ -117,6 +123,20 @@ Do not mix these two approaches. For this repository, the ERC-3643 implementatio
 - Treat any direct-storage parent as an explicit exception that must be kept stable.
 
 `DecryptionCaller` currently uses direct inherited storage for `decryptCounter` and `decryptHandles`. That is already part of the existing production inheritance model and can remain as an accepted exception unless we later introduce a namespaced replacement.
+
+### Underlying Token Policy
+
+The ERC-3643 wrapper is intended for standard ERC20 underlyings that preserve a one-to-one backing invariant:
+
+```text
+private totalSupply == underlying.balanceOf(wrapper)
+```
+
+within the normal timing limits of pending asynchronous unshield callbacks.
+
+Fee-on-transfer tokens are not supported because `transferFrom(account, wrapper, amount)` can move less than `amount` while the wrapper would otherwise credit `amount` of private balance. Rebasing, elastic-supply, and reflection tokens are also not supported because `underlying.balanceOf(wrapper)` can change without any shield or unshield action, which can make the wrapper undercollateralized or overcollateralized after deployment.
+
+This cannot be fully verified upfront onchain for arbitrary ERC20s. A shield-time balance-delta check can detect many fee-on-transfer cases, but it cannot prove that a token will not rebase or change behavior later. Treat this as an integration and deployment requirement: only approved, exact-transfer, non-rebasing underlyings should be used.
 
 ### OPRF And Base Contract Implication
 
@@ -222,8 +242,8 @@ Requirements:
 - contract not paused
 - caller not frozen
 - caller identity is verified
-- compliance allows `address(0) -> caller` for the shield amount
-- underlying transfer succeeds
+- clear compliance `canCreate(caller, amount)` allows the shield amount before underlying is pulled
+- underlying transfer succeeds and the underlying token is assumed to transfer the exact requested amount
 
 Effects:
 
@@ -252,6 +272,12 @@ Effects:
 - callback calls `compliance.destroyed(user, actualAmount)`
 - existing `Unshield` / `UnshieldFailed` events remain
 
+Freeze timing semantics:
+
+- A wallet must be unfrozen when it submits an unshield request.
+- If the wallet is frozen after the request is accepted but before the MPC callback arrives, the callback is still allowed to settle the already-debited request.
+- Stronger behavior, such as callback-time freeze re-checks, request cancellation, or quarantined releases, is intentionally out of scope for this iteration.
+
 Open implementation detail: the base contract currently stores unshield request metadata privately. The ERC-3643 variant may need to override unshield request/callback logic or introduce a new callback path to retain the original user for compliance notification.
 
 ### Transfers
@@ -270,7 +296,8 @@ Effects:
 - if policy allows, transfer the encrypted amount
 - if policy denies due to encrypted checks, transfer zero where privacy semantics require non-reverting behavior
 - call `compliance.transferred(from, to, effectiveAmount)`
-- emit encrypted transfer event for the effective amount if the wrapper-specific interface uses it
+- emit the no-amount `Transfer(from, to)` event for both clear and encrypted transfer entrypoints
+- do not emit `Transfer(from, to, requestedAmount)` because compliance and partial-freeze checks can turn the effective transfer into zero without a synchronous clear result
 
 ### Approvals
 

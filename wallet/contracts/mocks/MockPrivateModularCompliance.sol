@@ -11,6 +11,7 @@ contract MockPrivateModularCompliance is IPrivateModularCompliance {
     uint256 private _maxTransferAmount;
     gtUint256 private _zeroBalance;
     mapping(address => gtUint256) private _balances;
+    mapping(address => uint256) private _createdBalances;
     mapping(address => uint256) private _maxBalances;
     mapping(address => bool) private _maxBalanceEnabled;
 
@@ -70,6 +71,10 @@ contract MockPrivateModularCompliance is IPrivateModularCompliance {
         return _balances[wallet];
     }
 
+    function createdBalanceOf(address wallet) external view returns (uint256) {
+        return _createdBalances[wallet];
+    }
+
     function bindToken(address token) external override {
         _tokenBound = token;
         if (gtUint256.unwrap(_zeroBalance) == 0) {
@@ -97,6 +102,7 @@ contract MockPrivateModularCompliance is IPrivateModularCompliance {
 
     function created(address to, uint256 amount) external override {
         _balances[to] = MpcCore.add(_balanceOf(to), MpcCore.setPublic256(amount));
+        _createdBalances[to] += amount;
         MpcCore.permitThis(_balances[to]);
         emit CreatedCalled(to, amount);
     }
@@ -104,8 +110,26 @@ contract MockPrivateModularCompliance is IPrivateModularCompliance {
     function destroyed(address from, uint256 amount) external override {
         (, gtUint256 newBalance) = MpcCore.checkedSubWithOverflowBit(_balanceOf(from), MpcCore.setPublic256(amount));
         _balances[from] = newBalance;
+        if (_createdBalances[from] >= amount) {
+            _createdBalances[from] -= amount;
+        } else {
+            _createdBalances[from] = 0;
+        }
         MpcCore.permitThis(newBalance);
         emit DestroyedCalled(from, amount);
+    }
+
+    function canCreate(address to, uint256 amount) external view override returns (bool) {
+        if (!_transferAllowed) {
+            return false;
+        }
+        if (_transferLimitEnabled && amount > _maxTransferAmount) {
+            return false;
+        }
+        if (!_maxBalanceEnabled[to]) {
+            return true;
+        }
+        return _createdBalances[to] + amount <= _maxBalances[to];
     }
 
     function canTransfer(address, address to, gtUint256 amount) external override returns (gtBool) {

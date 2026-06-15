@@ -236,13 +236,11 @@ contract PrivateERC3643ERC20Contract256 is PrivateERC20Wrapper256Base, IPrivateE
         return _getPrivateERC3643ERC20Contract256Storage().frozenTokens[userAddress];
     }
 
-    function _beforeShield(address account, uint256 amount) internal override {
+    function _beforeShield(address account, uint256 amount) internal view override {
         PrivateERC3643ERC20Contract256Storage storage $ = _getPrivateERC3643ERC20Contract256Storage();
         require(!$.frozen[account], "wallet is frozen");
         require($.identityRegistry.isVerified(account), "Identity is not verified.");
-        gtUint256 amountGt = MpcCore.setPublic256(amount);
-        MpcCore.permitTransient(amountGt, address($.compliance));
-        $.compliance.canTransfer(address(0), account, amountGt);
+        require($.compliance.canCreate(account, amount), "Compliance not followed");
     }
 
     function _afterShield(address account, uint256 amount) internal override {

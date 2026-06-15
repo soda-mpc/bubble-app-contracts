@@ -19,6 +19,8 @@ dotenv.config();
 const ARBITRUM_SEPOLIA_CHAIN_ID = 421614n;
 const PROXY_URL = process.env.PROXY_URL || "https://proxy.bubble.sodalabs.net";
 const ERC3643_FQN = "contracts/erc3643/PrivateERC3643ERC20Contract256.sol:PrivateERC3643ERC20Contract256";
+const CLEAR_TRANSFER_TOPIC = hre.ethers.id("Transfer(address,address,uint256)");
+const PRIVATE_TRANSFER_TOPIC = hre.ethers.id("Transfer(address,address)");
 
 async function createPrivateERC3643WrapperViaFactory(params: {
   owner: any;
@@ -57,6 +59,57 @@ async function createPrivateERC3643WrapperViaFactory(params: {
   expect(await erc3643Factory.totalTokensCreated()).to.equal(1n);
 
   return Factory.attach(tokenAddress) as any;
+}
+
+async function expectComplianceDeniedShieldWithoutSideEffects(params: {
+  privateToken: any;
+  compliance: any;
+  mockToken: any;
+  ownerAddress: string;
+  amount: bigint;
+}) {
+  const { privateToken, compliance, mockToken, ownerAddress, amount } = params;
+  const privateTokenAddress = await privateToken.getAddress();
+  const ownerUnderlyingBefore = await mockToken.balanceOf(ownerAddress);
+  const contractUnderlyingBefore = await mockToken.balanceOf(privateTokenAddress);
+  const totalSupplyBefore = await privateToken.totalSupply();
+  const createdBalanceBefore = await compliance.createdBalanceOf(ownerAddress);
+  const shieldEventsBefore = await privateToken.queryFilter(privateToken.filters.Shield(ownerAddress));
+  const createdEventsBefore = await compliance.queryFilter(compliance.filters.CreatedCalled(ownerAddress));
+
+  await expect(privateToken.shield(amount)).to.be.revertedWith("Compliance not followed");
+
+  expect(await mockToken.balanceOf(ownerAddress)).to.equal(ownerUnderlyingBefore);
+  expect(await mockToken.balanceOf(privateTokenAddress)).to.equal(contractUnderlyingBefore);
+  expect(await privateToken.totalSupply()).to.equal(totalSupplyBefore);
+  expect(await compliance.createdBalanceOf(ownerAddress)).to.equal(createdBalanceBefore);
+  expect((await privateToken.queryFilter(privateToken.filters.Shield(ownerAddress))).length)
+    .to.equal(shieldEventsBefore.length);
+  expect((await compliance.queryFilter(compliance.filters.CreatedCalled(ownerAddress))).length)
+    .to.equal(createdEventsBefore.length);
+}
+
+async function expectOnlyNoAmountTransferEvent(tx: Promise<any>, privateToken: any) {
+  const receipt = await (await tx).wait();
+  const privateTokenAddress = (await privateToken.getAddress()).toLowerCase();
+  const tokenLogs = receipt.logs.filter((log: any) => log.address.toLowerCase() === privateTokenAddress);
+  const clearTransferLogs = tokenLogs.filter((log: any) => log.topics[0] === CLEAR_TRANSFER_TOPIC);
+  const privateTransferLogs = tokenLogs.filter((log: any) => log.topics[0] === PRIVATE_TRANSFER_TOPIC);
+
+  expect(clearTransferLogs.length, "Unexpected clear-amount Transfer event").to.equal(0);
+  expect(privateTransferLogs.length, "Expected no-amount Transfer event").to.equal(1);
+  return receipt;
+}
+
+async function expectComplianceTransferredEvent(receipt: any, compliance: any) {
+  const complianceAddress = (await compliance.getAddress()).toLowerCase();
+  const transferredTopic = compliance.interface.getEvent("TransferredCalled").topicHash;
+  expect(
+    receipt.logs.some(
+      (log: any) => log.address.toLowerCase() === complianceAddress && log.topics[0] === transferredTopic
+    ),
+    "Expected compliance transfer event"
+  ).to.equal(true);
 }
 
 describe("PrivateERC3643ERC20Contract256 E2E", function () {
@@ -129,6 +182,8 @@ describe("PrivateERC3643ERC20Contract256 E2E", function () {
     const allowedFrozenTransferAmount = 4n * 10n ** 18n;
     const allowedFrozenUnshieldAmount = 2n * 10n ** 18n;
     const blockedFrozenAmount = 9n * 10n ** 18n;
+    const deniedShieldMaxBalance = 10n * 10n ** 18n;
+    const deniedShieldTransferLimit = shieldAmount - 1n;
 
     await expect(privateToken.shield(shieldAmount)).to.be.revertedWith("Identity is not verified.");
 
@@ -147,6 +202,48 @@ describe("PrivateERC3643ERC20Contract256 E2E", function () {
       delayAfterApproveMs: 0,
     });
 
+    await expect(compliance.setMaxBalance(ownerAddress, deniedShieldMaxBalance))
+      .to.emit(compliance, "MaxBalanceSet")
+      .withArgs(ownerAddress, deniedShieldMaxBalance);
+    await expectComplianceDeniedShieldWithoutSideEffects({
+      privateToken,
+      compliance,
+      mockToken,
+      ownerAddress,
+      amount: shieldAmount,
+    });
+    await expect(compliance.clearMaxBalance(ownerAddress))
+      .to.emit(compliance, "MaxBalanceSet")
+      .withArgs(ownerAddress, 0n);
+
+    await expect(compliance.setTransferAllowed(false))
+      .to.emit(compliance, "TransferAllowedSet")
+      .withArgs(false);
+    await expectComplianceDeniedShieldWithoutSideEffects({
+      privateToken,
+      compliance,
+      mockToken,
+      ownerAddress,
+      amount: shieldAmount,
+    });
+    await expect(compliance.setTransferAllowed(true))
+      .to.emit(compliance, "TransferAllowedSet")
+      .withArgs(true);
+
+    await expect(compliance.setMaxTransferAmount(deniedShieldTransferLimit))
+      .to.emit(compliance, "MaxTransferAmountSet")
+      .withArgs(deniedShieldTransferLimit);
+    await expectComplianceDeniedShieldWithoutSideEffects({
+      privateToken,
+      compliance,
+      mockToken,
+      ownerAddress,
+      amount: shieldAmount,
+    });
+    await expect(compliance.clearMaxTransferAmount())
+      .to.emit(compliance, "MaxTransferAmountSet")
+      .withArgs(0n);
+
     await expect(privateToken.shield(shieldAmount))
       .to.emit(privateToken, "Shield")
       .withArgs(ownerAddress, shieldAmount)
@@ -155,6 +252,7 @@ describe("PrivateERC3643ERC20Contract256 E2E", function () {
 
     expect(await mockToken.balanceOf(await privateToken.getAddress())).to.equal(shieldAmount);
     expect(await privateToken.totalSupply()).to.equal(shieldAmount);
+    expect(await compliance.createdBalanceOf(ownerAddress)).to.equal(shieldAmount);
 
     const ownerPrivateAfterShield = await getPrivateTokenBalance({
       privateToken,
@@ -170,8 +268,11 @@ describe("PrivateERC3643ERC20Contract256 E2E", function () {
       .to.be.revertedWith("Transfer not possible");
 
     await (await identityRegistry.setVerified(recipientAddress, true)).wait();
-    await expect(privateToken["transfer(address,uint256)"](recipientAddress, transferAmount))
-      .to.emit(compliance, "TransferredCalled");
+    const allowedTransferReceipt = await expectOnlyNoAmountTransferEvent(
+      privateToken["transfer(address,uint256)"](recipientAddress, transferAmount),
+      privateToken
+    );
+    await expectComplianceTransferredEvent(allowedTransferReceipt, compliance);
 
     const recipientPrivateAfterTransfer = await getPrivateTokenBalance({
       privateToken,
@@ -192,8 +293,11 @@ describe("PrivateERC3643ERC20Contract256 E2E", function () {
     expect(ownerPrivateAfterTransfer).to.equal(shieldAmount - transferAmount);
 
     await (await compliance.setTransferAllowed(false)).wait();
-    await expect(privateToken["transfer(address,uint256)"](recipientAddress, 1n * 10n ** 18n))
-      .to.emit(compliance, "TransferredCalled");
+    const deniedTransferReceipt = await expectOnlyNoAmountTransferEvent(
+      privateToken["transfer(address,uint256)"](recipientAddress, 1n * 10n ** 18n),
+      privateToken
+    );
+    await expectComplianceTransferredEvent(deniedTransferReceipt, compliance);
 
     const recipientPrivateAfterDeniedTransfer = await getPrivateTokenBalance({
       privateToken,

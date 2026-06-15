@@ -254,7 +254,7 @@ contract PrivateERC20Wrapper256Base is
         gtUint256 requestedValue = MpcCore.setPublic256(value);
         if (msg.sender == to) {
             _effectivePrivateTransferAmount(msg.sender, to, requestedValue);
-            emit Transfer(msg.sender, to, value);
+            emit Transfer(msg.sender, to);
             gtBool selfTransferResult = MpcCore.setPublic(true);
             _afterPrivateTransfer(msg.sender, to, _zeroGt(), selfTransferResult);
             return selfTransferResult;
@@ -265,7 +265,7 @@ contract PrivateERC20Wrapper256Base is
         (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result) =
             MpcCore.transfer(fromBalance, toBalance, effectiveValue);
         _setNewBalances(msg.sender, to, newFromBalance, newToBalance);
-        emit Transfer(msg.sender, to, value);
+        emit Transfer(msg.sender, to);
         _afterPrivateTransfer(msg.sender, to, _calculateBalanceIncrease(toBalance, newToBalance), result);
         return result;
     }
@@ -310,7 +310,7 @@ contract PrivateERC20Wrapper256Base is
             MpcCore.permitThis(requestedValue);
             _effectivePrivateTransferAmount(from, to, requestedValue);
             gtBool hasSufficientAllowance = MpcCore.ge(allowanceValue, requestedValue);
-            emit Transfer(from, to, value);
+            emit Transfer(from, to);
             _afterPrivateTransfer(from, to, _zeroGt(), hasSufficientAllowance);
             return hasSufficientAllowance;
         }
@@ -321,7 +321,7 @@ contract PrivateERC20Wrapper256Base is
             MpcCore.transferWithAllowance(fromBalance, toBalance, effectiveValue, allowanceValue);
         _setApproveValue(from, msg.sender, newAllowance);
         _setNewBalances(from, to, newFromBalance, newToBalance);
-        emit Transfer(from, to, value);
+        emit Transfer(from, to);
         _afterPrivateTransfer(from, to, _calculateBalanceIncrease(toBalance, newToBalance), result);
         return result;
     }

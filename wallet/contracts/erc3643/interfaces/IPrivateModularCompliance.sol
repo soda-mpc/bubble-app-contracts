@@ -12,6 +12,7 @@ interface IPrivateModularCompliance {
     function transferred(address from, address to, gtUint256 amount) external;
     function created(address to, uint256 amount) external;
     function destroyed(address from, uint256 amount) external;
+    function canCreate(address to, uint256 amount) external view returns (bool);
     function canTransfer(address from, address to, gtUint256 amount) external returns (gtBool);
     function getTokenBound() external view returns (address);
 }
