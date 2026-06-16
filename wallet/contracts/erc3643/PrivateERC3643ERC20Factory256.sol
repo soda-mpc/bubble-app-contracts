@@ -13,6 +13,7 @@ contract PrivateERC3643ERC20Factory256 {
     error ZeroImplementationAddress();
     error ZeroIdentityRegistry();
     error ZeroCompliance();
+    error ZeroMaster();
 
     event TokenCreated(
         address indexed token,
@@ -23,6 +24,7 @@ contract PrivateERC3643ERC20Factory256 {
         address compliance,
         address onchainID,
         address creator,
+        address master,
         bool underlyingIsWrappedNative
     );
 
@@ -43,7 +45,7 @@ contract PrivateERC3643ERC20Factory256 {
         address compliance,
         address onchainID
     ) external returns (address token) {
-        return _createToken(name, symbol, underlying, false, identityRegistry, compliance, onchainID);
+        return _createToken(name, symbol, underlying, false, msg.sender, identityRegistry, compliance, onchainID);
     }
 
     function createToken(
@@ -55,7 +57,50 @@ contract PrivateERC3643ERC20Factory256 {
         address compliance,
         address onchainID
     ) external returns (address token) {
-        return _createToken(name, symbol, underlying, underlyingIsWrappedNative, identityRegistry, compliance, onchainID);
+        return _createToken(
+            name,
+            symbol,
+            underlying,
+            underlyingIsWrappedNative,
+            msg.sender,
+            identityRegistry,
+            compliance,
+            onchainID
+        );
+    }
+
+    function createToken(
+        string memory name,
+        string memory symbol,
+        address underlying,
+        address master,
+        address identityRegistry,
+        address compliance,
+        address onchainID
+    ) external returns (address token) {
+        return _createToken(name, symbol, underlying, false, master, identityRegistry, compliance, onchainID);
+    }
+
+    function createToken(
+        string memory name,
+        string memory symbol,
+        address underlying,
+        bool underlyingIsWrappedNative,
+        address master,
+        address identityRegistry,
+        address compliance,
+        address onchainID
+    ) external returns (address token) {
+        return _createToken(
+            name,
+            symbol,
+            underlying,
+            underlyingIsWrappedNative,
+            master,
+            identityRegistry,
+            compliance,
+            onchainID
+        );
     }
 
     function _createToken(
@@ -63,6 +108,7 @@ contract PrivateERC3643ERC20Factory256 {
         string memory symbol,
         address underlying,
         bool underlyingIsWrappedNative,
+        address master,
         address identityRegistry,
         address compliance,
         address onchainID
@@ -72,6 +118,7 @@ contract PrivateERC3643ERC20Factory256 {
         if (underlying == address(0)) revert ZeroUnderlyingAddress();
         if (identityRegistry == address(0)) revert ZeroIdentityRegistry();
         if (compliance == address(0)) revert ZeroCompliance();
+        if (master == address(0)) revert ZeroMaster();
 
         IERC20(underlying).totalSupply();
 
@@ -81,7 +128,7 @@ contract PrivateERC3643ERC20Factory256 {
             symbol,
             underlying,
             msg.sender,
-            msg.sender,
+            master,
             underlyingIsWrappedNative,
             identityRegistry,
             compliance,
@@ -103,6 +150,7 @@ contract PrivateERC3643ERC20Factory256 {
             compliance,
             onchainID,
             msg.sender,
+            master,
             underlyingIsWrappedNative
         );
     }

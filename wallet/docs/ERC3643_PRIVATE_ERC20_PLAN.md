@@ -61,6 +61,10 @@ The implementation should reuse the useful ERC-3643 controls without changing th
 - Add agent role behavior:
   - owner can add/remove agents
   - agents can pause/unpause and manage freezing
+- Add factory support for explicit wrapper `master` configuration:
+  - existing create overloads may default `master` to the creator for compatibility
+  - master-aware overloads must pass the requested `master` into the proxy initializer
+  - zero master is rejected
 - Add freeze behavior:
   - full wallet freeze blocks sending, receiving, shielding, and new unshield requests
   - partial freeze limits spendable encrypted balance

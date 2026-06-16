@@ -41,12 +41,13 @@ async function createPrivateERC3643WrapperViaFactory(params: {
   await waitForDeploymentConfirmation(erc3643Factory, hre);
 
   const createTx = await erc3643Factory[
-    "createToken(string,string,address,bool,address,address,address)"
+    "createToken(string,string,address,bool,address,address,address,address)"
   ](
     "Private Test USD",
     "pTUSD",
     underlying,
     false,
+    master,
     identityRegistry,
     compliance,
     hre.ethers.ZeroAddress
@@ -54,11 +55,16 @@ async function createPrivateERC3643WrapperViaFactory(params: {
   await createTx.wait();
 
   const events = await erc3643Factory.queryFilter(erc3643Factory.filters.TokenCreated());
-  const tokenAddress = events[events.length - 1].args.token;
+  const event = events[events.length - 1].args;
+  const tokenAddress = event.token;
+  expect(event.creator).to.equal(await owner.getAddress());
+  expect(event.master).to.equal(master);
   expect(await erc3643Factory.isCreatedByFactory(tokenAddress)).to.equal(true);
   expect(await erc3643Factory.totalTokensCreated()).to.equal(1n);
 
-  return Factory.attach(tokenAddress) as any;
+  const token = Factory.attach(tokenAddress) as any;
+  expect(await token.master()).to.equal(master);
+  return token;
 }
 
 async function expectComplianceDeniedShieldWithoutSideEffects(params: {
@@ -184,6 +190,7 @@ describe("PrivateERC3643ERC20Contract256 E2E", function () {
     const blockedFrozenAmount = 9n * 10n ** 18n;
     const deniedShieldMaxBalance = 10n * 10n ** 18n;
     const deniedShieldTransferLimit = shieldAmount - 1n;
+    const transferFromAmount = 1n * 10n ** 18n;
 
     await expect(privateToken.shield(shieldAmount)).to.be.revertedWith("Identity is not verified.");
 
@@ -490,5 +497,77 @@ describe("PrivateERC3643ERC20Contract256 E2E", function () {
         - allowedFrozenUnshieldAmount
         - unshieldAmount
       );
+
+    const masterAddress = await master.getAddress();
+    await (await privateToken["approve(address,uint256)"](masterAddress, transferFromAmount)).wait();
+
+    const ownerPrivateBeforeDeniedTransferFrom = await getPrivateTokenBalance({
+      privateToken,
+      address: ownerAddress,
+      signer: owner as any,
+      aesKey: ownerAesKey,
+      proxyUrl: PROXY_URL,
+    });
+    const recipientPrivateBeforeDeniedTransferFrom = await getPrivateTokenBalance({
+      privateToken,
+      address: recipientAddress,
+      signer: recipient,
+      aesKey: recipientAesKey,
+      proxyUrl: PROXY_URL,
+    });
+
+    await (await compliance.setTransferAllowed(false)).wait();
+    const deniedTransferFromReceipt = await expectOnlyNoAmountTransferEvent(
+      privateToken
+        .connect(master)
+        ["transferFrom(address,address,uint256)"](ownerAddress, recipientAddress, transferFromAmount),
+      privateToken
+    );
+    await expectComplianceTransferredEvent(deniedTransferFromReceipt, compliance);
+
+    const ownerPrivateAfterDeniedTransferFrom = await getPrivateTokenBalance({
+      privateToken,
+      address: ownerAddress,
+      signer: owner as any,
+      aesKey: ownerAesKey,
+      proxyUrl: PROXY_URL,
+    });
+    const recipientPrivateAfterDeniedTransferFrom = await getPrivateTokenBalance({
+      privateToken,
+      address: recipientAddress,
+      signer: recipient,
+      aesKey: recipientAesKey,
+      proxyUrl: PROXY_URL,
+    });
+    expect(ownerPrivateAfterDeniedTransferFrom).to.equal(ownerPrivateBeforeDeniedTransferFrom);
+    expect(recipientPrivateAfterDeniedTransferFrom).to.equal(recipientPrivateBeforeDeniedTransferFrom);
+
+    await (await compliance.setTransferAllowed(true)).wait();
+    const allowedTransferFromReceipt = await expectOnlyNoAmountTransferEvent(
+      privateToken
+        .connect(master)
+        ["transferFrom(address,address,uint256)"](ownerAddress, recipientAddress, transferFromAmount),
+      privateToken
+    );
+    await expectComplianceTransferredEvent(allowedTransferFromReceipt, compliance);
+
+    const ownerPrivateAfterAllowedTransferFrom = await getPrivateTokenBalance({
+      privateToken,
+      address: ownerAddress,
+      signer: owner as any,
+      aesKey: ownerAesKey,
+      proxyUrl: PROXY_URL,
+    });
+    const recipientPrivateAfterAllowedTransferFrom = await getPrivateTokenBalance({
+      privateToken,
+      address: recipientAddress,
+      signer: recipient,
+      aesKey: recipientAesKey,
+      proxyUrl: PROXY_URL,
+    });
+    expect(ownerPrivateAfterAllowedTransferFrom)
+      .to.equal(ownerPrivateBeforeDeniedTransferFrom - transferFromAmount);
+    expect(recipientPrivateAfterAllowedTransferFrom)
+      .to.equal(recipientPrivateBeforeDeniedTransferFrom + transferFromAmount);
   });
 });
