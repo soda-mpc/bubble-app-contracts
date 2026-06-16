@@ -61,6 +61,7 @@ The implementation should reuse the useful ERC-3643 controls without changing th
 - Add agent role behavior:
   - owner can add/remove agents
   - agents can pause/unpause and manage freezing
+  - agents can perform auditable forced transfers for legal/compliance enforcement
 - Add factory support for explicit wrapper `master` configuration:
   - existing create overloads may default `master` to the creator for compatibility
   - master-aware overloads must pass the requested `master` into the proxy initializer
@@ -303,6 +304,33 @@ Effects:
 - emit the no-amount `Transfer(from, to)` event for both clear and encrypted transfer entrypoints
 - do not emit `Transfer(from, to, requestedAmount)` because compliance and partial-freeze checks can turn the effective transfer into zero without a synchronous clear result
 
+### Forced Transfers
+
+Forced transfers are agent-only enforcement operations intended for legal/compliance situations, such as a court order.
+
+Requirements:
+
+- contract not paused
+- caller is an agent
+- `from` and `to` are non-zero and distinct
+- requested amount is greater than zero
+- recipient wallet is not frozen
+- recipient identity is verified
+
+Semantics:
+
+- the requested amount is public
+- the actual moved amount is computed privately as `min(balanceOf(from), requestedAmount)`
+- source full-freeze does not block forced transfer
+- source partial-frozen accounting is capped down if the forced transfer leaves source balance below the previous frozen amount
+- compliance is notified with the encrypted actual amount
+- a no-amount `Transfer(from, to)` event is emitted
+- `ForcedTransferRequested(requestId, from, to, requestedAmount, actualAmountHandle)` is emitted immediately
+- MPC decrypts the actual moved amount asynchronously
+- `ForcedTransferFinalized(requestId, from, to, actualAmount)` emits the public final result
+
+This intentionally avoids emitting the requested amount as if it were the actual moved amount. If the source wallet has less than requested, the finalized event reveals the actual amount moved.
+
 ### Approvals
 
 Requirements:
@@ -374,7 +402,6 @@ The existing `IPrivateToken` includes methods that are intentionally out of scop
 - `burn`
 - `batchMint`
 - `batchBurn`
-- `forcedTransfer`
 - `recoveryAddress`
 
 Recommended interface approach:
@@ -386,6 +413,7 @@ Recommended interface approach:
    - pause/unpause
    - agent management
    - freeze management
+   - auditable forced transfer
    - transfer/approval functions already supported by the wrapper
 3. Do not claim full `IPrivateToken` compatibility until unsupported methods have an agreed policy.
 
@@ -506,7 +534,7 @@ Tasks:
    - partial freeze
    - existing encrypted balance/transfer/approval methods
    - shield/unshield methods
-4. Explicitly omit arbitrary issuer mint, burn, forced transfer, and recovery methods.
+4. Explicitly omit arbitrary issuer mint, burn, and recovery methods.
 
 ### Phase 3: Implement ERC-3643 State And Admin
 

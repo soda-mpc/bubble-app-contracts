@@ -118,6 +118,31 @@ async function expectComplianceTransferredEvent(receipt: any, compliance: any) {
   ).to.equal(true);
 }
 
+async function waitForForcedTransferFinalized(
+  privateToken: any,
+  requestId: bigint,
+  startBlock: number,
+  options: { timeoutMs?: number; pollIntervalMs?: number } = {}
+) {
+  const { timeoutMs = 180000, pollIntervalMs = 5000 } = options;
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < timeoutMs) {
+    const currentBlock = await hre.ethers.provider.getBlockNumber();
+    const events = await privateToken.queryFilter(
+      privateToken.filters.ForcedTransferFinalized(requestId),
+      startBlock,
+      currentBlock
+    );
+    if (events.length > 0) {
+      return events[events.length - 1];
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+
+  throw new Error(`Timed out waiting for ForcedTransferFinalized(${requestId})`);
+}
+
 describe("PrivateERC3643ERC20Contract256 E2E", function () {
   this.timeout(900000);
 
@@ -191,6 +216,7 @@ describe("PrivateERC3643ERC20Contract256 E2E", function () {
     const deniedShieldMaxBalance = 10n * 10n ** 18n;
     const deniedShieldTransferLimit = shieldAmount - 1n;
     const transferFromAmount = 1n * 10n ** 18n;
+    const forcedTransferRequestAmount = 100n * 10n ** 18n;
 
     await expect(privateToken.shield(shieldAmount)).to.be.revertedWith("Identity is not verified.");
 
@@ -569,5 +595,70 @@ describe("PrivateERC3643ERC20Contract256 E2E", function () {
       .to.equal(ownerPrivateBeforeDeniedTransferFrom - transferFromAmount);
     expect(recipientPrivateAfterAllowedTransferFrom)
       .to.equal(recipientPrivateBeforeDeniedTransferFrom + transferFromAmount);
+
+    await (await privateToken.setAddressFrozen(recipientAddress, true)).wait();
+    const ownerPrivateBeforeForcedTransfer = await getPrivateTokenBalance({
+      privateToken,
+      address: ownerAddress,
+      signer: owner as any,
+      aesKey: ownerAesKey,
+      proxyUrl: PROXY_URL,
+    });
+    const recipientPrivateBeforeForcedTransfer = await getPrivateTokenBalance({
+      privateToken,
+      address: recipientAddress,
+      signer: recipient,
+      aesKey: recipientAesKey,
+      proxyUrl: PROXY_URL,
+    });
+    expect(recipientPrivateBeforeForcedTransfer).to.be.lessThan(forcedTransferRequestAmount);
+
+    const forcedTransferStartBlock = await hre.ethers.provider.getBlockNumber();
+    const forcedTransferTx = await privateToken.forcedTransfer(
+      recipientAddress,
+      ownerAddress,
+      forcedTransferRequestAmount
+    );
+    const forcedTransferReceipt = await forcedTransferTx.wait();
+    const forcedTransferRequestedEvents = forcedTransferReceipt.logs
+      .map((log: any) => {
+        try {
+          return privateToken.interface.parseLog(log);
+        } catch {
+          return null;
+        }
+      })
+      .filter((event: any) => event?.name === "ForcedTransferRequested");
+    expect(forcedTransferRequestedEvents.length, "Expected forced transfer request event").to.equal(1);
+    const forcedTransferRequestId = forcedTransferRequestedEvents[0].args.requestId;
+    expect(forcedTransferRequestedEvents[0].args.from).to.equal(recipientAddress);
+    expect(forcedTransferRequestedEvents[0].args.to).to.equal(ownerAddress);
+    expect(forcedTransferRequestedEvents[0].args.requestedAmount).to.equal(forcedTransferRequestAmount);
+
+    await expectComplianceTransferredEvent(forcedTransferReceipt, compliance);
+    const forcedTransferFinalized = await waitForForcedTransferFinalized(
+      privateToken,
+      forcedTransferRequestId,
+      forcedTransferStartBlock
+    );
+    expect(forcedTransferFinalized.args.actualAmount).to.equal(recipientPrivateBeforeForcedTransfer);
+
+    const ownerPrivateAfterForcedTransfer = await getPrivateTokenBalance({
+      privateToken,
+      address: ownerAddress,
+      signer: owner as any,
+      aesKey: ownerAesKey,
+      proxyUrl: PROXY_URL,
+    });
+    const recipientPrivateAfterForcedTransfer = await getPrivateTokenBalance({
+      privateToken,
+      address: recipientAddress,
+      signer: recipient,
+      aesKey: recipientAesKey,
+      proxyUrl: PROXY_URL,
+    });
+    expect(ownerPrivateAfterForcedTransfer)
+      .to.equal(ownerPrivateBeforeForcedTransfer + recipientPrivateBeforeForcedTransfer);
+    expect(recipientPrivateAfterForcedTransfer).to.equal(0n);
   });
 });

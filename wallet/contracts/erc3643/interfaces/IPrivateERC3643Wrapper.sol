@@ -20,6 +20,19 @@ interface IPrivateERC3643Wrapper {
     event AddressFrozen(address indexed userAddress, bool indexed isFrozen, address indexed owner);
     event TokensFrozen(address indexed userAddress, gtUint256 amount);
     event TokensUnfrozen(address indexed userAddress, gtUint256 amount);
+    event ForcedTransferRequested(
+        uint256 indexed requestId,
+        address indexed from,
+        address indexed to,
+        uint256 requestedAmount,
+        gtUint256 actualAmount
+    );
+    event ForcedTransferFinalized(
+        uint256 indexed requestId,
+        address indexed from,
+        address indexed to,
+        uint256 actualAmount
+    );
 
     function setName(string calldata name_) external;
     function setSymbol(string calldata symbol_) external;
@@ -32,6 +45,7 @@ interface IPrivateERC3643Wrapper {
     function setAddressFrozen(address userAddress, bool freeze) external;
     function freezePartialTokens(address userAddress, itUint256 calldata it) external;
     function unfreezePartialTokens(address userAddress, itUint256 calldata it) external;
+    function forcedTransfer(address from, address to, uint256 amount) external returns (bool);
     function identityRegistry() external view returns (IPrivateIdentityRegistry);
     function compliance() external view returns (IPrivateModularCompliance);
     function onchainID() external view returns (address);

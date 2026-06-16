@@ -18,7 +18,7 @@ interface IBaseWrappedNative is IERC20 {
 /// @notice Reduced private ERC20 wrapper base with shield/unshield and encrypted ERC20-style balances.
 /// @dev This base intentionally excludes OPRF functionality. Feature contracts should add their own
 ///      ERC-7201 storage namespaces instead of inheriting direct-storage implementation contracts.
-contract PrivateERC20Wrapper256Base is
+abstract contract PrivateERC20Wrapper256Base is
     DecryptionCaller,
     UUPSUpgradeable,
     Ownable2StepUpgradeable,
@@ -64,52 +64,6 @@ contract PrivateERC20Wrapper256Base is
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
-    }
-
-    function initialize(
-        string memory name_,
-        string memory symbol_,
-        address underlying_,
-        address owner_,
-        address master_
-    ) public initializer {
-        _initializePrivateERC20Wrapper256Base(name_, symbol_, underlying_, owner_, master_, false);
-    }
-
-    function initialize(
-        string memory name_,
-        string memory symbol_,
-        address underlying_,
-        address owner_,
-        address master_,
-        bool underlyingIsWrappedNative_
-    ) public initializer {
-        _initializePrivateERC20Wrapper256Base(
-            name_,
-            symbol_,
-            underlying_,
-            owner_,
-            master_,
-            underlyingIsWrappedNative_
-        );
-    }
-
-    function initializeWithWrappedNative(
-        string memory name_,
-        string memory symbol_,
-        address underlying_,
-        address owner_,
-        address master_,
-        bool underlyingIsWrappedNative_
-    ) public initializer {
-        _initializePrivateERC20Wrapper256Base(
-            name_,
-            symbol_,
-            underlying_,
-            owner_,
-            master_,
-            underlyingIsWrappedNative_
-        );
     }
 
     function _initializePrivateERC20Wrapper256Base(

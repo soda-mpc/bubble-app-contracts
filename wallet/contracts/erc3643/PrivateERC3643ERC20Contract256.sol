@@ -21,6 +21,13 @@ contract PrivateERC3643ERC20Contract256 is PrivateERC20Wrapper256Base, IPrivateE
         mapping(address => bool) frozen;
         mapping(address => gtUint256) frozenTokens;
         mapping(uint256 => address) unshieldRequestUsers;
+        mapping(uint256 => ForcedTransferRequest) forcedTransferRequests;
+    }
+
+    struct ForcedTransferRequest {
+        address from;
+        address to;
+        uint256 requestedAmount;
     }
 
     // keccak256(abi.encode(uint256(keccak256("bubble.storage.PrivateERC3643ERC20Contract256")) - 1)) & ~bytes32(uint256(0xff))
@@ -174,6 +181,58 @@ contract PrivateERC3643ERC20Contract256 is PrivateERC20Wrapper256Base, IPrivateE
         _unfreezePartialTokensGt(userAddress, amount);
     }
 
+    function forcedTransfer(address from, address to, uint256 amount)
+        external
+        override
+        onlyAgent
+        whenNotPaused
+        returns (bool)
+    {
+        require(from != address(0), "ERC20: transfer from the zero address");
+        require(to != address(0), "ERC20: transfer to the zero address");
+        require(from != to, "ERC20: forced transfer to self");
+        require(amount > 0, "Amount must be greater than 0");
+
+        PrivateERC3643ERC20Contract256Storage storage $ = _getPrivateERC3643ERC20Contract256Storage();
+        require(!$.frozen[to], "wallet is frozen");
+        require($.identityRegistry.isVerified(to), "Transfer not possible");
+
+        gtUint256 requestedAmount = MpcCore.setPublic256(amount);
+        gtUint256 actualAmount = _applyForcedTransfer(from, to, requestedAmount);
+
+        MpcCore.permitTransient(actualAmount, address($.compliance));
+        $.compliance.transferred(from, to, actualAmount);
+
+        uint256 decryptID = decryptCounter;
+        $.forcedTransferRequests[decryptID] = ForcedTransferRequest({
+            from: from,
+            to: to,
+            requestedAmount: amount
+        });
+
+        uint256[] memory handles = new uint256[](1);
+        handles[0] = gtUint256.unwrap(actualAmount);
+        requestDecryption(handles, this.callbackForcedTransfer.selector);
+
+        emit Transfer(from, to);
+        emit ForcedTransferRequested(decryptID, from, to, amount, actualAmount);
+        return true;
+    }
+
+    function callbackForcedTransfer(uint256 decryptID, bytes[] calldata output, bytes[] calldata signatures)
+        external
+        nonReentrant
+        verifyCallback(decryptID, output, signatures)
+    {
+        PrivateERC3643ERC20Contract256Storage storage $ = _getPrivateERC3643ERC20Contract256Storage();
+        ForcedTransferRequest memory request = $.forcedTransferRequests[decryptID];
+        require(request.from != address(0), "Invalid forced transfer request ID");
+
+        uint256 actualAmount = abi.decode(output[0], (uint256));
+        emit ForcedTransferFinalized(decryptID, request.from, request.to, actualAmount);
+        delete $.forcedTransferRequests[decryptID];
+    }
+
     function _freezePartialTokensGt(address userAddress, gtUint256 amount) internal {
         PrivateERC3643ERC20Contract256Storage storage $ = _getPrivateERC3643ERC20Contract256Storage();
         gtUint256 currentFrozen = _normalizedFrozen(userAddress);
@@ -205,6 +264,47 @@ contract PrivateERC3643ERC20Contract256 is PrivateERC20Wrapper256Base, IPrivateE
         MpcCore.permit(actualUnfrozen, userAddress);
         MpcCore.permit(actualUnfrozen, msg.sender);
         emit TokensUnfrozen(userAddress, actualUnfrozen);
+    }
+
+    function _applyForcedTransfer(address from, address to, gtUint256 requestedAmount)
+        internal
+        returns (gtUint256 actualAmount)
+    {
+        gtUint256 fromBalance = _balanceOf(from);
+        gtUint256 toBalance = _balanceOf(to);
+        (gtBool insufficientBalance, gtUint256 newFromCandidate) =
+            MpcCore.checkedSubWithOverflowBit(fromBalance, requestedAmount);
+
+        actualAmount = MpcCore.mux(insufficientBalance, requestedAmount, fromBalance);
+        gtUint256 newFromBalance = MpcCore.mux(insufficientBalance, newFromCandidate, _zeroGt());
+        gtUint256 newToBalance = MpcCore.add(toBalance, actualAmount);
+
+        _setNewBalances(from, to, newFromBalance, newToBalance);
+        _capFrozenTokensAfterForcedTransfer(from, newFromBalance);
+
+        MpcCore.permitThis(actualAmount);
+        MpcCore.permit(actualAmount, from);
+        MpcCore.permit(actualAmount, to);
+        MpcCore.permit(actualAmount, msg.sender);
+    }
+
+    function _capFrozenTokensAfterForcedTransfer(address from, gtUint256 newFromBalance) internal {
+        PrivateERC3643ERC20Contract256Storage storage $ = _getPrivateERC3643ERC20Contract256Storage();
+        gtUint256 currentFrozen = _normalizedFrozen(from);
+        (gtBool frozenExceedsBalance, ) = MpcCore.checkedSubWithOverflowBit(newFromBalance, currentFrozen);
+        gtUint256 newFrozen = MpcCore.mux(frozenExceedsBalance, currentFrozen, newFromBalance);
+        (gtBool unfreezeUnderflow, gtUint256 actualUnfrozenCandidate) =
+            MpcCore.checkedSubWithOverflowBit(currentFrozen, newFrozen);
+        gtUint256 actualUnfrozen = MpcCore.mux(unfreezeUnderflow, actualUnfrozenCandidate, _zeroGt());
+
+        $.frozenTokens[from] = newFrozen;
+        MpcCore.permitThis(newFrozen);
+        MpcCore.permit(newFrozen, from);
+        MpcCore.permit(newFrozen, msg.sender);
+        MpcCore.permitThis(actualUnfrozen);
+        MpcCore.permit(actualUnfrozen, from);
+        MpcCore.permit(actualUnfrozen, msg.sender);
+        emit TokensUnfrozen(from, actualUnfrozen);
     }
 
     function identityRegistry() external view override returns (IPrivateIdentityRegistry) {
