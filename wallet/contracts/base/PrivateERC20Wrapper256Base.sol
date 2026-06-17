@@ -345,10 +345,6 @@ abstract contract PrivateERC20Wrapper256Base is
         return _unshieldTo(privateAmount, msg.sender);
     }
 
-    function unshieldForMaster(uint256 privateAmount) public virtual whenNotPaused returns (bool) {
-        return _unshieldTo(privateAmount, _getPrivateERC20Wrapper256BaseStorage().master);
-    }
-
     function callbackUnshield(uint256 decryptID, bytes[] calldata output, bytes[] calldata signatures)
         public
         virtual
