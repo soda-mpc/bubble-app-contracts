@@ -1,0 +1,29 @@
+{
+  "network": "polygon",
+  "chainId": 137,
+  "deployedAt": "unknown",
+  "testToken": {
+    "address": "0x48488bF61dc34F848546C698b10d5954334db70e",
+    "name": "Test USDC",
+    "symbol": "TUSDC",
+    "decimals": 18,
+    "blockNumber": 88716874
+  },
+  "privateERC20WithRestrictionList": {
+    "implementation": "0xFd4f1C39D1f95EE691Cd3Ee76426832c110893cf",
+    "implementationBlockNumber": 88716876,
+    "factory": "0xF44fb69946E679aF9D017FB2299DF5b47D94CD22",
+    "factoryBlockNumber": 88716877
+  },
+  "restrictionListRegistryFactory": {
+    "address": "0xfeB685Ee0e11C2020f35c5d4Dc1A2B07b424d3B5",
+    "blockNumber": 88716878
+  },
+  "privateToken": {
+    "address": "0x7bcA72959D58A9632929d69E6CEbEb07D70d7049",
+    "name": "Private TUSDC",
+    "symbol": "pTUSDC",
+    "underlying": "0x48488bF61dc34F848546C698b10d5954334db70e",
+    "blockNumber": 88716879
+  }
+}

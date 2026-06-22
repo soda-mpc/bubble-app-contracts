@@ -4,12 +4,7 @@
  * Usage:
  *   npx hardhat run scripts/verify-contracts.ts --network <network> [deployment.json]
  *
- * If no file is given, reads from deployment.json in the script directory.
- * You can save the JSON output from setup-environment.ts to a file and pass it:
- *
- *   npx hardhat run scripts/setup-environment.ts --network sepolia-arbitrum | tee deployment.json
- *   # Edit deployment.json to keep only the JSON object, then:
- *   npx hardhat run scripts/verify-contracts.ts --network sepolia-arbitrum deployment.json
+ * If no file is given, reads from scripts/deployments/<network>.json.
  *
  * Prerequisites (from VERIFICATION.md):
  *   - GCACLAddress.sol and GCHandlerAddress.sol use correct addresses for the network
@@ -17,9 +12,9 @@
  */
 
 import * as fs from "fs";
-import * as path from "path";
 import { ethers, run } from "hardhat";
 import { DeploymentResult } from "./deployment-types";
+import { loadDeploymentResult, resolveDeploymentPath } from "./deployment-io";
 
 function parseDeploymentPathArg(): string | undefined {
   const maybePath = process.argv.slice(2).find((arg) => !arg.startsWith("-"));
@@ -32,7 +27,7 @@ function assertAddress(value: string, field: string): void {
   }
 }
 
-function validateDeployment(json: DeploymentResult): void {
+function validateDeployment(json: DeploymentResult, networkName: string): void {
   if (!json?.testToken?.address || !json?.privateERC20WithRestrictionList?.implementation) {
     throw new Error("Invalid deployment JSON: missing testToken or privateERC20WithRestrictionList");
   }
@@ -43,14 +38,21 @@ function validateDeployment(json: DeploymentResult): void {
   assertAddress(json.restrictionListRegistryFactory.address, "restrictionListRegistryFactory.address");
   assertAddress(json.privateToken.address, "privateToken.address");
   assertAddress(json.privateToken.underlying, "privateToken.underlying");
-}
 
-function loadDeployment(filePath: string): DeploymentResult {
-  const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
-  const raw = fs.readFileSync(resolved, "utf-8");
-  const json = JSON.parse(raw) as DeploymentResult;
-  validateDeployment(json);
-  return json;
+  if (
+    json.privateToken.address.toLowerCase() ===
+    json.privateERC20WithRestrictionList.implementation.toLowerCase()
+  ) {
+    throw new Error(
+      "Deployment JSON looks corrupted: privateToken.address equals implementation address. Re-run setup-environment.ts for this network."
+    );
+  }
+
+  if (json.network && json.network !== networkName) {
+    console.warn(
+      `Warning: deployment file network (${json.network}) does not match --network (${networkName}).`
+    );
+  }
 }
 
 async function retryWithBackoff<T>(
@@ -100,48 +102,60 @@ async function verify(
 }
 
 async function main(): Promise<number> {
-  // Hardhat run can pass extra args after script path; support env or positional arg.
-  const pathArg = parseDeploymentPathArg();
-  const jsonPath =
-    pathArg ||
-    process.env.DEPLOYMENT_JSON ||
-    path.join(process.cwd(), "deployment.json");
+  const networkName = process.env.HARDHAT_NETWORK ?? "unknown";
+  const jsonPath = resolveDeploymentPath(parseDeploymentPathArg(), networkName);
 
   if (!fs.existsSync(jsonPath)) {
     console.error("Usage: npx hardhat run scripts/verify-contracts.ts --network <network> [deployment.json]");
     console.error("       (optional) DEPLOYMENT_JSON=/path/to/deployment.json if no positional arg");
     console.error("Missing deployment file:", jsonPath);
-    console.error("Run setup-environment.ts, save the JSON output to deployment.json (or set DEPLOYMENT_JSON), then re-run.");
+    console.error("Run setup-environment.ts for this network first. It writes scripts/deployments/<network>.json.");
     return 1;
   }
 
-  const deployment = loadDeployment(jsonPath);
-  const networkName = process.env.HARDHAT_NETWORK ?? "unknown";
+  const deployment = loadDeploymentResult(jsonPath);
+  validateDeployment(deployment, networkName);
+
+  const { chainId } = await ethers.provider.getNetwork();
+  if (deployment.chainId && Number(chainId) !== deployment.chainId) {
+    throw new Error(
+      `Deployment file chainId (${deployment.chainId}) does not match connected network (${chainId}).`
+    );
+  }
 
   console.log("\n=== Contract Verification ===\n");
   console.log(`Network: ${networkName}`);
-  console.log(`Deployment file: ${jsonPath}\n`);
+  console.log(`Deployment file: ${jsonPath}`);
+  if (deployment.deployedAt) {
+    console.log(`Deployed at: ${deployment.deployedAt}`);
+  }
+  console.log("");
 
   const targets: Array<{ name: string; address: string; constructorArguments?: unknown[]; contract?: string }> = [
     {
       name: "TUSDC (Test Token)",
       address: deployment.testToken.address,
       constructorArguments: [deployment.testToken.name, deployment.testToken.symbol],
+      contract: "contracts/TUSDC.sol:TUSDC",
     },
     {
       name: "PrivateERC20WithRestrictionList256 (Implementation)",
       address: deployment.privateERC20WithRestrictionList.implementation,
       constructorArguments: [],
+      contract: "contracts/with-restrictions/PrivateERC20WithRestrictionList256.sol:PrivateERC20WithRestrictionList256",
     },
     {
       name: "PrivateERC20WithRestrictionListFactory256 (Factory)",
       address: deployment.privateERC20WithRestrictionList.factory,
       constructorArguments: [deployment.privateERC20WithRestrictionList.implementation],
+      contract:
+        "contracts/with-restrictions/PrivateERC20WithRestrictionListFactory256.sol:PrivateERC20WithRestrictionListFactory256",
     },
     {
       name: "RestrictionListRegistryFactory",
       address: deployment.restrictionListRegistryFactory.address,
       constructorArguments: [],
+      contract: "contracts/with-restrictions/RestrictionListRegistryFactory.sol:RestrictionListRegistryFactory",
     },
   ];
 
@@ -161,11 +175,13 @@ async function main(): Promise<number> {
   return fail > 0 ? 1 : 0;
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-}).then((code) => {
-  if (typeof code === "number") {
-    process.exit(code);
-  }
-});
+main()
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  })
+  .then((code) => {
+    if (typeof code === "number") {
+      process.exit(code);
+    }
+  });

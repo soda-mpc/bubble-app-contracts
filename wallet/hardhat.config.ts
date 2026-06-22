@@ -7,8 +7,6 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY || "";
-const QUICKNODE_ARBITRUM_SEPOLIA_URL = process.env.QUICKNODE_ARBITRUM_SEPOLIA_URL || "";
-const QUICKNODE_ARBITRUM_MAINNET_URL = process.env.QUICKNODE_ARBITRUM_MAINNET_URL || "";
 /** Etherscan-compatible API key (World Sepolia / worldscan uses the same pattern). */
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
 
@@ -49,7 +47,7 @@ const config: HardhatUserConfig = {
         },
         "sepolia-arbitrum": {
             chainId: 421614,
-            url: QUICKNODE_ARBITRUM_SEPOLIA_URL,
+            url: `https://arb-sepolia.g.alchemy.com/v2/${ALCHEMY_API_KEY}`,
             accounts: {
                 mnemonic: process.env.MNEMONIC || ""
             },
@@ -59,7 +57,7 @@ const config: HardhatUserConfig = {
         },
         "arbitrum": {
             chainId: 42161,
-            url: QUICKNODE_ARBITRUM_MAINNET_URL,
+            url: `https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`,
             accounts: {
                 mnemonic: process.env.MNEMONIC || ""
             },

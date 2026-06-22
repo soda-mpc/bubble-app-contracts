@@ -1,61 +1,7 @@
-import { artifacts, ethers } from "hardhat";
+import { ethers } from "hardhat";
+import { deployContractWithSizeInfo } from "./deploy-utils";
 import { DeploymentResult } from "./deployment-types";
-
-interface DeployedContractInfo {
-  contract: any;
-  address: string;
-  blockNumber: number;
-}
-
-async function getContractSizeInfo(contractName: string) {
-  const artifact = await artifacts.readArtifact(contractName);
-  const initCodeBytes = Math.max(0, (artifact.bytecode.length - 2) / 2);
-  const runtimeCodeBytes = Math.max(0, (artifact.deployedBytecode.length - 2) / 2);
-  const codeDepositGas = runtimeCodeBytes * 200;
-  const initCodeGas = Math.ceil(initCodeBytes / 32) * 2;
-
-  return {
-    initCodeBytes,
-    runtimeCodeBytes,
-    codeDepositGas,
-    initCodeGas,
-  };
-}
-
-async function waitForDeploymentAndBlock(contract: any): Promise<{ address: string; blockNumber: number }> {
-  const deployTx = contract.deploymentTransaction();
-  if (deployTx) {
-    const receipt = await deployTx.wait(1);
-    return {
-      address: await contract.getAddress(),
-      blockNumber: receipt?.blockNumber || 0,
-    };
-  }
-
-  await contract.waitForDeployment();
-  return {
-    address: await contract.getAddress(),
-    blockNumber: await ethers.provider.getBlockNumber(),
-  };
-}
-
-async function deployWithSizeInfo(
-  contractName: string,
-  deployArgs: any[]
-): Promise<DeployedContractInfo> {
-  const sizeInfo = await getContractSizeInfo(contractName);
-  console.log(
-    `   Size: init ${sizeInfo.initCodeBytes} bytes, runtime ${sizeInfo.runtimeCodeBytes} bytes`
-  );
-  console.log(
-    `   Est. gas: code deposit ${sizeInfo.codeDepositGas}, initcode ${sizeInfo.initCodeGas}`
-  );
-
-  const Factory = await ethers.getContractFactory(contractName);
-  const contract = await Factory.deploy(...deployArgs);
-  const { address, blockNumber } = await waitForDeploymentAndBlock(contract);
-  return { contract, address, blockNumber };
-}
+import { getDeploymentFilePath, saveDeploymentResult } from "./deployment-io";
 
 async function main(): Promise<DeploymentResult> {
   console.log("\n╔════════════════════════════════════════════════════════════╗");
@@ -79,12 +25,21 @@ async function main(): Promise<DeploymentResult> {
   const tokenSymbol = "TUSDC";
   const tokenDecimals = 18;
 
-  const { address: tusdcAddress, blockNumber: tusdcBlockNumber } = await deployWithSizeInfo(
-    "TUSDC",
-    [tokenName, tokenSymbol]
-  );
-  console.log(`   ✅ TUSDC deployed at: ${tusdcAddress}`);
-  console.log(`   📦 Block number: ${tusdcBlockNumber}\n`);
+  const configuredTusdcAddress = process.env.TUSDC_ADDRESS?.trim();
+  let tusdcAddress: string;
+  let tusdcBlockNumber: number;
+
+  if (configuredTusdcAddress) {
+    tusdcAddress = configuredTusdcAddress;
+    tusdcBlockNumber = 0;
+    console.log(`   ⏭️  Using existing TUSDC at: ${tusdcAddress}\n`);
+  } else {
+    const deployedTusdc = await deployContractWithSizeInfo("TUSDC", [tokenName, tokenSymbol]);
+    tusdcAddress = deployedTusdc.address;
+    tusdcBlockNumber = deployedTusdc.blockNumber;
+    console.log(`   ✅ TUSDC deployed at: ${tusdcAddress}`);
+    console.log(`   📦 Block number: ${tusdcBlockNumber}\n`);
+  }
 
   // ═══════════════════════════════════════════════════════════════
   // STEP 2: Deploy PrivateERC20WithRestrictionList256 Implementation
@@ -94,7 +49,7 @@ async function main(): Promise<DeploymentResult> {
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   const { address: privateERC20ImplAddress, blockNumber: privateERC20ImplBlockNumber } =
-    await deployWithSizeInfo("PrivateERC20WithRestrictionList256", []);
+    await deployContractWithSizeInfo("PrivateERC20WithRestrictionList256", []);
   console.log(`   ✅ Implementation deployed at: ${privateERC20ImplAddress}`);
   console.log(`   📦 Block number: ${privateERC20ImplBlockNumber}\n`);
 
@@ -109,7 +64,7 @@ async function main(): Promise<DeploymentResult> {
     contract: privateERC20Factory,
     address: privateERC20FactoryAddress,
     blockNumber: privateERC20FactoryBlockNumber,
-  } = await deployWithSizeInfo(
+  } = await deployContractWithSizeInfo(
     "PrivateERC20WithRestrictionListFactory256",
     [privateERC20ImplAddress]
   );
@@ -126,7 +81,7 @@ async function main(): Promise<DeploymentResult> {
   const {
     address: restrictionListFactoryAddress,
     blockNumber: restrictionListFactoryBlockNumber,
-  } = await deployWithSizeInfo("RestrictionListRegistryFactory", []);
+  } = await deployContractWithSizeInfo("RestrictionListRegistryFactory", []);
   console.log(`   ✅ Factory deployed at: ${restrictionListFactoryAddress}`);
   console.log(`   📦 Block number: ${restrictionListFactoryBlockNumber}\n`);
 
@@ -161,7 +116,7 @@ async function main(): Promise<DeploymentResult> {
           data: log.data
         });
         if (parsed?.name === "TokenCreated") {
-          privateTokenAddress = parsed.args[0]; // First arg is token address
+          privateTokenAddress = String(parsed.args.token);
           break;
         }
       } catch {
@@ -172,6 +127,12 @@ async function main(): Promise<DeploymentResult> {
   
   if (!privateTokenAddress) {
     throw new Error("Failed to extract private token address from event");
+  }
+
+  if (privateTokenAddress.toLowerCase() === privateERC20ImplAddress.toLowerCase()) {
+    throw new Error(
+      "Private token address matches implementation address; TokenCreated event parsing failed"
+    );
   }
   
   console.log(`   ✅ Private Token created at: ${privateTokenAddress}`);
@@ -205,9 +166,15 @@ async function main(): Promise<DeploymentResult> {
   console.log(`║   Block: ${privateTokenBlockNumber}                                                    ║`);
   console.log("╚════════════════════════════════════════════════════════════════════╝\n");
 
+  const network = await ethers.provider.getNetwork();
+  const networkName = process.env.HARDHAT_NETWORK ?? "unknown";
+
   // Print as JSON for easy copy-paste
   console.log("📋 JSON Output (for configuration):");
   const result: DeploymentResult = {
+    network: networkName,
+    chainId: Number(network.chainId),
+    deployedAt: new Date().toISOString(),
     testToken: {
       address: tusdcAddress,
       name: tokenName,
@@ -234,6 +201,12 @@ async function main(): Promise<DeploymentResult> {
     },
   };
   console.log(JSON.stringify(result, null, 2));
+
+  const outputPath =
+    process.env.DEPLOYMENT_OUT_PATH?.trim() || getDeploymentFilePath(networkName);
+  saveDeploymentResult(result, networkName, outputPath);
+  console.log(`\n💾 Deployment saved to: ${outputPath}`);
+  console.log("   Each network writes its own file and no longer overwrites other chains.\n");
 
   return result;
 }
