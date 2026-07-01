@@ -323,15 +323,15 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         
         // Check for self-transfer
         if (msg.sender == _to) {
-            gtUint256 balance = _balanceOf(msg.sender);
-            _emitPrivateTransfer(msg.sender, _to, balance, balance);
+            gtBool hasSufficientBalance = MpcCore.ge(_balanceOf(msg.sender), _value);
+            _permitAndEmitPrivateTransfer(msg.sender, _to, _value, hasSufficientBalance);
             return MpcCore.setPublic(true);
         }
-        
+
         (gtUint256 fromBalance, gtUint256 toBalance) = _getBalances(msg.sender, _to);
         (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result) = MpcCore.transfer(fromBalance, toBalance, _value);
         _setNewBalances(msg.sender, _to, newFromBalance, newToBalance);
-        _emitPrivateTransfer(msg.sender, _to, toBalance, newToBalance);
+        _permitAndEmitPrivateTransfer(msg.sender, _to, _value, MpcCore.not(result));
         return result;
     }
     /// @notice Transfers the amount of tokens given inside the IT (an encrypted and signed value) from one address to another
@@ -383,16 +383,15 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         if (_from == _to) {
             // Check if allowance is sufficient (we just validate, don't subtract since it's a self-transfer)
             gtBool hasSufficientAllowance = MpcCore.ge(allowance, _value);
-            gtUint256 balance = _balanceOf(_from);
-            _emitPrivateTransfer(_from, _to, balance, balance);
+            _permitAndEmitPrivateTransfer(_from, _to, _value, hasSufficientAllowance);
             return hasSufficientAllowance;
         }
-        
+
         (gtUint256 fromBalance, gtUint256 toBalance) = _getBalances(_from, _to);
         (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result, gtUint256 newAllowance) = MpcCore.transferWithAllowance(fromBalance, toBalance, _value, allowance);
         _setApproveValue(_from, msg.sender, newAllowance);
         _setNewBalances(_from, _to, newFromBalance, newToBalance);
-        _emitPrivateTransfer(_from, _to, toBalance, newToBalance);
+        _permitAndEmitPrivateTransfer(_from, _to, _value, MpcCore.not(result));
         return result;
     }
     /// @notice Approves a spender to transfer the amount of tokens given inside the IT (an encrypted and signed value)
@@ -472,38 +471,29 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param amount The handle to transfer; the contract must already be permitted on it
     function _transferFromContract(address recipient, gtUint256 amount) private {
         (gtUint256 fromBalance, gtUint256 toBalance) = _getBalances(address(this), recipient);
-        (gtUint256 newFromBalance, gtUint256 newToBalance, ) = MpcCore.transfer(fromBalance, toBalance, amount);
+        (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result) = MpcCore.transfer(fromBalance, toBalance, amount);
         _setNewBalances(address(this), recipient, newFromBalance, newToBalance);
-        _emitPrivateTransfer(address(this), recipient, msg.sender, toBalance, newToBalance);
-    }
-
-    /// @notice Computes the encrypted balance increase credited to the recipient.
-    function _calculateBalanceIncrease(gtUint256 beforeBalance, gtUint256 afterBalance)
-        private
-        returns (gtUint256)
-    {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        (gtBool didIncrease, gtUint256 increaseCandidate) =
-            MpcCore.checkedSubWithOverflowBit(afterBalance, beforeBalance);
-        return MpcCore.mux(didIncrease, increaseCandidate, $.zero);
+        _permitAndEmitPrivateTransfer(address(this), recipient, msg.sender, amount, MpcCore.not(result));
     }
 
     /// @notice Emits PrivateTransfer and grants both parties permission to decrypt the credited amount.
-    function _emitPrivateTransfer(address from, address to, gtUint256 beforeToBalance, gtUint256 afterToBalance)
-        private
-    {
-        _emitPrivateTransfer(from, to, address(0), beforeToBalance, afterToBalance);
+    function _permitAndEmitPrivateTransfer(address from, address to, gtUint256 amount, gtBool success) private {
+        _permitAndEmitPrivateTransfer(from, to, address(0), amount, success);
     }
 
     /// @notice Emits PrivateTransfer and grants decrypt permission to from, to, and an optional third party.
-    function _emitPrivateTransfer(
+    /// @dev `amount` is masked to zero via `success` (e.g. the transfer's own result bool) rather than
+    /// derived from a before/after balance delta, since the transfer primitives already report whether
+    /// the requested amount was actually credited.
+    function _permitAndEmitPrivateTransfer(
         address from,
         address to,
         address additionalPermittee,
-        gtUint256 beforeToBalance,
-        gtUint256 afterToBalance
+        gtUint256 amount,
+        gtBool success
     ) private {
-        gtUint256 transferredAmount = _calculateBalanceIncrease(beforeToBalance, afterToBalance);
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        gtUint256 transferredAmount = MpcCore.mux(success, amount, $.zero);
         MpcCore.permit(transferredAmount, to);
         MpcCore.permit(transferredAmount, from);
         if (additionalPermittee != address(0) && additionalPermittee != from && additionalPermittee != to) {
