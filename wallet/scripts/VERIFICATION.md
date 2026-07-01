@@ -4,37 +4,39 @@ Before verifying: ensure **GCACLAddress.sol** and **GCHandlerAddress.sol** use t
 
 ## Verify contracts from setup-environment deployment
 
-After running `setup-environment.ts`, save the JSON output to `deployment.json` (in the repo root, e.g. `bubble/` when run from `bubble/`), then run:
+`setup-environment.ts` writes one file per network:
+
+```text
+scripts/deployments/<network>.json
+```
+
+Example:
 
 ```bash
 npx hardhat compile
-npx hardhat run scripts/verify-contracts.ts --network sepolia-arbitrum
+npx hardhat run scripts/setup-environment.ts --network polygon
+npx hardhat run scripts/verify-contracts.ts --network polygon
 ```
 
-Optional: use a custom path via env:
+Optional overrides:
 
 ```bash
-DEPLOYMENT_JSON=./my-deployment.json npx hardhat run scripts/verify-contracts.ts --network sepolia-arbitrum
+DEPLOYMENT_JSON=./my-deployment.json npx hardhat run scripts/verify-contracts.ts --network polygon
+DEPLOYMENT_OUT_PATH=./custom/path.json npx hardhat run scripts/setup-environment.ts --network ethereum
 ```
 
-The script verifies:
+The verify script checks:
 
 - TUSDC (test token)
 - PrivateERC20WithRestrictionList256 (implementation)
 - PrivateERC20WithRestrictionListFactory256 (factory)
 - RestrictionListRegistryFactory
 
-The private token (proxy) is an ERC1967Proxy; the implementation is verified by the script. The proxy can be verified separately with constructor args `(implementation, initData)` if needed.
+The private token (proxy) is an ERC1967Proxy; verify the implementation first. The proxy can be verified separately with constructor args `(implementation, initData)` if needed.
 
 ## Manual verification (single contract)
 
 ```bash
 npx hardhat compile
-npx hardhat verify --network "sepolia-arbitrum" <CONTRACT_ADDRESS>
-
-# With constructor arguments (use arguments.js for complex args):
-npx hardhat verify --network sepolia-arbitrum --constructor-args arguments.js <CONTRACT_ADDRESS>
+npx hardhat verify --network polygon <CONTRACT_ADDRESS>
 ```
-
-# working example
-# DEPLOYMENT_JSON=./scripts/deployment.json  npx hardhat run scripts/verify-contracts.ts --network polygon

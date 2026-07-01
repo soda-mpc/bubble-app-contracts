@@ -1,0 +1,29 @@
+{
+  "network": "ethereum",
+  "chainId": 1,
+  "deployedAt": "unknown",
+  "testToken": {
+    "address": "0x48488bf61dc34f848546c698b10d5954334db70e",
+    "name": "Test USDC",
+    "symbol": "TUSDC",
+    "decimals": 18,
+    "blockNumber": 0
+  },
+  "privateERC20WithRestrictionList": {
+    "implementation": "0xFd4f1C39D1f95EE691Cd3Ee76426832c110893cf",
+    "implementationBlockNumber": 25344092,
+    "factory": "0xF44fb69946E679aF9D017FB2299DF5b47D94CD22",
+    "factoryBlockNumber": 25344093
+  },
+  "restrictionListRegistryFactory": {
+    "address": "0xfeB685Ee0e11C2020f35c5d4Dc1A2B07b424d3B5",
+    "blockNumber": 25344094
+  },
+  "privateToken": {
+    "address": "0x7bcA72959D58A9632929d69E6CEbEb07D70d7049",
+    "name": "Private TUSDC",
+    "symbol": "pTUSDC",
+    "underlying": "0x48488bf61dc34f848546c698b10d5954334db70e",
+    "blockNumber": 25344095
+  }
+}

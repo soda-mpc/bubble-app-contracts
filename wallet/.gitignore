@@ -1,5 +1,6 @@
 node_modules
 .env
+yarn.lock
 
 # Bubble contracts (per-chain address files synced by sync-gc-addresses task)
 /contracts/bubble

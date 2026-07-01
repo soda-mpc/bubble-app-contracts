@@ -1,0 +1,29 @@
+{
+  "network": "arbitrum",
+  "chainId": 42161,
+  "deployedAt": "unknown",
+  "testToken": {
+    "address": "0x8B31770E8B227901C5EE0a39B8Ab4f5F0e790265",
+    "name": "Test USDC",
+    "symbol": "TUSDC",
+    "decimals": 18,
+    "blockNumber": 474758205
+  },
+  "privateERC20WithRestrictionList": {
+    "implementation": "0x1C92Db53adadEE652A4cD0FBBb921dB7Fd08A891",
+    "implementationBlockNumber": 474758210,
+    "factory": "0xa4835d10d7fFA9075e84be121d1d4559A18eBFB3",
+    "factoryBlockNumber": 474758214
+  },
+  "restrictionListRegistryFactory": {
+    "address": "0x3ea103758D4069e45f0270236982e6Abb684Ef73",
+    "blockNumber": 474758218
+  },
+  "privateToken": {
+    "address": "0xF50c1dF10272bf6db3dc1DD9306bea8D6256fe44",
+    "name": "Private TUSDC",
+    "symbol": "pTUSDC",
+    "underlying": "0x8B31770E8B227901C5EE0a39B8Ab4f5F0e790265",
+    "blockNumber": 474758222
+  }
+}

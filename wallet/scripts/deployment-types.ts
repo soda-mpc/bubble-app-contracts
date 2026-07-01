@@ -1,4 +1,7 @@
 export interface DeploymentResult {
+  network: string;
+  chainId: number;
+  deployedAt: string;
   testToken: {
     address: string;
     name: string;

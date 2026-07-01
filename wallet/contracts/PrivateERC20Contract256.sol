@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
-import "./bubble/MpcCore.sol";
+pragma solidity ^0.8.26;
+import "@sodalabs/bubble-core-contracts/contracts/bubble/MpcCore.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import "./bubble/DecryptionCaller.sol";
+import "@sodalabs/bubble-core-contracts/contracts/bubble/DecryptionCaller.sol";
 /// @title PrivateERC20Contract
 /// @notice Implementation of ERC20 token standard with enhanced privacy features using MPC
 /// @dev This contract implements the ERC20 standard while ensuring confidentiality of token transactions through encryption.
