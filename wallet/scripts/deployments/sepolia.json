@@ -1,29 +1,29 @@
 {
   "network": "sepolia",
   "chainId": 11155111,
-  "deployedAt": "2026-07-01T10:46:26.320Z",
+  "deployedAt": "2026-07-01T15:20:01.906Z",
   "testToken": {
-    "address": "0x2E4b554a7FE6e2dA0841Dc451EbD0eAc41E1E565",
+    "address": "0x3E1e997869D24221726E659D6d30F21Aecc061aa",
     "name": "Test USDC",
     "symbol": "TUSDC",
     "decimals": 18,
-    "blockNumber": 11179336
+    "blockNumber": 11180697
   },
   "privateERC20WithRestrictionList": {
-    "implementation": "0xb589f9f234a67a3C26Dcf697eA992D13Cbb653a6",
-    "implementationBlockNumber": 11179337,
-    "factory": "0x059EE6F0D2Fea804f3D9614b097f8fA604914561",
-    "factoryBlockNumber": 11179338
+    "implementation": "0x5f825B219450bF43f7E18A139b6528ee86994Aec",
+    "implementationBlockNumber": 11180698,
+    "factory": "0x05CA2f8588F283F1B49184F88008aE48c245e42D",
+    "factoryBlockNumber": 11180699
   },
   "restrictionListRegistryFactory": {
-    "address": "0x32DBf436E85d0Adf5270FCA3d2f66C30d8f14D90",
-    "blockNumber": 11179339
+    "address": "0xE8F61c56378f196a88CFF77619F5414cf6d490bf",
+    "blockNumber": 11180700
   },
   "privateToken": {
-    "address": "0x557a00B02238A8AA4c697e55669b2B1cD90996Ce",
+    "address": "0xDcAF055b22b31614d3a59Cb4dA2661be0EB2cc04",
     "name": "Private TUSDC",
     "symbol": "pTUSDC",
-    "underlying": "0x2E4b554a7FE6e2dA0841Dc451EbD0eAc41E1E565",
-    "blockNumber": 11179340
+    "underlying": "0x3E1e997869D24221726E659D6d30F21Aecc061aa",
+    "blockNumber": 11180701
   }
 }
