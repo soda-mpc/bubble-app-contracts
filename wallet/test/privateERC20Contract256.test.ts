@@ -3,7 +3,7 @@ import hre from "hardhat";
 import { Wallet, HDNodeWallet } from "ethers";
 import dotenv from "dotenv";
 
-import { prepareMessageForBubble256, getUserKeyViaProxy, getDecryptionTxDataViaProxy } from "./helpers/bubbleCryptoTransport";
+import { prepareMessageForBubble256, getUserKeyViaProxy, getDecryptionTxDataViaProxy, decryptValueViaProxy } from "./helpers/bubbleCryptoTransport";
 import {
   createRandomWalletsAndFund,
   delay,
@@ -17,6 +17,7 @@ import {
   deployPrivateTokenImplementation,
   ensurePrivateBalanceClearedFor,
   findEventsFromStartBlockByName,
+  findParsedLogInReceipt,
   getEventsInReceiptBlock,
   getPrivateTokenBalance,
   mintAndApprove,
@@ -631,6 +632,106 @@ let defaultSigner: any;
       // Assert balances
       expect(senderBalanceAfter).to.equal(senderBalanceBefore - BigInt(hre.ethers.parseUnits(amount, privateTokenDecimals)));
       expect(receiverBalanceAfter).to.equal(receiverBalanceBefore + BigInt(hre.ethers.parseUnits(amount, privateTokenDecimals)));
+    });
+
+    it("should emit PrivateTransfer and allow sender and recipient to decrypt the transfer amount", async function () {
+      const otherUserAesKey = await getUserKeyViaProxy(otherWallet, PROXY_URL);
+      const privateTokenDecimals = 18;
+      const amount = "50";
+      const PRIVATE_TOKEN_ADDRESS = await privateToken.getAddress();
+      const amountInBigInt = BigInt(hre.ethers.parseUnits(amount, privateTokenDecimals));
+
+      const { encryptedHigh, encryptedLow } = prepareMessageForBubble256(
+        amountInBigInt,
+        await defaultSigner.getAddress(),
+        userAesKey.toString("hex"),
+        PRIVATE_TOKEN_ADDRESS
+      );
+
+      const transferTx = await privateToken["transfer(address,(address,(uint256,uint256)))"](otherWallet.address, {
+        userAddress: await defaultSigner.getAddress(),
+        ciphertext: {
+          ciphertextHigh: encryptedHigh,
+          ciphertextLow: encryptedLow
+        }
+      });
+      const transferReceipt = await transferTx.wait();
+      expect(transferReceipt?.status).to.equal(1);
+
+      const privateTransferLog = findParsedLogInReceipt(transferReceipt, privateToken, "PrivateTransfer");
+      expect(privateTransferLog).to.not.be.undefined;
+      const privateTransferEvent = privateToken.interface.parseLog(privateTransferLog!);
+      expect(privateTransferEvent?.args[0].toLowerCase()).to.equal(userAddress.toLowerCase());
+      expect(privateTransferEvent?.args[1].toLowerCase()).to.equal(otherWallet.address.toLowerCase());
+      const transferredAmountHandle = privateTransferEvent?.args[2];
+      expect(transferredAmountHandle).to.not.be.undefined;
+
+      await delay(DELAY_MPC_PROCESSING_MS);
+
+      const recipientAmount = await decryptValueViaProxy(
+        transferredAmountHandle,
+        otherWallet,
+        otherUserAesKey,
+        PROXY_URL
+      );
+      const senderAmount = await decryptValueViaProxy(
+        transferredAmountHandle,
+        defaultSigner,
+        userAesKey,
+        PROXY_URL
+      );
+
+      expect(recipientAmount).to.equal(amountInBigInt);
+      expect(senderAmount).to.equal(amountInBigInt);
+    });
+
+    it("should emit zero PrivateTransfer amount when encrypted transfer exceeds balance", async function () {
+      const otherUserAesKey = await getUserKeyViaProxy(otherWallet, PROXY_URL);
+      const privateTokenDecimals = 18;
+      const tooMuch = "200";
+      const PRIVATE_TOKEN_ADDRESS = await privateToken.getAddress();
+      const tooMuchInBigInt = BigInt(hre.ethers.parseUnits(tooMuch, privateTokenDecimals));
+
+      const { encryptedHigh, encryptedLow } = prepareMessageForBubble256(
+        tooMuchInBigInt,
+        await defaultSigner.getAddress(),
+        userAesKey.toString("hex"),
+        PRIVATE_TOKEN_ADDRESS
+      );
+
+      const transferTx = await privateToken["transfer(address,(address,(uint256,uint256)))"](otherWallet.address, {
+        userAddress: await defaultSigner.getAddress(),
+        ciphertext: {
+          ciphertextHigh: encryptedHigh,
+          ciphertextLow: encryptedLow
+        }
+      });
+      const transferReceipt = await transferTx.wait();
+      expect(transferReceipt?.status).to.equal(1);
+
+      const privateTransferLog = findParsedLogInReceipt(transferReceipt, privateToken, "PrivateTransfer");
+      expect(privateTransferLog).to.not.be.undefined;
+      const privateTransferEvent = privateToken.interface.parseLog(privateTransferLog!);
+      const transferredAmountHandle = privateTransferEvent?.args[2];
+      expect(transferredAmountHandle).to.not.be.undefined;
+
+      await delay(DELAY_MPC_PROCESSING_MS);
+
+      const recipientAmount = await decryptValueViaProxy(
+        transferredAmountHandle,
+        otherWallet,
+        otherUserAesKey,
+        PROXY_URL
+      );
+      const senderAmount = await decryptValueViaProxy(
+        transferredAmountHandle,
+        defaultSigner,
+        userAesKey,
+        PROXY_URL
+      );
+
+      expect(recipientAmount).to.equal(0n);
+      expect(senderAmount).to.equal(0n);
     });
 
     it("should handle self-transfer using clear value (transferring to oneself)", async function () {
