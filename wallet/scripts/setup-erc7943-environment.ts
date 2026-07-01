@@ -1,4 +1,6 @@
 import hre from "hardhat";
+import fs from "fs";
+import path from "path";
 
 const { artifacts, ethers } = hre as any;
 
@@ -180,8 +182,18 @@ async function main() {
   const defaultSendAllowed = envBool("ERC7943_DEFAULT_SEND_ALLOWED", false);
   const defaultReceiveAllowed = envBool("ERC7943_DEFAULT_RECEIVE_ALLOWED", false);
   const shouldCreateToken = envBool("ERC7943_CREATE_TOKEN", true);
+  const deploymentJsonPath = env(
+    "ERC7943_DEPLOYMENT_JSON",
+    path.join(process.cwd(), "scripts", "erc7943-deployment.json")
+  );
 
   const configuredUnderlying = env("ERC7943_UNDERLYING_ADDRESS");
+  if (underlyingIsWrappedNative && !configuredUnderlying) {
+    throw new Error(
+      "ERC7943_UNDERLYING_IS_WRAPPED_NATIVE=true requires ERC7943_UNDERLYING_ADDRESS to point to a wrapped native token"
+    );
+  }
+
   const configuredMaster = env("ERC7943_MASTER_ADDRESS");
   const master = configuredMaster
     ? requireAddress(configuredMaster, "ERC7943_MASTER_ADDRESS")
@@ -195,6 +207,7 @@ async function main() {
   console.log(`  Default send allowed: ${defaultSendAllowed}`);
   console.log(`  Default receive allowed: ${defaultReceiveAllowed}`);
   console.log(`  Create token via factory: ${shouldCreateToken}\n`);
+  console.log(`  Deployment JSON: ${deploymentJsonPath}\n`);
 
   console.log("----------------------------------------------------------------");
   console.log("STEP 1: Underlying token");
@@ -315,6 +328,9 @@ async function main() {
   }
   console.log("\nJSON Output:");
   console.log(JSON.stringify(result, null, 2));
+  fs.mkdirSync(path.dirname(deploymentJsonPath), { recursive: true });
+  fs.writeFileSync(deploymentJsonPath, `${JSON.stringify(result, null, 2)}\n`);
+  console.log(`\nSaved deployment JSON to: ${deploymentJsonPath}`);
 
   return result;
 }

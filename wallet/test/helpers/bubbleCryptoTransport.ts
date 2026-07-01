@@ -12,8 +12,7 @@ import {
   encrypt
 } from "soda-sdk";
 
-const fetch = (...args: Parameters<typeof globalThis.fetch>) =>
-  import("node-fetch").then(({ default: fetchFn }) => fetchFn(...args));
+const fetch = globalThis.fetch.bind(globalThis);
 
 /** One limb in soda-sdk encrypt output: ciphertext block or nonce `r` (bytes). */
 const AES_LIMB_BYTES = 16;

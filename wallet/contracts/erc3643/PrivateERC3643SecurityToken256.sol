@@ -168,7 +168,9 @@ contract PrivateERC3643SecurityToken256 is
     }
 
     function approve(address spender, itUint256 calldata it) public whenNotPaused returns (bool) {
-        return contractApprove(spender, MpcCore.validateCiphertext(it));
+        gtUint256 value = MpcCore.validateCiphertext(it);
+        MpcCore.permitTransient(value, msg.sender);
+        return contractApprove(spender, value);
     }
 
     function approve(address spender, uint256 value) public whenNotPaused returns (bool) {

@@ -1,0 +1,31 @@
+{
+  "network": {
+    "name": "sepolia-arbitrum",
+    "chainId": "421614"
+  },
+  "deployer": "0x0A1d00262B98027581C08641E1233D9B0Bc5D10C",
+  "underlying": {
+    "address": "0x5669c7e11e02D7FB86aAa0ddA428dF5DE2f09DEF",
+    "name": "Test USD",
+    "symbol": "TUSD",
+    "deployed": true,
+    "blockNumber": 280903596
+  },
+  "privateERC7943": {
+    "implementation": "0x74850154963506539D76d51dF4A2B7359ef21aAE",
+    "implementationBlockNumber": 280903599,
+    "factory": "0x3f7e0b55425Ff87aB518CfD94AE778219F3b7849",
+    "factoryBlockNumber": 280903601
+  },
+  "privateToken": {
+    "address": "0x5a9b3D873164Bfba6450f00Eb0D3972f3B14521D",
+    "name": "Private Test USD 7943",
+    "symbol": "pTUSD7943",
+    "underlying": "0x5669c7e11e02D7FB86aAa0ddA428dF5DE2f09DEF",
+    "master": "0x0A1d00262B98027581C08641E1233D9B0Bc5D10C",
+    "underlyingIsWrappedNative": false,
+    "defaultSendAllowed": true,
+    "defaultReceiveAllowed": true,
+    "blockNumber": 280903603
+  }
+}

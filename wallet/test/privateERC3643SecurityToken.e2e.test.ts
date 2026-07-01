@@ -35,18 +35,16 @@ async function createPrivateERC3643SecurityTokenViaFactory(params: {
   await factory.waitForDeployment();
   await waitForDeploymentConfirmation(factory, hre);
 
-  const createTx = await factory.createToken(
+  const createReceipt = await (await factory.createToken(
     "Private Security Token",
     "pSEC",
     18,
     identityRegistry,
     compliance,
     hre.ethers.ZeroAddress
-  );
-  await createTx.wait();
+  )).wait();
 
-  const events = await factory.queryFilter(factory.filters.TokenCreated());
-  const event = events[events.length - 1].args;
+  const event = parseEventFromReceipt(createReceipt, factory, "TokenCreated").args;
   const tokenAddress = event.token;
   expect(event.creator).to.equal(await owner.getAddress());
   expect(event.decimals).to.equal(18n);
@@ -195,7 +193,7 @@ describe("PrivateERC3643SecurityToken256 E2E", function () {
     await (await compliance.setCreateAllowed(true)).wait();
 
     const transferReceipt = await expectOnlyNoAmountTransferEvent(
-      privateToken.transfer(recipientAddress, transferAmount),
+      privateToken["transfer(address,uint256)"](recipientAddress, transferAmount),
       privateToken
     );
     expect(transferReceipt.logs.some((log: any) => log.topics[0] === CLEAR_TRANSFER_TOPIC)).to.equal(false);
@@ -215,6 +213,21 @@ describe("PrivateERC3643SecurityToken256 E2E", function () {
       aesKey: ownerAesKey,
       proxyUrl: PROXY_URL,
     })).to.equal(ownerBalanceAfterTransfer);
+
+    const encryptedApproveAmount = 3n * 10n ** 18n;
+    const encryptedApproveIt = await buildSignedItUint256({
+      value: encryptedApproveAmount,
+      userAddress: ownerAddress,
+      userAesKeyHex: ownerAesKey.toString("hex"),
+      contractAddress: tokenAddress,
+      signer: owner,
+    });
+    await (await privateToken["approve(address,(address,(uint256,uint256)))"](
+      recipientAddress,
+      encryptedApproveIt
+    )).wait();
+    expect(await decryptHandle(await privateToken.allowance(ownerAddress, recipientAddress), owner, ownerAesKey))
+      .to.equal(encryptedApproveAmount);
 
     const overBurnIt = await buildSignedItUint256({
       value: overBurnAmount,

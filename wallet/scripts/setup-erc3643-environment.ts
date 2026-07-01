@@ -24,6 +24,19 @@ function envBool(name: string, fallback: boolean): boolean {
   return ["1", "true", "yes", "y"].includes(value.toLowerCase());
 }
 
+function envUint8(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 255) {
+    throw new Error(`${name} must be an integer between 0 and 255`);
+  }
+  return parsed;
+}
+
 function requireAddress(value: string, label: string): string {
   if (!ethers.isAddress(value)) {
     throw new Error(`${label} must be a valid address`);
@@ -81,42 +94,25 @@ async function deployWithSizeInfo(contractName: string, deployArgs: any[]): Prom
   return { contract, address, blockNumber };
 }
 
-async function createTokenViaFactory(params: {
+async function createSecurityTokenViaFactory(params: {
   factory: any;
   name: string;
   symbol: string;
-  underlying: string;
-  underlyingIsWrappedNative: boolean;
-  master: string;
+  decimals: number;
   identityRegistry: string;
   compliance: string;
   onchainID: string;
 }): Promise<{ address: string; blockNumber: number }> {
-  const {
-    factory,
-    name,
-    symbol,
-    underlying,
-    underlyingIsWrappedNative,
-    master,
-    identityRegistry,
-    compliance,
-    onchainID,
-  } = params;
+  const { factory, name, symbol, decimals, identityRegistry, compliance, onchainID } = params;
 
-  const tx = await factory[
-    "createToken(string,string,address,bool,address,address,address,address)"
-  ](
+  const receipt = await (await factory.createToken(
     name,
     symbol,
-    underlying,
-    underlyingIsWrappedNative,
-    master,
+    decimals,
     identityRegistry,
     compliance,
     onchainID
-  );
-  const receipt = await tx.wait(1);
+  )).wait(1);
 
   let tokenAddress = "";
   if (receipt?.logs) {
@@ -137,7 +133,7 @@ async function createTokenViaFactory(params: {
   }
 
   if (!tokenAddress) {
-    throw new Error("Failed to extract private token address from TokenCreated event");
+    throw new Error("Failed to extract security token address from TokenCreated event");
   }
 
   return {
@@ -148,7 +144,7 @@ async function createTokenViaFactory(params: {
 
 async function main() {
   console.log("\n================================================================");
-  console.log(" ERC-3643 PRIVATE ERC20 WRAPPER - ENVIRONMENT SETUP");
+  console.log(" ERC-3643 PRIVATE SECURITY TOKEN - ENVIRONMENT SETUP");
   console.log("================================================================\n");
 
   const [deployer] = await ethers.getSigners();
@@ -158,57 +154,26 @@ async function main() {
   const balance = await ethers.provider.getBalance(deployer.address);
   console.log(`Balance: ${ethers.formatEther(balance)} ETH\n`);
 
-  const tokenName = env("ERC3643_UNDERLYING_NAME", "Test USD");
-  const tokenSymbol = env("ERC3643_UNDERLYING_SYMBOL", "TUSD");
-  const privateTokenName = env("ERC3643_PRIVATE_TOKEN_NAME", "Private Test USD");
-  const privateTokenSymbol = env("ERC3643_PRIVATE_TOKEN_SYMBOL", "pTUSD");
-  const underlyingIsWrappedNative = envBool("ERC3643_UNDERLYING_IS_WRAPPED_NATIVE", false);
+  const tokenName = env("ERC3643_SECURITY_TOKEN_NAME", env("ERC3643_PRIVATE_TOKEN_NAME", "Private Security Token"));
+  const tokenSymbol = env("ERC3643_SECURITY_TOKEN_SYMBOL", env("ERC3643_PRIVATE_TOKEN_SYMBOL", "pSEC"));
+  const tokenDecimals = envUint8("ERC3643_SECURITY_TOKEN_DECIMALS", 18);
   const shouldCreateToken = envBool("ERC3643_CREATE_TOKEN", true);
 
-  const configuredUnderlying = env("ERC3643_UNDERLYING_ADDRESS");
   const configuredIdentityRegistry = env("ERC3643_IDENTITY_REGISTRY_ADDRESS");
   const configuredCompliance = env("ERC3643_COMPLIANCE_ADDRESS");
-  const configuredMaster = env("ERC3643_MASTER_ADDRESS");
   const configuredOnchainID = env("ERC3643_ONCHAIN_ID_ADDRESS");
 
-  const master = configuredMaster
-    ? requireAddress(configuredMaster, "ERC3643_MASTER_ADDRESS")
-    : deployer.address;
   const onchainID = optionalAddress(configuredOnchainID, "ERC3643_ONCHAIN_ID_ADDRESS");
 
   console.log("Configuration:");
-  console.log(`  Private token name: ${privateTokenName}`);
-  console.log(`  Private token symbol: ${privateTokenSymbol}`);
-  console.log(`  Master: ${master}`);
+  console.log(`  Security token name: ${tokenName}`);
+  console.log(`  Security token symbol: ${tokenSymbol}`);
+  console.log(`  Security token decimals: ${tokenDecimals}`);
   console.log(`  OnchainID: ${onchainID}`);
-  console.log(`  Underlying is wrapped native: ${underlyingIsWrappedNative}`);
   console.log(`  Create token via factory: ${shouldCreateToken}\n`);
 
   console.log("----------------------------------------------------------------");
-  console.log("STEP 1: Underlying token");
-  console.log("----------------------------------------------------------------");
-
-  let underlying: AddressInfo;
-  if (configuredUnderlying) {
-    underlying = {
-      address: requireAddress(configuredUnderlying, "ERC3643_UNDERLYING_ADDRESS"),
-      blockNumber: 0,
-      deployed: false,
-    };
-    console.log(`   Reusing underlying: ${underlying.address}\n`);
-  } else {
-    const deployed = await deployWithSizeInfo("TUSDC", [tokenName, tokenSymbol]);
-    underlying = {
-      address: deployed.address,
-      blockNumber: deployed.blockNumber,
-      deployed: true,
-    };
-    console.log(`   Underlying deployed at: ${underlying.address}`);
-    console.log(`   Block number: ${underlying.blockNumber}\n`);
-  }
-
-  console.log("----------------------------------------------------------------");
-  console.log("STEP 2: Identity registry");
+  console.log("STEP 1: Identity registry");
   console.log("----------------------------------------------------------------");
 
   let identityRegistry: AddressInfo;
@@ -231,7 +196,7 @@ async function main() {
   }
 
   console.log("----------------------------------------------------------------");
-  console.log("STEP 3: Modular compliance");
+  console.log("STEP 2: Security token compliance");
   console.log("----------------------------------------------------------------");
 
   let compliance: AddressInfo;
@@ -243,32 +208,32 @@ async function main() {
     };
     console.log(`   Reusing compliance: ${compliance.address}\n`);
   } else {
-    const deployed = await deployWithSizeInfo("MockPrivateModularCompliance", []);
+    const deployed = await deployWithSizeInfo("MockPrivateSecurityTokenCompliance", []);
     compliance = {
       address: deployed.address,
       blockNumber: deployed.blockNumber,
       deployed: true,
     };
-    console.log(`   Mock compliance deployed at: ${compliance.address}`);
+    console.log(`   Mock security token compliance deployed at: ${compliance.address}`);
     console.log(`   Block number: ${compliance.blockNumber}\n`);
   }
 
   console.log("----------------------------------------------------------------");
-  console.log("STEP 4: PrivateERC3643ERC20Contract256 implementation");
+  console.log("STEP 3: PrivateERC3643SecurityToken256 implementation");
   console.log("----------------------------------------------------------------");
 
   const implementation = await deployWithSizeInfo(
-    "contracts/erc3643/PrivateERC3643ERC20Contract256.sol:PrivateERC3643ERC20Contract256",
+    "contracts/erc3643/PrivateERC3643SecurityToken256.sol:PrivateERC3643SecurityToken256",
     []
   );
   console.log(`   Implementation deployed at: ${implementation.address}`);
   console.log(`   Block number: ${implementation.blockNumber}\n`);
 
   console.log("----------------------------------------------------------------");
-  console.log("STEP 5: PrivateERC3643ERC20Factory256");
+  console.log("STEP 4: PrivateERC3643SecurityTokenFactory256");
   console.log("----------------------------------------------------------------");
 
-  const factoryDeployment = await deployWithSizeInfo("PrivateERC3643ERC20Factory256", [
+  const factoryDeployment = await deployWithSizeInfo("PrivateERC3643SecurityTokenFactory256", [
     implementation.address,
   ]);
   console.log(`   Factory deployed at: ${factoryDeployment.address}`);
@@ -277,16 +242,14 @@ async function main() {
   let privateToken: AddressInfo | null = null;
   if (shouldCreateToken) {
     console.log("----------------------------------------------------------------");
-    console.log("STEP 6: Create private ERC-3643 wrapper via factory");
+    console.log("STEP 5: Create private ERC-3643 security token via factory");
     console.log("----------------------------------------------------------------");
 
-    const created = await createTokenViaFactory({
+    const created = await createSecurityTokenViaFactory({
       factory: factoryDeployment.contract,
-      name: privateTokenName,
-      symbol: privateTokenSymbol,
-      underlying: underlying.address,
-      underlyingIsWrappedNative,
-      master,
+      name: tokenName,
+      symbol: tokenSymbol,
+      decimals: tokenDecimals,
       identityRegistry: identityRegistry.address,
       compliance: compliance.address,
       onchainID,
@@ -297,10 +260,10 @@ async function main() {
       blockNumber: created.blockNumber,
       deployed: true,
     };
-    console.log(`   Private token created at: ${privateToken.address}`);
+    console.log(`   Security token created at: ${privateToken.address}`);
     console.log(`   Block number: ${privateToken.blockNumber}\n`);
   } else {
-    console.log("STEP 6: Token creation skipped by ERC3643_CREATE_TOKEN=false\n");
+    console.log("STEP 5: Token creation skipped by ERC3643_CREATE_TOKEN=false\n");
   }
 
   const result = {
@@ -309,16 +272,9 @@ async function main() {
       chainId: network.chainId.toString(),
     },
     deployer: deployer.address,
-    underlying: {
-      address: underlying.address,
-      name: configuredUnderlying ? undefined : tokenName,
-      symbol: configuredUnderlying ? undefined : tokenSymbol,
-      deployed: underlying.deployed,
-      blockNumber: underlying.blockNumber,
-    },
     identityRegistry,
     compliance,
-    privateERC3643: {
+    privateERC3643SecurityToken: {
       implementation: implementation.address,
       implementationBlockNumber: implementation.blockNumber,
       factory: factoryDeployment.address,
@@ -327,14 +283,12 @@ async function main() {
     privateToken: privateToken
       ? {
           address: privateToken.address,
-          name: privateTokenName,
-          symbol: privateTokenSymbol,
-          underlying: underlying.address,
-          master,
+          name: tokenName,
+          symbol: tokenSymbol,
+          decimals: tokenDecimals,
           identityRegistry: identityRegistry.address,
           compliance: compliance.address,
           onchainID,
-          underlyingIsWrappedNative,
           blockNumber: privateToken.blockNumber,
         }
       : null,
@@ -343,13 +297,12 @@ async function main() {
   console.log("================================================================");
   console.log("DEPLOYMENT SUMMARY");
   console.log("================================================================");
-  console.log(`Underlying:        ${underlying.address}`);
   console.log(`IdentityRegistry: ${identityRegistry.address}`);
   console.log(`Compliance:       ${compliance.address}`);
   console.log(`Implementation:   ${implementation.address}`);
   console.log(`Factory:          ${factoryDeployment.address}`);
   if (privateToken) {
-    console.log(`Private token:    ${privateToken.address}`);
+    console.log(`Security token:   ${privateToken.address}`);
   }
   console.log("\nJSON Output:");
   console.log(JSON.stringify(result, null, 2));

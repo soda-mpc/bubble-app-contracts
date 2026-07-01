@@ -487,7 +487,9 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param _it The encrypted and signed approval amount
     /// @return True if the approval was successful
     function approve(address _spender, itUint256 calldata _it) public virtual whenNotPaused returns (bool) {
-        return contractApprove(_spender, MpcCore.validateCiphertext(_it));
+        gtUint256 value = MpcCore.validateCiphertext(_it);
+        MpcCore.permitTransient(value, msg.sender);
+        return contractApprove(_spender, value);
     }
     /// @notice Approves a spender to transfer the amount of tokens given in the clear
     /// @param _spender The address that will be approved
