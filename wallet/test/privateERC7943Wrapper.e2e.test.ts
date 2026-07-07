@@ -7,8 +7,10 @@ import {
   createRandomWalletsAndFund,
   DELAY_BALANCE_SYNC_MS,
   deployMockToken,
+  expectRecipientCanDecryptPrivateTransferEvent,
   getPrivateTokenBalance,
   mintAndApprove,
+  expectPrivateTransferEmitted,
   waitForCondition,
   waitForDeploymentConfirmation,
   waitForUnshieldOutcome,
@@ -19,8 +21,6 @@ dotenv.config();
 const ARBITRUM_SEPOLIA_CHAIN_ID = 421614n;
 const PROXY_URL = process.env.PROXY_URL || "https://proxy.bubble.sodalabs.net";
 const ERC7943_FQN = "contracts/erc7943/PrivateERC7943ERC20Contract256.sol:PrivateERC7943ERC20Contract256";
-const CLEAR_TRANSFER_TOPIC = hre.ethers.id("Transfer(address,address,uint256)");
-const PRIVATE_TRANSFER_TOPIC = hre.ethers.id("Transfer(address,address)");
 const ERC165_INTERFACE_ID = "0x01ffc9a7";
 const ERC7943_FUNGIBLE_INTERFACE_ID = "0x3edbb4c4";
 
@@ -77,18 +77,6 @@ async function createPrivateERC7943WrapperViaFactory(params: {
   return token;
 }
 
-async function expectOnlyNoAmountTransferEvent(tx: Promise<any>, privateToken: any) {
-  const receipt = await (await tx).wait();
-  const privateTokenAddress = (await privateToken.getAddress()).toLowerCase();
-  const tokenLogs = receipt.logs.filter((log: any) => log.address.toLowerCase() === privateTokenAddress);
-  const clearTransferLogs = tokenLogs.filter((log: any) => log.topics[0] === CLEAR_TRANSFER_TOPIC);
-  const privateTransferLogs = tokenLogs.filter((log: any) => log.topics[0] === PRIVATE_TRANSFER_TOPIC);
-
-  expect(clearTransferLogs.length, "Unexpected clear-amount Transfer event").to.equal(0);
-  expect(privateTransferLogs.length, "Expected no-amount Transfer event").to.equal(1);
-  return receipt;
-}
-
 async function waitForForcedTransfer(
   privateToken: any,
   from: string,
@@ -115,7 +103,7 @@ async function waitForForcedTransfer(
   throw new Error(`Timed out waiting for ForcedTransfer(${from}, ${to})`);
 }
 
-describe("PrivateERC7943ERC20Contract256 E2E", function () {
+describe.only("PrivateERC7943ERC20Contract256 E2E", function () {
   this.timeout(900000);
 
   let owner: any;
@@ -296,10 +284,20 @@ describe("PrivateERC7943ERC20Contract256 E2E", function () {
     await expect(privateToken.setCanReceive(recipientAddress, true))
       .to.emit(privateToken, "CanReceiveSet")
       .withArgs(recipientAddress, true);
-    await expectOnlyNoAmountTransferEvent(
+    const firstTransferReceipt = await expectPrivateTransferEmitted(
       privateToken["transfer(address,uint256)"](recipientAddress, firstTransferAmount),
       privateToken
     );
+    await expectRecipientCanDecryptPrivateTransferEvent({
+      receipt: firstTransferReceipt,
+      privateToken,
+      recipient,
+      recipientAesKey,
+      senderAddress: ownerAddress,
+      recipientAddress,
+      expectedAmount: firstTransferAmount,
+      proxyUrl: PROXY_URL,
+    });
 
     const recipientPrivateAfterFirstTransfer = await getPrivateTokenBalance({
       privateToken,
@@ -324,7 +322,7 @@ describe("PrivateERC7943ERC20Contract256 E2E", function () {
       .withArgs(ownerAddress, frozenAmount);
     expect(await privateToken.getFrozenTokens(ownerAddress)).to.equal(frozenAmount);
 
-    await expectOnlyNoAmountTransferEvent(
+    await expectPrivateTransferEmitted(
       privateToken["transfer(address,uint256)"](recipientAddress, allowedFrozenTransferAmount),
       privateToken
     );
@@ -349,7 +347,7 @@ describe("PrivateERC7943ERC20Contract256 E2E", function () {
     expect(recipientPrivateAfterAllowedFrozenTransfer)
       .to.equal(firstTransferAmount + allowedFrozenTransferAmount);
 
-    await expectOnlyNoAmountTransferEvent(
+    await expectPrivateTransferEmitted(
       privateToken["transfer(address,uint256)"](recipientAddress, blockedFrozenTransferAmount),
       privateToken
     );
@@ -400,7 +398,7 @@ describe("PrivateERC7943ERC20Contract256 E2E", function () {
       .withArgs(ownerAddress, 0n);
 
     await (await privateToken["approve(address,uint256)"](masterAddress, transferFromAmount)).wait();
-    await expectOnlyNoAmountTransferEvent(
+    await expectPrivateTransferEmitted(
       privateToken
         .connect(master)
         ["transferFrom(address,address,uint256)"](ownerAddress, recipientAddress, transferFromAmount),

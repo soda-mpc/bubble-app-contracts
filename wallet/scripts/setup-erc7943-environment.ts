@@ -184,7 +184,7 @@ async function main() {
   const shouldCreateToken = envBool("ERC7943_CREATE_TOKEN", true);
   const deploymentJsonPath = env(
     "ERC7943_DEPLOYMENT_JSON",
-    path.join(process.cwd(), "scripts", "erc7943-deployment.json")
+    path.join(process.cwd(), "scripts", "deployments", "erc7943", `${network.name}.json`)
   );
 
   const configuredUnderlying = env("ERC7943_UNDERLYING_ADDRESS");

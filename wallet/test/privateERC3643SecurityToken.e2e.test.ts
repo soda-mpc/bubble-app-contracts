@@ -6,6 +6,8 @@ import { decryptBalanceViaProxy, getUserKeyViaProxy } from "./helpers/bubbleCryp
 import {
   buildSignedItUint256,
   createRandomWalletsAndFund,
+  expectRecipientCanDecryptPrivateTransferEvent,
+  expectPrivateTransferEmitted,
   getPrivateTokenBalance,
   waitForDeploymentConfirmation,
 } from "./helpers/testHelpers";
@@ -17,7 +19,6 @@ const PROXY_URL = process.env.PROXY_URL || "https://proxy.bubble.sodalabs.net";
 const ERC3643_SECURITY_FQN =
   "contracts/erc3643/PrivateERC3643SecurityToken256.sol:PrivateERC3643SecurityToken256";
 const CLEAR_TRANSFER_TOPIC = hre.ethers.id("Transfer(address,address,uint256)");
-const PRIVATE_TRANSFER_TOPIC = hre.ethers.id("Transfer(address,address)");
 
 async function createPrivateERC3643SecurityTokenViaFactory(params: {
   owner: any;
@@ -75,19 +76,8 @@ async function decryptHandle(handle: bigint, signer: any, aesKey: Buffer) {
   return decryptBalanceViaProxy(handle, signer, aesKey, PROXY_URL);
 }
 
-async function expectOnlyNoAmountTransferEvent(tx: Promise<any>, privateToken: any) {
-  const receipt = await (await tx).wait();
-  const privateTokenAddress = (await privateToken.getAddress()).toLowerCase();
-  const tokenLogs = receipt.logs.filter((log: any) => log.address.toLowerCase() === privateTokenAddress);
-  const clearTransferLogs = tokenLogs.filter((log: any) => log.topics[0] === CLEAR_TRANSFER_TOPIC);
-  const privateTransferLogs = tokenLogs.filter((log: any) => log.topics[0] === PRIVATE_TRANSFER_TOPIC);
 
-  expect(clearTransferLogs.length, "Unexpected clear-amount Transfer event").to.equal(0);
-  expect(privateTransferLogs.length, "Expected no-amount Transfer event").to.equal(1);
-  return receipt;
-}
-
-describe("PrivateERC3643SecurityToken256 E2E", function () {
+describe.only("PrivateERC3643SecurityToken256 E2E", function () {
   this.timeout(900000);
 
   let owner: any;
@@ -192,10 +182,20 @@ describe("PrivateERC3643SecurityToken256 E2E", function () {
     expect(await decryptHandle(await privateToken.totalSupply(), owner, ownerAesKey)).to.equal(mintAmount);
     await (await compliance.setCreateAllowed(true)).wait();
 
-    const transferReceipt = await expectOnlyNoAmountTransferEvent(
+    const transferReceipt = await expectPrivateTransferEmitted(
       privateToken["transfer(address,uint256)"](recipientAddress, transferAmount),
       privateToken
     );
+    await expectRecipientCanDecryptPrivateTransferEvent({
+      receipt: transferReceipt,
+      privateToken,
+      recipient,
+      recipientAesKey,
+      senderAddress: ownerAddress,
+      recipientAddress,
+      expectedAmount: transferAmount,
+      proxyUrl: PROXY_URL,
+    });
     expect(transferReceipt.logs.some((log: any) => log.topics[0] === CLEAR_TRANSFER_TOPIC)).to.equal(false);
     expect(await getPrivateTokenBalance({
       privateToken,

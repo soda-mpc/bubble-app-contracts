@@ -24,6 +24,9 @@ contract PrivateERC3643SecurityToken256 is
 {
     string internal constant TOKEN_VERSION = "0.0.1";
 
+    /// @notice Emitted when tokens are transferred using encrypted amounts
+    event PrivateTransfer(address indexed from, address indexed to, gtUint256 amount);
+
     /// @custom:storage-location erc7201:bubble.storage.PrivateERC3643SecurityToken256
     struct PrivateERC3643SecurityToken256Storage {
         string name;
@@ -333,7 +336,7 @@ contract PrivateERC3643SecurityToken256 is
         gtUint256 actualAmount = _applyForcedTransfer(from, to, requestedAmount);
         MpcCore.permitTransient(actualAmount, address($.compliance));
         $.compliance.transferred(from, to, actualAmount);
-        emit Transfer(from, to);
+        emit PrivateTransfer(from, to, actualAmount);
         emit ForcedTransfer(from, to, actualAmount);
         return true;
     }
@@ -370,11 +373,11 @@ contract PrivateERC3643SecurityToken256 is
     function _transferGt(address from, address to, gtUint256 requestedValue) internal returns (gtBool) {
         require(to != address(0), "ERC20: transfer to the zero address");
         if (from == to) {
+            gtBool hasSufficientBalance = MpcCore.ge(_balanceOf(from), requestedValue);
             _effectivePrivateTransferAmount(from, to, requestedValue);
-            gtBool selfTransferResult = MpcCore.setPublic(true);
             _afterPrivateTransfer(from, to, _zeroGt());
-            emit Transfer(from, to);
-            return selfTransferResult;
+            _permitAndEmitPrivateTransfer(from, to, requestedValue, hasSufficientBalance);
+            return MpcCore.setPublic(true);
         }
 
         (gtUint256 fromBalance, gtUint256 toBalance) = (_balanceOf(from), _balanceOf(to));
@@ -383,7 +386,7 @@ contract PrivateERC3643SecurityToken256 is
             MpcCore.transfer(fromBalance, toBalance, effectiveValue);
         _setNewBalances(from, to, newFromBalance, newToBalance);
         _afterPrivateTransfer(from, to, _calculateBalanceIncrease(toBalance, newToBalance));
-        emit Transfer(from, to);
+        _permitAndEmitPrivateTransfer(from, to, effectiveValue, MpcCore.not(result));
         return result;
     }
 
@@ -395,7 +398,7 @@ contract PrivateERC3643SecurityToken256 is
             _effectivePrivateTransferAmount(from, to, requestedValue);
             gtBool hasSufficientAllowance = MpcCore.ge(allowanceValue, requestedValue);
             _afterPrivateTransfer(from, to, _zeroGt());
-            emit Transfer(from, to);
+            _permitAndEmitPrivateTransfer(from, to, requestedValue, hasSufficientAllowance);
             return hasSufficientAllowance;
         }
 
@@ -406,7 +409,7 @@ contract PrivateERC3643SecurityToken256 is
         _setApproveValue(from, msg.sender, newAllowance);
         _setNewBalances(from, to, newFromBalance, newToBalance);
         _afterPrivateTransfer(from, to, _calculateBalanceIncrease(toBalance, newToBalance));
-        emit Transfer(from, to);
+        _permitAndEmitPrivateTransfer(from, to, effectiveValue, MpcCore.not(result));
         return result;
     }
 
@@ -593,5 +596,12 @@ contract PrivateERC3643SecurityToken256 is
         MpcCore.permit(amount, account);
         MpcCore.permit(amount, owner());
         MpcCore.permit(amount, msg.sender);
+    }
+
+    function _permitAndEmitPrivateTransfer(address from, address to, gtUint256 amount, gtBool success) internal {
+        gtUint256 transferredAmount = MpcCore.mux(success, amount, _zeroGt());
+        MpcCore.permit(transferredAmount, to);
+        MpcCore.permit(transferredAmount, from);
+        emit PrivateTransfer(from, to, transferredAmount);
     }
 }

@@ -214,7 +214,7 @@ contract PrivateERC3643ERC20Contract256 is PrivateERC20Wrapper256Base, IPrivateE
         handles[0] = gtUint256.unwrap(actualAmount);
         requestDecryption(handles, this.callbackForcedTransfer.selector);
 
-        emit Transfer(from, to);
+        emit PrivateTransfer(from, to, actualAmount);
         emit ForcedTransferRequested(decryptID, from, to, amount, actualAmount);
         return true;
     }

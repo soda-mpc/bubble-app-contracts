@@ -3,6 +3,7 @@
  * Transport + crypto (proxy HTTP, encrypt/decrypt message prep): sibling `bubbleCryptoTransport.ts` in this folder.
  */
 import type { HDNodeWallet, Wallet } from "ethers";
+import { expect } from "chai";
 import {
   decryptBalanceViaProxy,
   prepareMessageForBubble128,
@@ -350,6 +351,55 @@ export async function getPrivateTokenBalance(params: {
     return 0n;
   }
   return decryptBalanceViaProxy(balanceHandle, signer, aesKey, proxyUrl);
+}
+
+/** Wait for receipt and assert a PrivateTransfer log was emitted (no clear-amount Transfer). */
+export async function expectPrivateTransferEmitted(txPromise: Promise<any>, privateToken: any) {
+  const receipt = await (await txPromise).wait();
+  const privateTransferLog = findParsedLogInReceipt(receipt, privateToken, "PrivateTransfer");
+  expect(privateTransferLog, "Expected PrivateTransfer event").to.not.be.undefined;
+  return receipt;
+}
+
+/** Assert PrivateTransfer was emitted and the recipient can decrypt the credited amount from the event. */
+export async function expectRecipientCanDecryptPrivateTransferEvent(params: {
+  receipt: { logs?: readonly any[] } | null | undefined;
+  privateToken: { interface: { parseLog: (log: any) => { args?: readonly unknown[] } } };
+  recipient: Wallet | HDNodeWallet;
+  recipientAesKey: Buffer;
+  senderAddress: string;
+  recipientAddress: string;
+  expectedAmount: bigint;
+  proxyUrl: string;
+}): Promise<void> {
+  const {
+    receipt,
+    privateToken,
+    recipient,
+    recipientAesKey,
+    senderAddress,
+    recipientAddress,
+    expectedAmount,
+    proxyUrl,
+  } = params;
+
+  const privateTransferLog = findParsedLogInReceipt(receipt, privateToken, "PrivateTransfer");
+  expect(privateTransferLog, "Expected PrivateTransfer event").to.not.be.undefined;
+  const privateTransferEvent = privateToken.interface.parseLog(privateTransferLog!);
+  expect((privateTransferEvent?.args?.[0] as string).toLowerCase()).to.equal(senderAddress.toLowerCase());
+  expect((privateTransferEvent?.args?.[1] as string).toLowerCase()).to.equal(recipientAddress.toLowerCase());
+  const transferredAmountHandle = privateTransferEvent?.args?.[2] as bigint;
+  expect(transferredAmountHandle).to.not.be.undefined;
+
+  await delay(DELAY_MPC_PROCESSING_MS);
+
+  const recipientAmount = await decryptBalanceViaProxy(
+    transferredAmountHandle,
+    recipient,
+    recipientAesKey,
+    proxyUrl
+  );
+  expect(recipientAmount).to.equal(expectedAmount);
 }
 
 async function findEventsFromStartBlock(

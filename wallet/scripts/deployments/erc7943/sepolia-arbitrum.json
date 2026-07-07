@@ -1,0 +1,29 @@
+{
+  "network": {
+    "name": "sepolia-arbitrum",
+    "chainId": "421614"
+  },
+  "deployer": "0x0A1d00262B98027581C08641E1233D9B0Bc5D10C",
+  "underlying": {
+    "address": "0x15DF3e9761cEc63234c53b8aa576479219d6f789",
+    "deployed": false,
+    "blockNumber": 0
+  },
+  "privateERC7943": {
+    "implementation": "0xda16eD2d23b064431C3D4F90Db0aC226d3156D63",
+    "implementationBlockNumber": 285042124,
+    "factory": "0x54357c6c9999101c51E0E55310FCc6a414E249D2",
+    "factoryBlockNumber": 285042130
+  },
+  "privateToken": {
+    "address": "0x1f8996dD97181bFC67d6317d1aE17435ceF431e2",
+    "name": "Private ERC 7943",
+    "symbol": "PERC7943",
+    "underlying": "0x15DF3e9761cEc63234c53b8aa576479219d6f789",
+    "master": "0x0A1d00262B98027581C08641E1233D9B0Bc5D10C",
+    "underlyingIsWrappedNative": false,
+    "defaultSendAllowed": false,
+    "defaultReceiveAllowed": false,
+    "blockNumber": 285042135
+  }
+}

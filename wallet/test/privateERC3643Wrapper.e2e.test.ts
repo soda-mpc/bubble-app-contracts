@@ -8,8 +8,10 @@ import {
   createRandomWalletsAndFund,
   DELAY_BALANCE_SYNC_MS,
   deployMockToken,
+  expectRecipientCanDecryptPrivateTransferEvent,
   getPrivateTokenBalance,
   mintAndApprove,
+  expectPrivateTransferEmitted,
   waitForDeploymentConfirmation,
   waitForUnshieldOutcome,
 } from "./helpers/testHelpers";
@@ -19,9 +21,6 @@ dotenv.config();
 const ARBITRUM_SEPOLIA_CHAIN_ID = 421614n;
 const PROXY_URL = process.env.PROXY_URL || "https://proxy.bubble.sodalabs.net";
 const ERC3643_FQN = "contracts/erc3643/PrivateERC3643ERC20Contract256.sol:PrivateERC3643ERC20Contract256";
-const CLEAR_TRANSFER_TOPIC = hre.ethers.id("Transfer(address,address,uint256)");
-const PRIVATE_TRANSFER_TOPIC = hre.ethers.id("Transfer(address,address)");
-
 async function createPrivateERC3643WrapperViaFactory(params: {
   owner: any;
   underlying: string;
@@ -95,18 +94,6 @@ async function expectComplianceDeniedShieldWithoutSideEffects(params: {
     .to.equal(createdEventsBefore.length);
 }
 
-async function expectOnlyNoAmountTransferEvent(tx: Promise<any>, privateToken: any) {
-  const receipt = await (await tx).wait();
-  const privateTokenAddress = (await privateToken.getAddress()).toLowerCase();
-  const tokenLogs = receipt.logs.filter((log: any) => log.address.toLowerCase() === privateTokenAddress);
-  const clearTransferLogs = tokenLogs.filter((log: any) => log.topics[0] === CLEAR_TRANSFER_TOPIC);
-  const privateTransferLogs = tokenLogs.filter((log: any) => log.topics[0] === PRIVATE_TRANSFER_TOPIC);
-
-  expect(clearTransferLogs.length, "Unexpected clear-amount Transfer event").to.equal(0);
-  expect(privateTransferLogs.length, "Expected no-amount Transfer event").to.equal(1);
-  return receipt;
-}
-
 async function expectComplianceTransferredEvent(receipt: any, compliance: any) {
   const complianceAddress = (await compliance.getAddress()).toLowerCase();
   const transferredTopic = compliance.interface.getEvent("TransferredCalled").topicHash;
@@ -143,7 +130,7 @@ async function waitForForcedTransferFinalized(
   throw new Error(`Timed out waiting for ForcedTransferFinalized(${requestId})`);
 }
 
-describe("PrivateERC3643ERC20Contract256 E2E", function () {
+describe.only("PrivateERC3643ERC20Contract256 E2E", function () {
   this.timeout(900000);
 
   let owner: any;
@@ -301,10 +288,20 @@ describe("PrivateERC3643ERC20Contract256 E2E", function () {
       .to.be.revertedWith("Transfer not possible");
 
     await (await identityRegistry.setVerified(recipientAddress, true)).wait();
-    const allowedTransferReceipt = await expectOnlyNoAmountTransferEvent(
+    const allowedTransferReceipt = await expectPrivateTransferEmitted(
       privateToken["transfer(address,uint256)"](recipientAddress, transferAmount),
       privateToken
     );
+    await expectRecipientCanDecryptPrivateTransferEvent({
+      receipt: allowedTransferReceipt,
+      privateToken,
+      recipient,
+      recipientAesKey,
+      senderAddress: ownerAddress,
+      recipientAddress,
+      expectedAmount: transferAmount,
+      proxyUrl: PROXY_URL,
+    });
     await expectComplianceTransferredEvent(allowedTransferReceipt, compliance);
 
     const recipientPrivateAfterTransfer = await getPrivateTokenBalance({
@@ -326,7 +323,7 @@ describe("PrivateERC3643ERC20Contract256 E2E", function () {
     expect(ownerPrivateAfterTransfer).to.equal(shieldAmount - transferAmount);
 
     await (await compliance.setTransferAllowed(false)).wait();
-    const deniedTransferReceipt = await expectOnlyNoAmountTransferEvent(
+    const deniedTransferReceipt = await expectPrivateTransferEmitted(
       privateToken["transfer(address,uint256)"](recipientAddress, 1n * 10n ** 18n),
       privateToken
     );
@@ -543,7 +540,7 @@ describe("PrivateERC3643ERC20Contract256 E2E", function () {
     });
 
     await (await compliance.setTransferAllowed(false)).wait();
-    const deniedTransferFromReceipt = await expectOnlyNoAmountTransferEvent(
+    const deniedTransferFromReceipt = await expectPrivateTransferEmitted(
       privateToken
         .connect(master)
         ["transferFrom(address,address,uint256)"](ownerAddress, recipientAddress, transferFromAmount),
@@ -569,7 +566,7 @@ describe("PrivateERC3643ERC20Contract256 E2E", function () {
     expect(recipientPrivateAfterDeniedTransferFrom).to.equal(recipientPrivateBeforeDeniedTransferFrom);
 
     await (await compliance.setTransferAllowed(true)).wait();
-    const allowedTransferFromReceipt = await expectOnlyNoAmountTransferEvent(
+    const allowedTransferFromReceipt = await expectPrivateTransferEmitted(
       privateToken
         .connect(master)
         ["transferFrom(address,address,uint256)"](ownerAddress, recipientAddress, transferFromAmount),

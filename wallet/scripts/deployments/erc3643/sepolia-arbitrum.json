@@ -1,0 +1,33 @@
+{
+  "network": {
+    "name": "sepolia-arbitrum",
+    "chainId": "421614"
+  },
+  "deployer": "0x0A1d00262B98027581C08641E1233D9B0Bc5D10C",
+  "identityRegistry": {
+    "address": "0x0bb4cC35807E66A5aF67eE68EeC57e0a8e2fe672",
+    "blockNumber": 285037971,
+    "deployed": true
+  },
+  "compliance": {
+    "address": "0x3E9bD448b21565e9Dad01595784e1117ee163401",
+    "blockNumber": 285037976,
+    "deployed": true
+  },
+  "privateERC3643SecurityToken": {
+    "implementation": "0x67e9f108d4730A4dAF3071506E1fc3c56a3581d6",
+    "implementationBlockNumber": 285037984,
+    "factory": "0x28caBdD0bA8dbf5c7FB507b970d7A2d2E8a348Cd",
+    "factoryBlockNumber": 285037990
+  },
+  "privateToken": {
+    "address": "0xAEcef63695Fcf5E9cE912c63711Fc4d59e544703",
+    "name": "Private ERC 3643",
+    "symbol": "PERC3643",
+    "decimals": 18,
+    "identityRegistry": "0x0bb4cC35807E66A5aF67eE68EeC57e0a8e2fe672",
+    "compliance": "0x3E9bD448b21565e9Dad01595784e1117ee163401",
+    "onchainID": "0x0000000000000000000000000000000000000000",
+    "blockNumber": 285037995
+  }
+}

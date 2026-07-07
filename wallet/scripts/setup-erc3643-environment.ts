@@ -1,4 +1,6 @@
 import { artifacts, ethers } from "hardhat";
+import fs from "fs";
+import path from "path";
 
 interface DeployedContractInfo {
   contract: any;
@@ -154,10 +156,14 @@ async function main() {
   const balance = await ethers.provider.getBalance(deployer.address);
   console.log(`Balance: ${ethers.formatEther(balance)} ETH\n`);
 
-  const tokenName = env("ERC3643_SECURITY_TOKEN_NAME", env("ERC3643_PRIVATE_TOKEN_NAME", "Private Security Token"));
-  const tokenSymbol = env("ERC3643_SECURITY_TOKEN_SYMBOL", env("ERC3643_PRIVATE_TOKEN_SYMBOL", "pSEC"));
+  const tokenName = env("ERC3643_SECURITY_TOKEN_NAME", env("ERC3643_PRIVATE_TOKEN_NAME", "Private ERC 3643"));
+  const tokenSymbol = env("ERC3643_SECURITY_TOKEN_SYMBOL", env("ERC3643_PRIVATE_TOKEN_SYMBOL", "PERC3643"));
   const tokenDecimals = envUint8("ERC3643_SECURITY_TOKEN_DECIMALS", 18);
   const shouldCreateToken = envBool("ERC3643_CREATE_TOKEN", true);
+  const deploymentJsonPath = env(
+    "ERC3643_DEPLOYMENT_JSON",
+    path.join(process.cwd(), "scripts", "deployments", "erc3643", `${network.name}.json`)
+  );
 
   const configuredIdentityRegistry = env("ERC3643_IDENTITY_REGISTRY_ADDRESS");
   const configuredCompliance = env("ERC3643_COMPLIANCE_ADDRESS");
@@ -170,7 +176,8 @@ async function main() {
   console.log(`  Security token symbol: ${tokenSymbol}`);
   console.log(`  Security token decimals: ${tokenDecimals}`);
   console.log(`  OnchainID: ${onchainID}`);
-  console.log(`  Create token via factory: ${shouldCreateToken}\n`);
+  console.log(`  Create token via factory: ${shouldCreateToken}`);
+  console.log(`  Deployment JSON: ${deploymentJsonPath}\n`);
 
   console.log("----------------------------------------------------------------");
   console.log("STEP 1: Identity registry");
@@ -306,6 +313,9 @@ async function main() {
   }
   console.log("\nJSON Output:");
   console.log(JSON.stringify(result, null, 2));
+  fs.mkdirSync(path.dirname(deploymentJsonPath), { recursive: true });
+  fs.writeFileSync(deploymentJsonPath, `${JSON.stringify(result, null, 2)}\n`);
+  console.log(`\nSaved deployment JSON to: ${deploymentJsonPath}`);
 
   return result;
 }
