@@ -19,6 +19,8 @@ import {
   findEventsFromStartBlockByName,
   findParsedLogInReceipt,
   getEventsInReceiptBlock,
+  expectDecryptViaProxyToFail,
+  getGcAclContract,
   getPrivateTokenBalance,
   mintAndApprove,
   waitForContractCode,
@@ -817,6 +819,68 @@ let defaultSigner: any;
     });
   });
 
+  describe("View Access Permissions", function () {
+    this.timeout(120000);
+
+    const shieldAmount = 75n * 10n ** 18n;
+
+    beforeEach(async function () {
+      await ensurePrivateBalanceClearedFor({
+        privateToken,
+        signer: defaultSigner,
+        aesKey: userAesKey,
+        proxyUrl: PROXY_URL,
+        hre,
+      });
+      await mintAndApprove({ mockToken, privateToken, userAddress, amount: shieldAmount });
+      await (await privateToken.shield(shieldAmount)).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+    });
+
+    it("should allow a viewer to decrypt the owner's balance after contract view access is granted", async function () {
+      const otherUserAesKey = await getUserKeyViaProxy(otherWallet, PROXY_URL);
+      const privateTokenAddress = await privateToken.getAddress();
+      const ownerBalanceHandle = await privateToken["balanceOf(address)"](userAddress);
+      expect(ownerBalanceHandle).to.not.equal(0n);
+
+      await expectDecryptViaProxyToFail(
+        ownerBalanceHandle,
+        otherWallet,
+        otherUserAesKey,
+        PROXY_URL
+      );
+
+      const expirationDate = BigInt(Math.floor(Date.now() / 1000) + 86400);
+      const gcAcl = await getGcAclContract(hre, defaultSigner);
+      const grantTx = await gcAcl.permitContractViewAccess(
+        otherWallet.address,
+        privateTokenAddress,
+        expirationDate
+      );
+      await grantTx.wait();
+
+      await delay(DELAY_MPC_DECRYPTION_MS);
+
+      expect(
+        await gcAcl.isContractViewPermitted(userAddress, otherWallet.address, privateTokenAddress)
+      ).to.equal(true);
+      expect(
+        await gcAcl.isPermittedToView(userAddress, otherWallet.address, ownerBalanceHandle)
+      ).to.equal(true);
+      expect(await gcAcl.isPermitted(ownerBalanceHandle, otherWallet.address)).to.equal(false);
+
+      const decryptedByViewer = await decryptValueViaProxy(
+        ownerBalanceHandle,
+        otherWallet,
+        otherUserAesKey,
+        PROXY_URL,
+        userAddress
+      );
+
+      expect(decryptedByViewer).to.equal(shieldAmount);
+    });
+  });
+
   describe("Master Address Management", function () {
     let newMasterWallet: HDNodeWallet;
 
@@ -919,7 +983,7 @@ let defaultSigner: any;
     });
   });
 
-  describe.only("Pause Functionality", function () {
+  describe("Pause Functionality", function () {
     const pauseTestShieldAmount = 20n * 10n ** 18n;
 
     beforeEach(async function () {
@@ -1004,7 +1068,7 @@ let defaultSigner: any;
       });
     });
 
-    it.only("should transfer all underlying tokens to owner and reset total supply", async function () {
+    it("should transfer all underlying tokens to owner and reset total supply", async function () {
       // Mint and shield tokens to create a balance in the contract
       await mintAndApprove({ mockToken, privateToken, userAddress, amount: shieldAmount });
       await (await privateToken.shield(shieldAmount)).wait();
@@ -1040,7 +1104,7 @@ let defaultSigner: any;
       expect(pausedEvents[0].args.account).to.equal(defaultSigner.address);
     });
 
-    it.only("should reject new shield operations after emergency recovery pauses the contract", async function () {
+    it("should reject new shield operations after emergency recovery pauses the contract", async function () {
       await mintAndApprove({ mockToken, privateToken, userAddress, amount: shieldAmount });
       await (await privateToken.shield(shieldAmount)).wait();
       await delay(DELAY_BALANCE_SYNC_MS);

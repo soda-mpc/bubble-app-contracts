@@ -279,22 +279,31 @@ export async function decryptValueViaProxy(
   signer: Wallet | HDNodeWallet,
   userAesKey: Buffer,
   proxyUrl: string,
+  ownerAddress?: string,
   debugLogging: boolean = false
 ): Promise<bigint> {
+  if (ownerAddress !== undefined && !isAddress(ownerAddress)) {
+    throw new TypeError(`Invalid owner address: ${ownerAddress}`);
+  }
+
   const normalizedProxyUrl = normalizeProxyUrl(proxyUrl);
   const userAddress = await signer.getAddress();
   const handleHex = handleToHex(handle);
   const handleLabel = handleHexForLog(handleHex);
-  logDebug(debugLogging, `[decryptValueViaProxy] Starting decryption for handle ${handleLabel} (address: ${userAddress})`);
+  const onBehalf = ownerAddress !== undefined;
+  logDebug(
+    debugLogging,
+    `[decryptValueViaProxy] Starting decryption for handle ${handleLabel} (signer: ${userAddress}${onBehalf ? `, owner: ${ownerAddress}` : ""})`
+  );
 
   const handleBytes = handleToBytes(handle);
-
-  // Sign the handle bytes
-  const signature = await signer.signMessage(handleBytes);
+  const messageToSign = onBehalf
+    ? concatBytes([handleBytes, getBytes(ownerAddress)])
+    : handleBytes;
+  const signature = await signer.signMessage(messageToSign);
 
   const chainId = await getChainIdForEncryptToUser("[decryptValueViaProxy]", `handle ${handleLabel}`);
 
-  // Prepare request data
   const handleBase64 = base64EncodeBytes(handleBytes);
   const userSignature = base64EncodeBytes(hre.ethers.getBytes(signature));
 
@@ -307,6 +316,7 @@ export async function decryptValueViaProxy(
         handle: handleBase64,
         chain_id: chainId,
         user_signature: userSignature,
+        ...(onBehalf ? { owner: ownerAddress } : {}),
       }),
     });
 
@@ -318,7 +328,7 @@ export async function decryptValueViaProxy(
     }
 
     try {
-      return JSON.parse(bodyText) as any;
+      return JSON.parse(bodyText) as { output?: string };
     } catch (error) {
       logDebugError(debugLogging, `[decryptValueViaProxy] encrypt-to-user invalid JSON response: ${bodyText} for handle ${handleLabel}`);
       throw error;

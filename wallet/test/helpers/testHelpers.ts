@@ -54,6 +54,38 @@ export type HardhatRuntime = {
   };
 };
 
+/** GCACL addresses from @sodalabs/bubble-core-contracts BubbleAddresses.sol */
+const GC_ACL_ADDRESSES: Record<number, string> = {
+  1: "0xDaA920259d039410b537959c7E920f58AF8877AD",
+  137: "0xDaA920259d039410b537959c7E920f58AF8877AD",
+  42161: "0xDaA920259d039410b537959c7E920f58AF8877AD",
+  11155111: "0xec8176d47bF788d71215ed4C33fD26Dc89B9121A",
+  50505070: "0xDaA920259d039410b537959c7E920f58AF8877AD",
+  421614: "0x78F7Aa55A2c86D90dd9FDf8F9affE786672a23b6",
+};
+
+export const GCACL_ABI = [
+  "function permit(uint256 handle, address account)",
+  "function permitContractViewAccess(address permittee, address contractAddress, uint64 expirationDate)",
+  "function isPermitted(uint256 handle, address account) view returns (bool)",
+  "function isContractViewPermitted(address permitter, address permittee, address contractAddress) view returns (bool)",
+  "function isPermittedToView(address permitter, address permittee, uint256 handle) view returns (bool)",
+] as const;
+
+export function getGcAclAddress(chainId: number): string {
+  const address = GC_ACL_ADDRESSES[chainId];
+  if (!address) {
+    throw new Error(`Unsupported chain ID for GCACL: ${chainId}`);
+  }
+  return address;
+}
+
+export async function getGcAclContract(hre: { ethers: { provider: { getNetwork: () => Promise<{ chainId: bigint }> }; getContractAt: (...args: any[]) => Promise<any> } }, signer: Wallet | HDNodeWallet) {
+  const network = await hre.ethers.provider.getNetwork();
+  const address = getGcAclAddress(Number(network.chainId));
+  return hre.ethers.getContractAt([...GCACL_ABI], address, signer);
+}
+
 export const PRIVATE_ERC20_256_FQN = "contracts/PrivateERC20Contract256.sol:PrivateERC20Contract256";
 export const ERC1967_PROXY_FQN = "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy";
 
@@ -351,6 +383,36 @@ export async function getPrivateTokenBalance(params: {
     return 0n;
   }
   return decryptBalanceViaProxy(balanceHandle, signer, aesKey, proxyUrl);
+}
+
+/** Decrypt an owner's balance handle via view access (on-behalf encrypt-to-user). */
+export async function decryptHandleForOwnerViaProxy(params: {
+  privateToken: { ["balanceOf(address)"](address: string): Promise<bigint> };
+  ownerAddress: string;
+  viewer: Wallet | HDNodeWallet;
+  viewerAesKey: Buffer;
+  proxyUrl: string;
+}): Promise<bigint> {
+  const { privateToken, ownerAddress, viewer, viewerAesKey, proxyUrl } = params;
+  const handle = await privateToken["balanceOf(address)"](ownerAddress);
+  if (handle === 0n) {
+    return 0n;
+  }
+  return decryptBalanceViaProxy(handle, viewer, viewerAesKey, proxyUrl, ownerAddress);
+}
+
+export async function expectDecryptViaProxyToFail(
+  handle: bigint,
+  signer: Wallet | HDNodeWallet,
+  aesKey: Buffer,
+  proxyUrl: string
+): Promise<void> {
+  try {
+    await decryptBalanceViaProxy(handle, signer, aesKey, proxyUrl);
+  } catch {
+    return;
+  }
+  throw new Error("Expected decrypt via proxy to fail without view permission");
 }
 
 /** Wait for receipt and assert a PrivateTransfer log was emitted (no clear-amount Transfer). */
