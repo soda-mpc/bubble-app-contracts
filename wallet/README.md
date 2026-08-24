@@ -29,6 +29,8 @@ Packages that affect **compiled bytecode**, **storage layout**, **compiler outpu
 | `hardhat` | 2.27.1 | Compile/deploy/test runner |
 | `soda-sdk` | (see `package.json`) | MPC/crypto integration used in scripts and tests |
 | `@sodalabs/bubble-core-contracts` | git ref `update-contracts-version` | Shared on-chain primitives (commit resolved in lockfile) |
+| `@safe-global/safe-contracts` | 1.4.1 | Prebuilt Safe v1.4.1 artifacts for deploy/test helpers |
+| `@safe-global/safe-deployments` | 1.37.62 | Canonical Safe addresses on public networks |
 
 When bumping any pinned package, re-run `npm install`, `npm run compile`, and the full test suite. For OpenZeppelin contract bumps, run `prepare-upgrade` / storage checks against live proxy addresses before mainnet Safe transactions.
 
@@ -42,5 +44,16 @@ When bumping any pinned package, re-run `npm install`, `npm run compile`, and th
 | `npm test` | Run Hardhat tests |
 | `npm run deploy:upgradable:base-sepolia` | Deploy UUPS proxy (Base Sepolia) |
 | `npm run prepare-upgrade:base-sepolia` | Print Safe calldata for an upgrade |
+| `npm run deploy:safe-infrastructure:kurtosis` | Deploy (or resolve canonical) SafeL2 + factory |
+| `npm run deploy:safe-wallet:kurtosis` | Create a Safe proxy wallet on Kurtosis |
+| `npm run test:safe` | Safe compile + local wallet integration tests |
+| `npm run test:safe:bubble:arbitrum-sepolia` | Safe + PrivateERC20 E2E on Arbitrum Sepolia (live MPC) |
+| `npm run test:safe:oprf-facilitator:arbitrum-sepolia` | User + Safe + agent + facilitator OPRF redeem on Arbitrum Sepolia |
+
+## Safe smart account (v1.4.1)
+
+Deploy/test helpers use **prebuilt artifacts** from `@safe-global/safe-contracts@1.4.1` (avoids recompiling Safe with solc 0.7.6 in this project). Canonical addresses on public networks come from `@safe-global/safe-deployments`. For reading or patching Safe source, use the sibling repo [`safe-smart-account`](../../safe-smart-account) (`npm run link:safe` optional).
+
+Deployment records are written to `scripts/deployments/safe/`. On networks with canonical Safe deployments (e.g. Base Sepolia), scripts reuse on-chain addresses; on Kurtosis they deploy fresh infrastructure.
 
 See `package.json` for network-specific deploy, verify, and balance scripts.

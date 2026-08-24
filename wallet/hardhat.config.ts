@@ -16,11 +16,11 @@ const config: HardhatUserConfig = {
         settings: {
             optimizer: {
                 enabled: true,
-                runs: 8
+                runs: 8,
             },
             evmVersion: "cancun",
-            viaIR: true
-        }
+            viaIR: true,
+        },
     },
     networks: {
         hardhat: {
@@ -138,7 +138,8 @@ const config: HardhatUserConfig = {
                 }
             }
         ]
-    }, sourcify: {
+    },
+    sourcify: {
         enabled: false,
     }
 };

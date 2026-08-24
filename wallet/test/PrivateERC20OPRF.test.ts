@@ -90,6 +90,74 @@ describe("PrivateERC20Contract OPRF Minting", function () {
     await delay(DELAY_BALANCE_SYNC_MS);
   });
 
+  function dummyIt256(user: string) {
+    return {
+      userAddress: user,
+      ciphertext: { ciphertextHigh: 1n, ciphertextLow: 1n },
+    };
+  }
+
+  function dummyIt128(user: string) {
+    return {
+      userAddress: user,
+      ciphertext: 1n,
+    };
+  }
+
+  describe("OPRF IT user consistency", function () {
+    it("reverts splitToken when x/q/qSplit userAddresses disagree", async function () {
+      const other = Wallet.createRandom().address;
+      await expect(
+        privateToken.splitToken(dummyIt128(userAddress), dummyIt256(other), 0, dummyIt256(userAddress))
+      ).to.be.revertedWith("OPRF IT user mismatch");
+    });
+
+    it("reverts splitTokenForRecipient when ITs mix userAddresses", async function () {
+      const other = Wallet.createRandom().address;
+      await expect(
+        privateToken.splitTokenForRecipient(
+          dummyIt128(userAddress),
+          dummyIt256(userAddress),
+          0,
+          dummyIt256(other),
+          userAddress
+        )
+      ).to.be.revertedWith("OPRF IT user mismatch");
+    });
+
+    it("reverts mergeMany when token ITs mix userAddresses", async function () {
+      const other = Wallet.createRandom().address;
+      await expect(
+        privateToken.mergeMany([
+          { x: dummyIt128(userAddress), q: dummyIt256(userAddress), y_clear: 1n },
+          { x: dummyIt128(other), q: dummyIt256(other), y_clear: 1n },
+        ])
+      ).to.be.revertedWith("OPRF IT user mismatch");
+    });
+
+    it("reverts redeemMany when amount IT userAddress differs from token ITs", async function () {
+      const other = Wallet.createRandom().address;
+      await expect(
+        privateToken.redeemMany(
+          [{ x: dummyIt128(userAddress), q: dummyIt256(userAddress), y_clear: 1n }],
+          dummyIt256(other),
+          userAddress
+        )
+      ).to.be.revertedWith("OPRF IT user mismatch");
+    });
+
+    it("reverts transferOPRF when amount IT userAddress differs from token ITs", async function () {
+      const other = Wallet.createRandom().address;
+      await expect(
+        privateToken.transferOPRF(
+          [{ x: dummyIt128(userAddress), q: dummyIt256(userAddress), y_clear: 1n }],
+          dummyIt256(other),
+          userAddress
+        )
+      ).to.be.revertedWith("OPRF IT user mismatch");
+    });
+  });
+
   describe("OPRF Token tests", function () {
     it("Should successfully mint OPRF tokens with encrypted parameters", async function () {
 
@@ -648,7 +716,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       // Wait a bit more for MPC computation to complete before decryption
       await delay(DELAY_SHORT_MS);
 
-      // Split was executed by tempWallet — all remainder/payment handles are permitted to msg.sender (tempWallet)
+      // Direct EOA split: remainder/payment handles are permitted to the IT owner (here tempWallet).
       const [
         decryptedXrRemainder,
         decryptedQRemainder,
@@ -848,7 +916,7 @@ describe("PrivateERC20Contract OPRF Minting", function () {
         signer: defaultSigner,
       });
 
-      // Caller must be defaultSigner (matches ciphertext userAddress). Remainder handles are permitted to msg.sender.
+      // Caller must be defaultSigner (matches ciphertext userAddress). Remainder handles are permitted to the IT owner.
       const splitTx = await privateToken.connect(defaultSigner).splitTokenForRecipient(
         xIT,
         qIT,
@@ -1030,10 +1098,10 @@ describe("PrivateERC20Contract OPRF Minting", function () {
       await delay(DELAY_BALANCE_SYNC_MS);
 
       // Get split values from OPRFMinted events (same approach as frontend)
-      // The contract emits two OPRFMinted events: one for remainder (msg.sender) and one for payment (recipient)
+      // The contract emits two OPRFMinted events: one for remainder (IT owner / creditTo) and one for payment (recipient)
       const oprfMintedEvents = getOprfMintedEventsFromReceipt(splitReceipt, privateToken);
 
-      // Find remainder event (for msg.sender = tempWallet in this test)
+      // Find remainder event (creditTo = tempWallet in this direct-EOA test)
       const remainderEvent = oprfMintedEvents.find((e: any) => 
         e.user.toLowerCase() === tempAddress.toLowerCase()
       );

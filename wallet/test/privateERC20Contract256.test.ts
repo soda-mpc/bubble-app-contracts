@@ -21,6 +21,7 @@ import {
   getEventsInReceiptBlock,
   expectDecryptViaProxyToFail,
   getGcAclContract,
+  getPrivateTransferAmountHandle,
   getPrivateTokenBalance,
   mintAndApprove,
   waitForContractCode,
@@ -878,6 +879,89 @@ let defaultSigner: any;
       );
 
       expect(decryptedByViewer).to.equal(shieldAmount);
+    });
+  });
+
+  describe("Selective Handle Permit Sharing", function () {
+    this.timeout(120000);
+
+    const shieldAmount = 100n * 10n ** 18n;
+    const transferAmounts = [10n * 10n ** 18n, 20n * 10n ** 18n, 30n * 10n ** 18n];
+    let viewerWallet: HDNodeWallet;
+
+    before(async function () {
+      [viewerWallet] = await createRandomWalletsAndFund({
+        hre,
+        sender: defaultSigner,
+        count: 1,
+        amountWei: hre.ethers.parseEther("0.01"),
+      });
+    });
+
+    beforeEach(async function () {
+      await ensurePrivateBalanceClearedFor({
+        privateToken,
+        signer: defaultSigner,
+        aesKey: userAesKey,
+        proxyUrl: PROXY_URL,
+        hre,
+      });
+      await mintAndApprove({ mockToken, privateToken, userAddress, amount: shieldAmount });
+      await (await privateToken.shield(shieldAmount)).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+    });
+
+    it("should let a third party decrypt only transfer amount handles explicitly permitted via GCACL.permit", async function () {
+      const viewerAesKey = await getUserKeyViaProxy(viewerWallet, PROXY_URL);
+      const privateTokenAddress = await privateToken.getAddress();
+      const transferHandles: bigint[] = [];
+
+      for (const amount of transferAmounts) {
+        const { encryptedHigh, encryptedLow } = prepareMessageForBubble256(
+          amount,
+          userAddress,
+          userAesKeyHex,
+          privateTokenAddress
+        );
+        const transferTx = await privateToken["transfer(address,(address,(uint256,uint256)))"](otherWallet.address, {
+          userAddress,
+          ciphertext: {
+            ciphertextHigh: encryptedHigh,
+            ciphertextLow: encryptedLow,
+          },
+        });
+        const transferReceipt = await transferTx.wait();
+        expect(transferReceipt?.status).to.equal(1);
+        transferHandles.push(getPrivateTransferAmountHandle(transferReceipt, privateToken));
+      }
+
+      expect(transferHandles).to.have.length(3);
+      const [firstHandle, secondHandle, thirdHandle] = transferHandles;
+
+      await delay(DELAY_MPC_PROCESSING_MS);
+
+      for (const handle of transferHandles) {
+        await expectDecryptViaProxyToFail(handle, viewerWallet, viewerAesKey, PROXY_URL);
+      }
+
+      const gcAcl = await getGcAclContract(hre, defaultSigner);
+      const permitFirstTx = await gcAcl.permit(firstHandle, viewerWallet.address);
+      await permitFirstTx.wait();
+      const permitThirdTx = await gcAcl.permit(thirdHandle, viewerWallet.address);
+      await permitThirdTx.wait();
+
+      await delay(DELAY_MPC_PROCESSING_MS);
+
+      expect(await gcAcl.isPermitted(firstHandle, viewerWallet.address)).to.equal(true);
+      expect(await gcAcl.isPermitted(secondHandle, viewerWallet.address)).to.equal(false);
+      expect(await gcAcl.isPermitted(thirdHandle, viewerWallet.address)).to.equal(true);
+
+      const decryptedFirst = await decryptValueViaProxy(firstHandle, viewerWallet, viewerAesKey, PROXY_URL);
+      const decryptedThird = await decryptValueViaProxy(thirdHandle, viewerWallet, viewerAesKey, PROXY_URL);
+      expect(decryptedFirst).to.equal(transferAmounts[0]);
+      expect(decryptedThird).to.equal(transferAmounts[2]);
+
+      await expectDecryptViaProxyToFail(secondHandle, viewerWallet, viewerAesKey, PROXY_URL);
     });
   });
 

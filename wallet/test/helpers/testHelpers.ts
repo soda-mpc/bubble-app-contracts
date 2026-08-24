@@ -67,9 +67,13 @@ const GC_ACL_ADDRESSES: Record<number, string> = {
 export const GCACL_ABI = [
   "function permit(uint256 handle, address account)",
   "function permitContractViewAccess(address permittee, address contractAddress, uint64 expirationDate)",
+  "function permitFullInsertAccess(address permittee, uint64 expirationDate)",
+  "function permitContractInsertAccess(address permittee, address contractAddress, uint64 expirationDate)",
+  "function isFullInsertPermitted(address permitter, address permittee) view returns (bool)",
   "function isPermitted(uint256 handle, address account) view returns (bool)",
   "function isContractViewPermitted(address permitter, address permittee, address contractAddress) view returns (bool)",
   "function isPermittedToView(address permitter, address permittee, uint256 handle) view returns (bool)",
+  "function isContractInsertPermitted(address permitter, address permittee, address contractAddress) view returns (bool)",
 ] as const;
 
 export function getGcAclAddress(chainId: number): string {
@@ -543,6 +547,19 @@ export function findParsedLogInReceipt(
   return parseReceiptLogs(receipt, contract).find((entry) => entry.name === eventName)?.log;
 }
 
+/** `PrivateTransfer` amount handle (`args[2]`) from a transfer receipt. */
+export function getPrivateTransferAmountHandle(
+  receipt: Parameters<typeof findParsedLogInReceipt>[0],
+  privateToken: { interface: { parseLog: (log: any) => { args?: readonly unknown[] } } }
+): bigint {
+  const privateTransferLog = findParsedLogInReceipt(receipt, privateToken, "PrivateTransfer");
+  expect(privateTransferLog, "Expected PrivateTransfer event").to.not.be.undefined;
+  const privateTransferEvent = privateToken.interface.parseLog(privateTransferLog!);
+  const amountHandle = privateTransferEvent?.args?.[2] as bigint;
+  expect(amountHandle).to.not.be.undefined;
+  return amountHandle;
+}
+
 /** All receipt logs that parse to `eventName` (same parsing rules as `findParsedLogInReceipt`). */
 export function findParsedLogsInReceipt(
   receipt: Parameters<typeof findParsedLogInReceipt>[0],
@@ -591,6 +608,32 @@ export function getOprfMintedHandlesFromReceipt(
   const first = getOprfMintedEventsFromReceipt(receipt, contract)[0];
   if (!first) return undefined;
   return { xHandle: first.x, yHandle: first.y, qHandle: first.q };
+}
+
+function collectAddressesFromValue(value: unknown, into: Set<string>) {
+  if (value == null) return;
+  if (typeof value === "string" && value.startsWith("0x") && value.length === 42) {
+    into.add(value.toLowerCase());
+    return;
+  }
+  if (typeof value === "object") {
+    for (const item of Object.values(value as object)) {
+      if (typeof item === "function") continue;
+      collectAddressesFromValue(item, into);
+    }
+  }
+}
+
+/** Addresses that appear in this contract's parsed event args for a receipt. */
+export function collectEventAddressesFromReceipt(
+  receipt: Parameters<typeof findParsedLogInReceipt>[0],
+  contract: Parameters<typeof findParsedLogInReceipt>[1]
+): string[] {
+  const addresses = new Set<string>();
+  for (const entry of parseReceiptLogs(receipt, contract)) {
+    collectAddressesFromValue(entry.parsed?.args, addresses);
+  }
+  return [...addresses];
 }
 
 export async function waitForUnshieldOutcome(

@@ -21,3 +21,10 @@ yarn.lock
 ignition/deployments/chain-31337
 
 /tmp
+
+# Symlink to sibling safe-smart-account (see npm run link:safe)
+/vendor/safe-smart-account
+
+# Local Safe deploy records (keep directory via .gitkeep)
+/scripts/deployments/safe/*
+!/scripts/deployments/safe/.gitkeep

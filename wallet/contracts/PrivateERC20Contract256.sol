@@ -775,7 +775,8 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         gtUint128 xGT,
         gtUint256 qGT,
         gtUint256 qSplitGT,
-        uint128 y_clear
+        uint128 y_clear,
+        address attributedUser
     ) internal returns (
         gtUint128 xrRemainder,
         gtUint128 yRemainder,
@@ -802,8 +803,8 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         (xrRemainder, yRemainder) = MpcCore.oprfMint($._oprfKey, qRemainder);
         (xrPay, yPay) = MpcCore.oprfMint($._oprfKey, qPay);
         
-        // Emit invalidation event for the original token (using validated GT values)
-        emit OPRFTokenInvalidated(msg.sender, xGT, qGT, y_clear, 1); // 1=split
+        // Attribute invalidation to the credited user (Safe on exec, IT owner on relayer).
+        emit OPRFTokenInvalidated(attributedUser, xGT, qGT, y_clear, 1); // 1=split
     }
 
     /// @notice Splits an OPRF token into remainder and payment portions using encrypted parameters
@@ -817,6 +818,8 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         uint128 y_clear,
         itUint256 calldata qSplit
     ) public virtual whenNotPaused {
+        address creditTo = _oprfCreditTo(_oprfNoteOwner(x, q, qSplit));
+
         // Validate and decrypt the encrypted parameters
         gtUint128 xGT = MpcCore.validateCiphertext(x);
         gtUint256 qGT = MpcCore.validateCiphertext(q);
@@ -824,22 +827,20 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         
         // Perform the split operation
         (gtUint128 xrRemainder, gtUint128 yRemainder, gtUint256 qRemainder, gtUint128 xrPay, gtUint256 qPay, gtUint128 yPay) = 
-            _splitTokenInternal(xGT, qGT, qSplitGT, y_clear);
+            _splitTokenInternal(xGT, qGT, qSplitGT, y_clear, creditTo);
         
-        // Permit the user to decrypt the results
-        MpcCore.permit(xrRemainder, msg.sender);
-        MpcCore.permit(qRemainder, msg.sender);
-        MpcCore.permit(yRemainder, msg.sender);
-        MpcCore.permit(xrPay, msg.sender);
-        MpcCore.permit(qPay, msg.sender);
-        MpcCore.permit(yPay, msg.sender);
+        // Permit the note owner (or Safe, when the owner executes) to decrypt the results
+        MpcCore.permit(xrRemainder, creditTo);
+        MpcCore.permit(qRemainder, creditTo);
+        MpcCore.permit(yRemainder, creditTo);
+        MpcCore.permit(xrPay, creditTo);
+        MpcCore.permit(qPay, creditTo);
+        MpcCore.permit(yPay, creditTo);
         
         // Emit events
-        emit OPRFSplit(msg.sender, xrRemainder, qRemainder, yRemainder, xrPay, qPay, yPay);
-        // Emit OPRFMinted events for both the remainder and payment tokens
-        // This allows the subgraph to track them like regular minted tokens
-        emit OPRFMinted(msg.sender, xrRemainder, yRemainder, qRemainder);
-        emit OPRFMinted(msg.sender, xrPay, yPay, qPay);
+        emit OPRFSplit(creditTo, xrRemainder, qRemainder, yRemainder, xrPay, qPay, yPay);
+        emit OPRFMinted(creditTo, xrRemainder, yRemainder, qRemainder);
+        emit OPRFMinted(creditTo, xrPay, yPay, qPay);
     }
 
     /// @notice Splits an OPRF token for anonymous transfer to a recipient
@@ -855,6 +856,10 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         itUint256 calldata qSplit,
         address recipient
     ) public virtual whenNotPaused {
+        address owner = _oprfNoteOwner(x, q, qSplit);
+        _requireOprfRelayerDest(owner, recipient);
+        address creditTo = _oprfCreditTo(owner);
+
         // Validate and decrypt the encrypted parameters
         gtUint128 xGT = MpcCore.validateCiphertext(x);
         gtUint256 qGT = MpcCore.validateCiphertext(q);
@@ -862,25 +867,19 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         
         // Perform the split operation
         (gtUint128 xrRemainder, gtUint128 yRemainder, gtUint256 qRemainder, gtUint128 xrPay, gtUint256 qPay, gtUint128 yPay) = 
-            _splitTokenInternal(xGT, qGT, qSplitGT, y_clear);
+            _splitTokenInternal(xGT, qGT, qSplitGT, y_clear, creditTo);
         
-        // Permit the original user to decrypt the remainder values
-        MpcCore.permit(xrRemainder, msg.sender);
-        MpcCore.permit(qRemainder, msg.sender);
-        MpcCore.permit(yRemainder, msg.sender);
+        MpcCore.permit(xrRemainder, creditTo);
+        MpcCore.permit(qRemainder, creditTo);
+        MpcCore.permit(yRemainder, creditTo);
         
-        // Permit the recipient to decrypt the payment values
         MpcCore.permit(xrPay, recipient);
         MpcCore.permit(qPay, recipient);
         MpcCore.permit(yPay, recipient);
         
-        // Emit OPRFMinted events for both the remainder and payment tokens
-        // This allows the subgraph to track them like regular minted tokens
-        emit OPRFMinted(msg.sender, xrRemainder, yRemainder, qRemainder);
+        emit OPRFMinted(creditTo, xrRemainder, yRemainder, qRemainder);
         emit OPRFMinted(recipient, xrPay, yPay, qPay);
-        
-        // Also emit the split event for backward compatibility and additional tracking
-        emit OPRFSplitForRecipient(msg.sender, recipient, xrRemainder, qRemainder, yRemainder, xrPay, qPay, yPay);
+        emit OPRFSplitForRecipient(creditTo, recipient, xrRemainder, qRemainder, yRemainder, xrPay, qPay, yPay);
     }
     
     /// @notice Burns an OPRF token and transfers the burned amount to recipient
@@ -895,6 +894,10 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         address recipient
     ) public virtual whenNotPaused {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        address owner = _oprfNoteOwner(x, q);
+        _requireOprfRelayerDest(owner, recipient);
+        address creditTo = _oprfCreditTo(owner);
+
         // Validate and decrypt the encrypted parameters
         gtUint128 xGT = MpcCore.validateCiphertext(x);
         gtUint256 qGT = MpcCore.validateCiphertext(q);
@@ -910,13 +913,10 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         // Transfer the burned amount from contract to recipient
         _transferFromContract(recipient, burnedAmount);
         
-        // Permit the user to decrypt the burned amount
-        MpcCore.permit(burnedAmount, msg.sender);
-        
-        
-        // Emit invalidation event for the burned token (using encrypted values)
-        emit OPRFTokenInvalidated(msg.sender, xGT, qGT, y_clear, 3); // 3=burned
-        emit OPRFBurned(msg.sender, recipient, burnedAmount);
+        MpcCore.permit(burnedAmount, creditTo);
+
+        emit OPRFTokenInvalidated(creditTo, xGT, qGT, y_clear, 3); // 3=burned
+        emit OPRFBurned(creditTo, recipient, burnedAmount);
     }
 
     /// @notice Internal function that burns multiple OPRF tokens and accumulates the total burned amount
@@ -926,6 +926,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         OPRFToken[] calldata tokens
     ) internal returns (gtUint256 totalBurned) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        address attributedUser = _oprfCreditTo(_oprfTokensOwner(tokens));
         
         // Initialize total burned amount with zero (MPC operations grant transient permission automatically)
         totalBurned = $.zero;
@@ -942,9 +943,8 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
             // add grants transient permission for totalBurned
             totalBurned = MpcCore.add(totalBurned, burnedAmount);
             
-            // Emit invalidation event for each burned token
-            emit OPRFTokenInvalidated(msg.sender, xGT, qGT, tokens[i].y_clear, 3); // 3=burned
-            emit OPRFBurned(msg.sender, address(this), burnedAmount);
+            emit OPRFTokenInvalidated(attributedUser, xGT, qGT, tokens[i].y_clear, 3); // 3=burned
+            emit OPRFBurned(attributedUser, address(this), burnedAmount);
         }
     }
 
@@ -956,8 +956,8 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     function mergeMany(
         OPRFToken[] calldata tokens
     ) public virtual whenNotPaused returns (gtUint128 x, gtUint128 y, gtUint256 qMerged) {
-        require(tokens.length > 0, "At least one token required");
-        
+        address creditTo = _oprfCreditTo(_oprfTokensOwner(tokens));
+
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         
         // Burn all tokens and get the total burned amount
@@ -966,16 +966,14 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         // Mint a new OPRF token with the total burned amount using the contract's internal key
         (x, y) = MpcCore.oprfMint($._oprfKey, totalBurned);
         
-        // Permit the user to decrypt the new token values
-        MpcCore.permit(x, msg.sender);
-        MpcCore.permit(y, msg.sender);
-        MpcCore.permit(totalBurned, msg.sender);
+        MpcCore.permit(x, creditTo);
+        MpcCore.permit(y, creditTo);
+        MpcCore.permit(totalBurned, creditTo);
         
         qMerged = totalBurned;
         
-        // Emit events for the merged token
-        emit OPRFMinted(msg.sender, x, y, qMerged);
-        emit OPRFMerged(msg.sender, x, qMerged, y);
+        emit OPRFMinted(creditTo, x, y, qMerged);
+        emit OPRFMerged(creditTo, x, qMerged, y);
     }
 
     /// @notice Transfers OPRF tokens to a recipient by burning input tokens and minting new tokens
@@ -1002,6 +1000,9 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     ) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         _validateOPRFSpendInputs(tokens.length, recipient);
+        address budgetOwner = _oprfBudgetOwner(tokens, amount);
+        _requireOprfRelayerDest(budgetOwner, recipient);
+        address creditTo = _oprfCreditTo(budgetOwner);
 
         (, gtUint256 recipientAmount, gtUint256 senderAmount) = _calculateOPRFSpendAmounts(tokens, amount);
         
@@ -1009,28 +1010,71 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         (xRecipient, yRecipient) = MpcCore.oprfMint($._oprfKey, recipientAmount);
         (xSender, ySender) = MpcCore.oprfMint($._oprfKey, senderAmount);
         
-        // Only permit values that need to be decrypted AFTER the transaction
         MpcCore.permit(xRecipient, recipient);
         MpcCore.permit(yRecipient, recipient);
         MpcCore.permit(recipientAmount, recipient);
-        MpcCore.permit(recipientAmount, msg.sender);
+        MpcCore.permit(recipientAmount, creditTo);
         
-        MpcCore.permit(xSender, msg.sender);
-        MpcCore.permit(ySender, msg.sender);
-        MpcCore.permit(senderAmount, msg.sender);
+        MpcCore.permit(xSender, creditTo);
+        MpcCore.permit(ySender, creditTo);
+        MpcCore.permit(senderAmount, creditTo);
         
         qRecipient = recipientAmount;
         qSender = senderAmount;
         
-        // Emit events
-        emit OPRFTransferred(msg.sender, recipient, recipientAmount);
+        emit OPRFTransferred(creditTo, recipient, recipientAmount);
         emit OPRFMinted(recipient, xRecipient, yRecipient, qRecipient);
-        emit OPRFMinted(msg.sender, xSender, ySender, qSender);
+        emit OPRFMinted(creditTo, xSender, ySender, qSender);
     }
 
     function _validateOPRFSpendInputs(uint256 tokenCount, address recipient) private pure {
         require(tokenCount > 0, "At least one token required");
         require(recipient != address(0), "Recipient cannot be zero address");
+    }
+
+    /// @notice Budget owner is `it.userAddress`. All OPRF/amount ITs must agree so a relayer cannot mix signers.
+    function _oprfBudgetOwner(
+        OPRFToken[] calldata tokens,
+        itUint256 calldata amount
+    ) private pure returns (address owner) {
+        owner = _oprfTokensOwner(tokens);
+        require(amount.userAddress == owner, "OPRF IT user mismatch");
+    }
+
+    function _oprfNoteOwner(itUint128 calldata x, itUint256 calldata q) private pure returns (address owner) {
+        owner = x.userAddress;
+        require(owner != address(0), "OPRF owner cannot be zero");
+        require(q.userAddress == owner, "OPRF IT user mismatch");
+    }
+
+    function _oprfNoteOwner(
+        itUint128 calldata x,
+        itUint256 calldata q,
+        itUint256 calldata extra
+    ) private pure returns (address owner) {
+        owner = _oprfNoteOwner(x, q);
+        require(extra.userAddress == owner, "OPRF IT user mismatch");
+    }
+
+    function _oprfTokensOwner(OPRFToken[] calldata tokens) private pure returns (address owner) {
+        require(tokens.length > 0, "At least one token required");
+        owner = tokens[0].x.userAddress;
+        require(owner != address(0), "OPRF owner cannot be zero");
+        for (uint256 i = 0; i < tokens.length; ++i) {
+            require(tokens[i].x.userAddress == owner && tokens[i].q.userAddress == owner, "OPRF IT user mismatch");
+        }
+    }
+
+    /// @dev Relayer (`tx.origin != IT owner`) may only credit the owner. Owner/Safe (`tx.origin == owner`) keep caller-chosen dest.
+    function _requireOprfRelayerDest(address owner, address recipient) private view {
+        if (tx.origin != owner) {
+            require(recipient == owner, "Relayer dest must be IT owner");
+        }
+    }
+
+    /// @dev Remainder credit: Safe exec keeps `msg.sender` (the Safe); a relayer credits the IT owner.
+    function _oprfCreditTo(address owner) private view returns (address) {
+        return tx.origin == owner ? msg.sender : owner;
     }
 
     function _calculateOPRFSpendAmounts(
@@ -1052,6 +1096,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     }
 
     function _mintRedeemRemainder(
+        address budgetOwner,
         address recipient,
         gtUint256 totalBurned,
         gtUint256 recipientAmount,
@@ -1063,18 +1108,20 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     ) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
 
+        address creditTo = _oprfCreditTo(budgetOwner);
+
         (xRemainder, yRemainder) = MpcCore.oprfMint($._oprfKey, senderRemainder);
 
-        MpcCore.permit(xRemainder, msg.sender);
-        MpcCore.permit(yRemainder, msg.sender);
-        MpcCore.permit(senderRemainder, msg.sender);
-        MpcCore.permit(recipientAmount, msg.sender);
-        MpcCore.permit(totalBurned, msg.sender);
+        MpcCore.permit(xRemainder, creditTo);
+        MpcCore.permit(yRemainder, creditTo);
+        MpcCore.permit(senderRemainder, creditTo);
+        MpcCore.permit(recipientAmount, creditTo);
+        MpcCore.permit(totalBurned, creditTo);
 
         qRemainder = senderRemainder;
 
-        emit OPRFBurned(msg.sender, recipient, totalBurned);
-        emit OPRFMinted(msg.sender, xRemainder, yRemainder, qRemainder);
+        emit OPRFBurned(creditTo, recipient, totalBurned);
+        emit OPRFMinted(creditTo, xRemainder, yRemainder, qRemainder);
     }
 
     function _unshieldRedeemedRecipientAmount(
@@ -1103,17 +1150,20 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         gtUint256 qRemainder
     ) {
         _validateOPRFSpendInputs(tokens.length, recipient);
+        address budgetOwner = _oprfBudgetOwner(tokens, amount);
+        _requireOprfRelayerDest(budgetOwner, recipient);
 
         (gtUint256 totalBurned, gtUint256 recipientAmount, gtUint256 senderRemainder) =
             _calculateOPRFSpendAmounts(tokens, amount);
 
         _transferFromContract(recipient, recipientAmount);
 
-        return _mintRedeemRemainder(recipient, totalBurned, recipientAmount, senderRemainder);
+        return _mintRedeemRemainder(budgetOwner, recipient, totalBurned, recipientAmount, senderRemainder);
     }
 
     /// @notice Redeems multiple OPRF tokens and directly unshields the redeemed amount to underlying tokens for recipient.
     /// @dev The redeemed amount never remains in recipient's private balance: it is credited and immediately debited before unshield callback.
+    /// @dev Relayer (`tx.origin != it.userAddress`) must set `recipient` to the IT owner; owner/Safe may choose any dest.
     /// @param tokens Array of OPRF token parameters to burn
     /// @param amount Encrypted amount to redeem and unshield
     /// @param recipient Address receiving the underlying tokens after callback
@@ -1134,6 +1184,8 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
 
         _validateOPRFSpendInputs(tokens.length, recipient);
+        address budgetOwner = _oprfBudgetOwner(tokens, amount);
+        _requireOprfRelayerDest(budgetOwner, recipient);
         if (unwrap) {
             require($.underlyingIsWrappedNative, "Underlying unwrap not configured");
         }
@@ -1144,7 +1196,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         _transferFromContract(recipient, recipientAmount);
         _unshieldRedeemedRecipientAmount(recipient, recipientAmount, unwrap);
 
-        return _mintRedeemRemainder(recipient, totalBurned, recipientAmount, senderRemainder);
+        return _mintRedeemRemainder(budgetOwner, recipient, totalBurned, recipientAmount, senderRemainder);
     }
 
 }
