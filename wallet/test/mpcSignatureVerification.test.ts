@@ -7,7 +7,7 @@
  * generated signer set — so a refactor that disables verification fails CI rather than passing it.
  */
 import { expect } from "chai";
-import { Wallet, getBytes, keccak256 } from "ethers";
+import { HDNodeWallet, Wallet, getBytes, keccak256 } from "ethers";
 
 import { assertOnboardSigned, assertOutputSigned } from "./helpers/bubbleCryptoTransport";
 
@@ -26,7 +26,7 @@ async function expectRejection(promise: Promise<unknown>, pattern: RegExp): Prom
  * Sign `message` the way the MPC evaluators do: over the raw keccak256 of the message (no EIP-191
  * prefix), serialised as r ‖ s ‖ yParity with v as 0/1 — the form `verifySignatures` recovers.
  */
-function signAll(wallets: Wallet[], message: Uint8Array): string[] {
+function signAll(wallets: HDNodeWallet[], message: Uint8Array): string[] {
   return wallets.map((w) => {
     const sig = w.signingKey.sign(keccak256(message));
     return Buffer.concat([
