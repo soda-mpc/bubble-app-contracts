@@ -11,9 +11,9 @@ import {
   reconstructUserKey,
   decrypt,
   encrypt
-} from "soda-sdk";
+} from "soda-bubble-sdk";
 
-/** One limb in soda-sdk encrypt output: ciphertext block or nonce `r` (bytes). */
+/** One limb in soda-bubble-sdk encrypt output: ciphertext block or nonce `r` (bytes). */
 const AES_LIMB_BYTES = 16;
 /** Single-block payload: `[cipher][r]` (128-bit plaintext after decrypt). */
 const ENCRYPTED_SINGLE_OUTPUT_BYTES = AES_LIMB_BYTES * 2;

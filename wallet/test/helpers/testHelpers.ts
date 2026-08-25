@@ -714,11 +714,21 @@ export function supportedBubbleChainIds(): number[] {
   for (const m of src.matchAll(/constant\s+(CHAIN_\w+)\s*=\s*(\d+)/g)) {
     constants.set(m[1], Number(m[2]));
   }
-  const body = src.slice(src.indexOf("function gcHandler"));
+  const marker = src.indexOf("function gcHandler");
+  if (marker === -1) {
+    throw new Error(
+      "BubbleAddresses.sol: could not find gcHandler() — the address lookup has changed shape. " +
+      "Fix this parser rather than letting every integration suite skip silently."
+    );
+  }
+  const body = src.slice(marker);
   const ids = new Set<number>();
   for (const m of body.matchAll(/chainId == (CHAIN_\w+)\)/g)) {
     const id = constants.get(m[1]);
     if (id !== undefined) ids.add(id);
+  }
+  if (ids.size === 0) {
+    throw new Error("BubbleAddresses.sol: parsed no chain ids — refusing to skip every suite silently");
   }
   return [...ids];
 }

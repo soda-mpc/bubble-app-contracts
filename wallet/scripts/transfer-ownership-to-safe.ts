@@ -7,7 +7,7 @@
  *   SAFE_ADDRESS   – Safe multisig address (new owner)
  *
  * Example:
- *   PROXY_ADDRESS=0x... SAFE_ADDRESS=0x... npx hardhat run scripts/transfer-ownership-to-safe.ts --network sepolia-base
+ *   PROXY_ADDRESS=0x... SAFE_ADDRESS=0x... npx hardhat run scripts/transfer-ownership-to-safe.ts --network sepolia
  */
 
 import { ethers } from "hardhat";
