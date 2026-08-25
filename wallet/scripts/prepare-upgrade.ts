@@ -7,7 +7,7 @@
  *   PROXY_ADDRESS – address of the proxy (token)
  *
  * Example:
- *   PROXY_ADDRESS=0x... npx hardhat run scripts/prepare-upgrade.ts --network sepolia-base
+ *   PROXY_ADDRESS=0x... npx hardhat run scripts/prepare-upgrade.ts --network sepolia
  *
  * Then in Safe UI: create transaction with Target = proxy address, Value = 0, Data = printed calldata.
  */

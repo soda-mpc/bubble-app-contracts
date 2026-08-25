@@ -24,18 +24,19 @@ import {
   findParsedLogInReceipt,
   getPrivateTokenBalance,
   waitForDeploymentConfirmation,
+  skipUnlessBubbleNetwork,
 } from "./helpers/testHelpers";
 import { PrivateERC20WithRestrictionList256 } from "../typechain-types";
 
 dotenv.config();
 
 const PROXY_URL = process.env.PROXY_URL || "https://proxy.bubble.sodalabs.net";
-const MNEMONIC = process.env.MNEMONIC;
-if (!MNEMONIC) {
-  throw new Error("MNEMONIC environment variable is required");
-}
 
 describe("PrivateERC20WithRestrictionList", function () {
+  before(async function () {
+    await skipUnlessBubbleNetwork(this);
+  });
+
   this.timeout(180000);
   let userAesKey: Buffer;
   let userAddress: string;

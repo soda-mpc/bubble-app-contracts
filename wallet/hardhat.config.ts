@@ -7,6 +7,13 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY || "";
+
+/**
+ * RPC endpoint for a network. Set <NETWORK>_RPC_URL (e.g. SEPOLIA_RPC_URL) to use your own
+ * endpoint; otherwise the Alchemy URL is used, which needs ALCHEMY_API_KEY.
+ */
+const rpcUrl = (network: string, alchemyUrl: string): string =>
+    process.env[`${network.toUpperCase().replace(/-/g, "_")}_RPC_URL`] || alchemyUrl;
 /** Etherscan-compatible API key (World Sepolia / worldscan uses the same pattern). */
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
 
@@ -27,27 +34,9 @@ const config: HardhatUserConfig = {
             gas: 30000000,
             blockGasLimit: 30000000
         },
-        kurtosis: {
-            chainId: 50505070,
-            url: "https://kurtosis.node.sodalabs.net",
-            accounts: { mnemonic: process.env.MNEMONIC || "" },
-            gas: 3_000_000,
-            gasMultiplier: 1.0
-        },
-        "sepolia-base": {
-            chainId: 84532,
-            url: `https://base-sepolia.g.alchemy.com/v2/${ALCHEMY_API_KEY}`,
-            accounts: {
-                mnemonic: process.env.MNEMONIC || ""
-            },
-            gas: "auto",
-            gasPrice: "auto",
-            gasMultiplier: 1.2,
-            timeout: 300000 // 5 minutes - increased for MPC operations
-        },
         "sepolia-arbitrum": {
             chainId: 421614,
-            url: `https://arb-sepolia.g.alchemy.com/v2/${ALCHEMY_API_KEY}`,
+            url: rpcUrl("sepolia-arbitrum", `https://arb-sepolia.g.alchemy.com/v2/${ALCHEMY_API_KEY}`),
             accounts: {
                 mnemonic: process.env.MNEMONIC || ""
             },
@@ -57,7 +46,7 @@ const config: HardhatUserConfig = {
         },
         "arbitrum": {
             chainId: 42161,
-            url: `https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`,
+            url: rpcUrl("arbitrum", `https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`),
             accounts: {
                 mnemonic: process.env.MNEMONIC || ""
             },
@@ -67,7 +56,7 @@ const config: HardhatUserConfig = {
         },
         "polygon": {
             chainId: 137,
-            url: `https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`,
+            url: rpcUrl("polygon", `https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`),
             accounts: {
                 mnemonic: process.env.MNEMONIC || ""
             },
@@ -77,7 +66,7 @@ const config: HardhatUserConfig = {
         },
         "ethereum": {
             chainId: 1,
-            url: `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`,
+            url: rpcUrl("ethereum", `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`),
             accounts: {
                 mnemonic: process.env.MNEMONIC || ""
             },
@@ -87,37 +76,7 @@ const config: HardhatUserConfig = {
         },
         "sepolia": {
             chainId: 11155111,
-            url: `https://eth-sepolia.g.alchemy.com/v2/${ALCHEMY_API_KEY}`,
-            accounts: {
-                mnemonic: process.env.MNEMONIC || ""
-            },
-            gas: "auto",
-            gasPrice: "auto",
-            gasMultiplier: 1.2
-        },
-        "world-mobile-testnet": {
-            chainId: 323432,
-            url: `https://worldmobile-testnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`,
-            accounts: {
-                mnemonic: process.env.MNEMONIC || ""
-            },
-            gas: "auto",
-            gasPrice: "auto",
-            gasMultiplier: 1.2
-        },
-        "sepolia-world": {
-            chainId: 4801,
-            url: "https://worldchain-sepolia.g.alchemy.com/public",
-            accounts: {
-                mnemonic: process.env.MNEMONIC || ""
-            },
-            gas: 3000000,
-            gasPrice: 20000000000, // 20 gwei (much higher)
-            timeout: 120000 // 2 minutes timeout
-        },
-        "arc-testnet": {
-            chainId: 5042002,
-            url: `https://arc-testnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`,
+            url: rpcUrl("sepolia", `https://eth-sepolia.g.alchemy.com/v2/${ALCHEMY_API_KEY}`),
             accounts: {
                 mnemonic: process.env.MNEMONIC || ""
             },
@@ -127,17 +86,7 @@ const config: HardhatUserConfig = {
         },
     },
     etherscan: {
-        apiKey: ETHERSCAN_API_KEY,
-        customChains: [
-            {
-                network: "sepolia-world",
-                chainId: 4801,
-                urls: {
-                    apiURL: "https://sepolia.worldscan.org/api/",
-                    browserURL: "https://sepolia.worldscan.org"
-                }
-            }
-        ]
+        apiKey: ETHERSCAN_API_KEY
     }, sourcify: {
         enabled: false,
     }

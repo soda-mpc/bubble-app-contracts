@@ -1,6 +1,6 @@
 /**
  * Deploy upgradable PrivateERC20Contract256 (UUPS proxy) and transfer ownership to Safe.
- * Use Base Sepolia: --network sepolia-base
+ * Use Sepolia: --network sepolia
  *
  * Required env:
  *   SAFE_ADDRESS     – Safe multisig address (new owner and upgrade authority)
@@ -12,7 +12,7 @@
  *   MASTER_ADDRESS   – unshield recipient (default: SAFE_ADDRESS)
  *
  * Example:
- *   SAFE_ADDRESS=0x... UNDERLYING_ADDRESS=0x... npx hardhat run scripts/deploy-upgradable-private-erc20.ts --network sepolia-base
+ *   SAFE_ADDRESS=0x... UNDERLYING_ADDRESS=0x... npx hardhat run scripts/deploy-upgradable-private-erc20.ts --network sepolia
  */
 
 import { ethers, upgrades } from "hardhat";

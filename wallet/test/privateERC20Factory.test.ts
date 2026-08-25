@@ -7,6 +7,7 @@ import {
   deployPrivateTokenImplementation,
   fundWalletsForGas,
   mintAndApprove,
+  skipUnlessBubbleNetwork,
 } from "./helpers/testHelpers";
 
 /** Latest TokenCreated event from the factory (tests assume at least one exists). */
@@ -41,6 +42,10 @@ async function createTokenAndGetAddress(
 }
 
 describe("PrivateERC20Factory", function () {
+  before(async function () {
+    await skipUnlessBubbleNetwork(this);
+  });
+
   // Default Mocha/Hardhat timeout (~40s) is too low for several deploys on public testnets (e.g. Sepolia).
   this.timeout(300000);
 

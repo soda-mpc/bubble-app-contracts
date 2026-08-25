@@ -2,6 +2,7 @@
  * Transport (HTTP proxy, provider) + crypto for Bubble tests.
  * Deploy, delays, receipt helpers, and chai-style helpers: sibling `testHelpers.ts` in this folder.
  */
+import fs from "fs";
 import hre from "hardhat";
 import fetch from "node-fetch";
 import { Wallet, getBytes, HDNodeWallet, solidityPacked, isAddress } from "ethers";
@@ -10,10 +11,11 @@ import {
   generateRSAKeyPair,
   reconstructUserKey,
   decrypt,
-  encrypt
-} from "soda-sdk";
+  encrypt,
+  verifySignatures
+} from "soda-bubble-sdk";
 
-/** One limb in soda-sdk encrypt output: ciphertext block or nonce `r` (bytes). */
+/** One limb in soda-bubble-sdk encrypt output: ciphertext block or nonce `r` (bytes). */
 const AES_LIMB_BYTES = 16;
 /** Single-block payload: `[cipher][r]` (128-bit plaintext after decrypt). */
 const ENCRYPTED_SINGLE_OUTPUT_BYTES = AES_LIMB_BYTES * 2;
@@ -221,7 +223,11 @@ export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl
     throw new Error(`Onboarding failed: ${errorText}`);
   }
   
-  const result = (await response.json()) as { rsa_ciphertexts: string; message: string };
+  const result = (await response.json()) as {
+    rsa_ciphertexts: string;
+    mpc_signatures?: string[];
+    message: string;
+  };
   console.log(`[getUserKeyViaProxy] Successfully onboarded address ${userAddress}`);
 
   // 5. Process response
@@ -238,6 +244,11 @@ export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl
   const encryptedKeyShare1 = rsaCiphertexts.slice(RSA_CIPHERTEXT_BYTES).toString("hex");
   
   // 6. Reconstruct user key
+  // Do not trust the proxy with the key shares. The evaluators sign rsa_ciphertexts; if those
+  // signatures do not recover to the on-chain signer set, the shares could have been chosen by
+  // whoever answered — and an attacker-known AES key would then encrypt every value we send.
+  await assertOnboardSigned(rsaCiphertexts, result.mpc_signatures);
+
   const decryptedAESKey = reconstructUserKey(privateKey, encryptedKeyShare0, encryptedKeyShare1);
 
   return decryptedAESKey;
@@ -270,6 +281,88 @@ function decryptEncryptedOutput(encryptedOutput: Buffer, userAesKey: Buffer): bi
     return bytesToBigInt(decryptedMessage);
   } else {
     throw new Error(`Unexpected encrypted output length: ${encryptedOutput.length}`);
+  }
+}
+
+
+/**
+ * MPC evaluator addresses, from `getSigners()` on the deployed decryption verifier. The verifier
+ * address comes from the installed `BubbleAddresses.sol`, so this cannot drift from the library.
+ */
+const cachedSigners = new Map<number, string[]>();
+export async function evaluatorSigners(): Promise<string[]> {
+  const { chainId } = await hre.ethers.provider.getNetwork();
+  const cached = cachedSigners.get(Number(chainId));
+  if (cached) return cached;
+  const src = fs.readFileSync(
+    require.resolve("@sodalabs/bubble-core-contracts/contracts/bubble/BubbleAddresses.sol"),
+    "utf8"
+  );
+  const constants = new Map<string, number>();
+  for (const m of src.matchAll(/constant\s+(CHAIN_\w+)\s*=\s*(\d+)/g)) constants.set(m[1], Number(m[2]));
+  const marker = src.indexOf("function gcDecryptionVerifier");
+  if (marker === -1) throw new Error("BubbleAddresses.sol: gcDecryptionVerifier() not found");
+  let verifier: string | undefined;
+  for (const m of src.slice(marker).matchAll(/chainId == (CHAIN_\w+)\) return (0x[0-9a-fA-F]{40})/g)) {
+    if (constants.get(m[1]) === Number(chainId)) verifier = m[2];
+  }
+  if (!verifier) throw new Error(`no Bubble decryption verifier for chain ${chainId}`);
+  const contract = new hre.ethers.Contract(
+    verifier,
+    ["function getSigners() view returns (address[])"],
+    hre.ethers.provider
+  );
+  const signers: string[] = [...(await contract.getSigners())];
+  if (signers.length === 0) throw new Error("decryption verifier returned no signers");
+  cachedSigners.set(Number(chainId), signers);
+  return signers;
+}
+
+/**
+ * Check the evaluator signatures over `handle || output` before trusting a proxy response.
+ * Without this a misconfigured or hostile proxy could return any value it liked.
+ */
+export async function assertOutputSigned(
+  handleBytes: Uint8Array,
+  output: Buffer,
+  mpcSignatures: unknown,
+  signerSet?: string[]
+): Promise<void> {
+  if (!Array.isArray(mpcSignatures) || mpcSignatures.length === 0) {
+    throw new Error("encrypt-to-user response carried no mpc_signatures — refusing to trust it");
+  }
+  const signers = signerSet ?? (await evaluatorSigners());
+  const signatures = mpcSignatures.map((s: string) => Buffer.from(s, "base64"));
+  if (signatures.length !== signers.length) {
+    throw new Error(`got ${signatures.length} signatures for ${signers.length} signers`);
+  }
+  const message = Buffer.concat([Buffer.from(handleBytes), output]);
+  if (!verifySignatures(message, signatures, signers)) {
+    throw new Error("MPC signatures did not verify — refusing to trust this value");
+  }
+}
+
+
+/**
+ * Check the evaluator signatures over the onboarding key shares. The MPC evaluators sign
+ * `rsa_ciphertexts`; accepting shares without this means a misconfigured or hostile proxy can
+ * hand back shares it chose, giving the caller an AES key the attacker already knows.
+ */
+export async function assertOnboardSigned(
+  rsaCiphertexts: Buffer,
+  mpcSignatures: unknown,
+  signerSet?: string[]
+): Promise<void> {
+  if (!Array.isArray(mpcSignatures) || mpcSignatures.length === 0) {
+    throw new Error("onboard response carried no mpc_signatures — refusing to trust the key shares");
+  }
+  const signers = signerSet ?? (await evaluatorSigners());
+  const signatures = mpcSignatures.map((sig: string) => Buffer.from(sig, "base64"));
+  if (signatures.length !== signers.length) {
+    throw new Error(`got ${signatures.length} onboard signatures for ${signers.length} signers`);
+  }
+  if (!verifySignatures(rsaCiphertexts, signatures, signers)) {
+    throw new Error("onboard MPC signatures did not verify — refusing to derive a user key");
   }
 }
 
@@ -327,6 +420,7 @@ export async function decryptValueViaProxy(
     throw new Error(`Expected output string in response, got: ${JSON.stringify(data)}`);
   }
   const encryptedOutput = Buffer.from(data.output, "base64");
+  await assertOutputSigned(handleBytes, encryptedOutput, (data as any).mpc_signatures);
   logDebug(debugLogging, `[decryptValueViaProxy] Successfully decrypted handle ${handleLabel}`);
 
   return decryptEncryptedOutput(encryptedOutput, userAesKey);
@@ -455,6 +549,13 @@ export async function decryptMultipleValuesViaProxy(
   if (data.outputs.length !== handles.length) {
     throw new Error(`Expected ${handles.length} outputs, got ${data.outputs.length}`);
   }
+
+  // Verify the evaluator signatures over (all handles || all outputs) before decrypting any of them.
+  await assertOutputSigned(
+    concatenatedHandles,
+    Buffer.concat(data.outputs.map((o: string) => Buffer.from(o, "base64"))),
+    (data as any).mpc_signatures
+  );
 
   // Decrypt each output
   const decryptedValues: bigint[] = [];

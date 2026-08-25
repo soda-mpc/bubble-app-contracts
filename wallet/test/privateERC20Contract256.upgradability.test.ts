@@ -14,18 +14,20 @@ import {
   findParsedLogInReceipt,
   getEventsInReceiptBlock,
   mintAndApprove,
+  skipUnlessBubbleNetwork,
 } from "./helpers/testHelpers";
 
 dotenv.config();
 
 const MNEMONIC = process.env.MNEMONIC;
-if (!MNEMONIC) {
-  throw new Error("MNEMONIC environment variable is required");
-}
 
 const V2_DUMMY_FQN = "contracts/tests/PrivateERC20Contract256V2Dummy.sol:PrivateERC20Contract256V2";
 
 describe("PrivateERC20Contract256 Upgradability", function () {
+  before(async function () {
+    await skipUnlessBubbleNetwork(this);
+  });
+
   this.timeout(120000); // 2 minutes timeout for operations
 
   let privateToken: any;

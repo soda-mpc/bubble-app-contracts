@@ -29,17 +29,18 @@ import {
   mintAndApprove,
   mintApproveAndShield,
   waitForContractCode,
+  skipUnlessBubbleNetwork,
 } from "./helpers/testHelpers";
 
 dotenv.config();
 
 const PROXY_URL = process.env.PROXY_URL || "https://proxy.bubble.sodalabs.net";
-const MNEMONIC = process.env.MNEMONIC;
-if (!MNEMONIC) {
-  throw new Error("MNEMONIC environment variable is required");
-}
 
 describe("PrivateERC20Contract OPRF Minting", function () {
+  before(async function () {
+    await skipUnlessBubbleNetwork(this);
+  });
+
   // Increase timeout for all tests in this suite (MPC operations can take time)
   this.timeout(300000); // 300 seconds (5 minutes) - increased for redeemMany tests
   

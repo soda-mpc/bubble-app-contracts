@@ -2,6 +2,8 @@
  * Shared test harness: Hardhat deploy, delays, receipt/event helpers, chai-style helpers.
  * Transport + crypto (proxy HTTP, encrypt/decrypt message prep): sibling `bubbleCryptoTransport.ts` in this folder.
  */
+import hre from "hardhat";
+import fs from "fs";
 import type { HDNodeWallet, Wallet } from "ethers";
 import {
   decryptBalanceViaProxy,
@@ -697,4 +699,69 @@ export async function buildSignedOprfBurnPayloads(params: {
     signer,
   });
   return { xIT, qIT };
+}
+
+/**
+ * Chain IDs with deployed Bubble host contracts, read from the installed
+ * BubbleAddresses.sol so this list cannot drift from the Solidity library.
+ */
+export function supportedBubbleChainIds(): number[] {
+  const src = fs.readFileSync(
+    require.resolve("@sodalabs/bubble-core-contracts/contracts/bubble/BubbleAddresses.sol"),
+    "utf8"
+  );
+  const constants = new Map<string, number>();
+  for (const m of src.matchAll(/constant\s+(CHAIN_\w+)\s*=\s*(\d+)/g)) {
+    constants.set(m[1], Number(m[2]));
+  }
+  const marker = src.indexOf("function gcHandler");
+  if (marker === -1) {
+    throw new Error(
+      "BubbleAddresses.sol: could not find gcHandler() — the address lookup has changed shape. " +
+      "Fix this parser rather than letting every integration suite skip silently."
+    );
+  }
+  const body = src.slice(marker);
+  const ids = new Set<number>();
+  for (const m of body.matchAll(/chainId == (CHAIN_\w+)\)/g)) {
+    const id = constants.get(m[1]);
+    if (id !== undefined) ids.add(id);
+  }
+  if (ids.size === 0) {
+    throw new Error("BubbleAddresses.sol: parsed no chain ids — refusing to skip every suite silently");
+  }
+  // The library knows chains this repo does not offer a network for. Answer the question the repo
+  // actually has — "which chains can I connect to from here?" — so deleting a network from
+  // hardhat.config.ts is the single action that removes a chain.
+  const configured = new Set(
+    Object.values(hre.config.networks)
+      .map((n: any) => n?.chainId)
+      .filter((id: unknown): id is number => typeof id === "number")
+  );
+  const offered = [...ids].filter((id) => configured.has(id));
+  if (offered.length === 0) {
+    throw new Error(
+      `no configured network matches a Bubble chain ` +
+      `(library: ${[...ids]}, configured: ${[...configured]})`
+    );
+  }
+  return offered;
+}
+
+/**
+ * Skip the calling suite unless it can actually run. These are integration tests: they need
+ * Bubble host contracts on the connected chain and a funded MNEMONIC. The default Hardhat
+ * network has no Bubble deployment, so they are skipped rather than failed.
+ */
+export async function skipUnlessBubbleNetwork(ctx: Mocha.Context): Promise<void> {
+  if (!process.env.MNEMONIC) {
+    console.log("      skipped: set MNEMONIC to run integration tests");
+    ctx.skip();
+  }
+  const { chainId } = await hre.ethers.provider.getNetwork();
+  if (!supportedBubbleChainIds().includes(Number(chainId))) {
+    console.log(`      skipped: chain ${chainId} has no Bubble deployment ` +
+                `(use --network sepolia-arbitrum or another supported chain)`);
+    ctx.skip();
+  }
 }
