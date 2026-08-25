@@ -5,9 +5,14 @@ import {
   deployMockToken,
   deployPrivateTokenWithRestrictionList,
   deployRestrictionListRegistry,
+  skipUnlessBubbleNetwork,
 } from "./helpers/testHelpers";
 
 describe("RestrictionListIntegration", function () {
+  before(async function () {
+    await skipUnlessBubbleNetwork(this);
+  });
+
   this.timeout(180000);
 
   let owner: any;

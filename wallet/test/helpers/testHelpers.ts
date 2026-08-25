@@ -1,3 +1,5 @@
+import fs from "fs";
+import hre from "hardhat";
 /**
  * Shared test harness: Hardhat deploy, delays, receipt/event helpers, chai-style helpers.
  * Transport + crypto (proxy HTTP, encrypt/decrypt message prep): sibling `bubbleCryptoTransport.ts` in this folder.
@@ -697,4 +699,44 @@ export async function buildSignedOprfBurnPayloads(params: {
     signer,
   });
   return { xIT, qIT };
+}
+
+/**
+ * Chain IDs with deployed Bubble host contracts, read from the installed
+ * BubbleAddresses.sol so this list cannot drift from the Solidity library.
+ */
+export function supportedBubbleChainIds(): number[] {
+  const src = fs.readFileSync(
+    require.resolve("@sodalabs/bubble-core-contracts/contracts/bubble/BubbleAddresses.sol"),
+    "utf8"
+  );
+  const constants = new Map<string, number>();
+  for (const m of src.matchAll(/constant\s+(CHAIN_\w+)\s*=\s*(\d+)/g)) {
+    constants.set(m[1], Number(m[2]));
+  }
+  const body = src.slice(src.indexOf("function gcHandler"));
+  const ids = new Set<number>();
+  for (const m of body.matchAll(/chainId == (CHAIN_\w+)\)/g)) {
+    const id = constants.get(m[1]);
+    if (id !== undefined) ids.add(id);
+  }
+  return [...ids];
+}
+
+/**
+ * Skip the calling suite unless it can actually run. These are integration tests: they need
+ * Bubble host contracts on the connected chain and a funded MNEMONIC. The default Hardhat
+ * network has no Bubble deployment, so they are skipped rather than failed.
+ */
+export async function skipUnlessBubbleNetwork(ctx: Mocha.Context): Promise<void> {
+  if (!process.env.MNEMONIC) {
+    console.log("      skipped: set MNEMONIC to run integration tests");
+    ctx.skip();
+  }
+  const { chainId } = await hre.ethers.provider.getNetwork();
+  if (!supportedBubbleChainIds().includes(Number(chainId))) {
+    console.log(`      skipped: chain ${chainId} has no Bubble deployment ` +
+                `(use --network sepolia-arbitrum or another supported chain)`);
+    ctx.skip();
+  }
 }

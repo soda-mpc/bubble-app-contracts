@@ -11,10 +11,34 @@ This project uses **npm** only (`package-lock.json`). Do not add `yarn.lock`; us
 ```bash
 cd wallet
 npm install
-# Configure .env (MNEMONIC, RPC keys, etc.)
 npm run compile
 npm test
 ```
+
+`npm test` runs the unit tests against the local Hardhat network. The integration suites are
+skipped there, because they need Bubble host contracts on the connected chain and a funded
+account — the local network has no Bubble deployment.
+
+## Running the integration tests
+
+They need two things:
+
+- `MNEMONIC` — a funded account on the target chain, in `.env`
+- a chain with a Bubble deployment: Ethereum (`1`), Polygon (`137`), Arbitrum (`42161`),
+  Sepolia (`11155111`), Arbitrum Sepolia (`421614`)
+
+```bash
+MNEMONIC="..." npx hardhat test --network sepolia
+```
+
+The supported-chain list is read from the installed `BubbleAddresses.sol`, so it stays in step
+with the Solidity library. On any other chain the integration suites report why they skipped.
+
+## RPC endpoints
+
+Public networks default to Alchemy and need `ALCHEMY_API_KEY`. To use a different endpoint, set
+`<NETWORK>_RPC_URL` — for example `SEPOLIA_RPC_URL`, `ARBITRUM_RPC_URL`, `POLYGON_RPC_URL`. That
+takes precedence, so no Alchemy account is needed.
 
 ## Dependency pinning
 

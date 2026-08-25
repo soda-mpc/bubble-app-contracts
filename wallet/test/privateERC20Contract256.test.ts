@@ -23,17 +23,19 @@ import {
   mintAndApprove,
   waitForContractCode,
   waitForUnshieldOutcome,
+  skipUnlessBubbleNetwork,
 } from "./helpers/testHelpers";
 
 dotenv.config();
 
 const PROXY_URL = process.env.PROXY_URL || "https://proxy.bubble.sodalabs.net";
 const MNEMONIC = process.env.MNEMONIC;
-if (!MNEMONIC) {
-  throw new Error("MNEMONIC environment variable is required");
-}
 
 describe("PrivateERC20Contract256", function () {
+  before(async function () {
+    await skipUnlessBubbleNetwork(this);
+  });
+
   this.timeout(120000); // 2 minutes timeout for MPC operations
   
   let userAesKey: Buffer;
