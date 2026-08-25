@@ -1,9 +1,9 @@
-import fs from "fs";
-import hre from "hardhat";
 /**
  * Shared test harness: Hardhat deploy, delays, receipt/event helpers, chai-style helpers.
  * Transport + crypto (proxy HTTP, encrypt/decrypt message prep): sibling `bubbleCryptoTransport.ts` in this folder.
  */
+import hre from "hardhat";
+import fs from "fs";
 import type { HDNodeWallet, Wallet } from "ethers";
 import {
   decryptBalanceViaProxy,
@@ -730,7 +730,16 @@ export function supportedBubbleChainIds(): number[] {
   if (ids.size === 0) {
     throw new Error("BubbleAddresses.sol: parsed no chain ids — refusing to skip every suite silently");
   }
-  return [...ids];
+  // The library knows chains this repo does not offer a network for. Answer the question the repo
+  // actually has — "which chains can I connect to from here?" — so deleting a network from
+  // hardhat.config.ts is the single action that removes a chain.
+  const configured = new Set(
+    Object.values(hre.config.networks)
+      .map((n: any) => n?.chainId)
+      .filter((id: unknown): id is number => typeof id === "number")
+  );
+  const offered = [...ids].filter((id) => configured.has(id));
+  return offered.length > 0 ? offered : [...ids];
 }
 
 /**

@@ -19,6 +19,16 @@ npm test
 skipped there, because they need Bubble host contracts on the connected chain and a funded
 account — the local network has no Bubble deployment.
 
+## Try it end to end
+
+```bash
+MNEMONIC="..." npm run demo:live
+```
+
+Deploys a private ERC20, shields underlying tokens, transfers an amount that never appears in
+calldata, and reads both balances back — each with its owner's own key. Defaults to Sepolia; for
+another network use `npx hardhat run scripts/run-private-erc20-live.ts --network <name>`.
+
 ## Running the integration tests
 
 They need two things:

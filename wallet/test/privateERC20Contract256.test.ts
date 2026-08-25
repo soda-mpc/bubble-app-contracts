@@ -29,7 +29,6 @@ import {
 dotenv.config();
 
 const PROXY_URL = process.env.PROXY_URL || "https://proxy.bubble.sodalabs.net";
-const MNEMONIC = process.env.MNEMONIC;
 
 describe("PrivateERC20Contract256", function () {
   before(async function () {

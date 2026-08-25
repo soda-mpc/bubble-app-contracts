@@ -2,7 +2,11 @@
  * End-to-end demo against a live Bubble network.
  *
  * Deploys a private ERC20, shields underlying tokens into it, transfers an amount that never
- * appears in calldata, and reads both balances back — each decrypted only by its owner.
+ * appears in calldata, and reads both balances back — each decrypted only by its owner, using
+ * that owner's own AES key.
+ *
+ * Accounts are derived from MNEMONIC (indexes 1 and 2), not generated randomly, so any gas left
+ * on them stays recoverable.
  *
  *   MNEMONIC="..." npx hardhat run scripts/run-private-erc20-live.ts --network sepolia
  *
@@ -16,12 +20,12 @@ import { HDNodeWallet } from "ethers";
 
 import { getUserKeyViaProxy, prepareMessageForBubble256 } from "../test/helpers/bubbleCryptoTransport";
 import {
-  createRandomWalletsAndFund,
   delay,
   DELAY_MPC_PROCESSING_MS,
   DELAY_STANDARD_MS,
   deployMockToken,
   deployPrivateToken,
+  fundWalletsForGas,
   getPrivateTokenBalance,
   mintApproveAndShield,
   supportedBubbleChainIds,
@@ -50,13 +54,17 @@ async function main() {
   const aesKey = await getUserKeyViaProxy(signer as any, PROXY_URL);
   console.log("onboarded — AES user key acquired");
 
-  // 2) A funded recipient, and the master address the private token requires.
-  const [recipient, master] = (await createRandomWalletsAndFund({
-    hre,
-    sender: signer,
-    count: 2,
-    amountWei: hre.ethers.parseEther("0.01"),
-  })) as [HDNodeWallet, HDNodeWallet];
+  // 2) Recipient and master, derived from MNEMONIC so their keys stay recoverable.
+  //    Only the recipient needs gas: it onboards and reads its own balance. `master` is used
+  //    for its address alone, so funding it would be pure loss.
+  const root = hre.ethers.Wallet.fromPhrase(process.env.MNEMONIC);
+  const recipient = root.deriveChild(1).connect(hre.ethers.provider);
+  const master = root.deriveChild(2);
+  await fundWalletsForGas({
+    sender: signer as any,
+    recipients: [recipient.address],
+    amountWei: hre.ethers.parseEther("0.005"),
+  });
 
   // 3) Deploy the underlying ERC20 and the private token in front of it.
   const mockToken = await deployMockToken(hre, signer);
@@ -78,16 +86,19 @@ async function main() {
   });
   await delay(DELAY_MPC_PROCESSING_MS);
 
-  const read = (address: string) =>
+  const read = (address: string, asSigner: any, key: Buffer) =>
     getPrivateTokenBalance({
       privateToken: privateToken as any,
       address,
-      signer: signer as any,
-      aesKey,
+      signer: asSigner,
+      aesKey: key,
       proxyUrl: PROXY_URL,
     });
 
-  const before = await read(await signer.getAddress());
+  // The recipient needs its own AES key to read its own balance — that is the point of the demo.
+  const recipientAesKey = await getUserKeyViaProxy(recipient as any, PROXY_URL);
+
+  const before = await read(await signer.getAddress(), signer, aesKey);
   console.log(`balance before: ${before}`);
 
   // 5) Encrypt the amount client-side, then transfer. The value never enters calldata —
@@ -106,11 +117,16 @@ async function main() {
   console.log(`transferred ${AMOUNT} to ${recipient.address} — amount encrypted, not in calldata`);
   await delay(DELAY_MPC_PROCESSING_MS);
 
-  const after = await read(await signer.getAddress());
+  const after = await read(await signer.getAddress(), signer, aesKey);
+  const recipientBalance = await read(recipient.address, recipient, recipientAesKey);
   console.log(`balance after:  ${after}`);
+  console.log(`recipient balance: ${recipientBalance} (decrypted with the recipient\u2019s own key)`);
 
   if (before - after !== AMOUNT) {
-    throw new Error(`balance moved by ${before - after}, expected ${AMOUNT}`);
+    throw new Error(`sender balance moved by ${before - after}, expected ${AMOUNT}`);
+  }
+  if (recipientBalance !== AMOUNT) {
+    throw new Error(`recipient balance is ${recipientBalance}, expected ${AMOUNT}`);
   }
   console.log("OK");
 }

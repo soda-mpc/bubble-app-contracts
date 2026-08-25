@@ -31,7 +31,6 @@ import { PrivateERC20WithRestrictionList256 } from "../typechain-types";
 dotenv.config();
 
 const PROXY_URL = process.env.PROXY_URL || "https://proxy.bubble.sodalabs.net";
-const MNEMONIC = process.env.MNEMONIC;
 
 describe("PrivateERC20WithRestrictionList", function () {
   before(async function () {

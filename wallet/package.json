@@ -4,16 +4,19 @@
   "description": "Private ERC20 contracts with MPC capabilities",
   "scripts": {
     "compile": "hardhat compile",
+    "demo:live": "hardhat run scripts/run-private-erc20-live.ts --network sepolia",
+    "deploy:upgradable": "hardhat run scripts/deploy-upgradable-private-erc20.ts --network sepolia",
+    "prepare-upgrade": "hardhat run scripts/prepare-upgrade.ts --network sepolia",
     "test": "hardhat test",
-    "verify:environment": "hardhat run scripts/verify-contracts.ts",
-    "demo:live": "hardhat run scripts/run-private-erc20-live.ts"
+    "transfer-ownership": "hardhat run scripts/transfer-ownership-to-safe.ts --network sepolia",
+    "verify:environment": "hardhat run scripts/verify-contracts.ts"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.9.14",
     "@grpc/proto-loader": "^0.7.10",
     "@openzeppelin/contracts": "5.4.0",
     "@openzeppelin/contracts-upgradeable": "5.4.0",
-    "@sodalabs/bubble-core-contracts": "0.0.1",
+    "@sodalabs/bubble-core-contracts": "^0.0.1",
     "@types/node-forge": "^1.3.14",
     "dotenv": "^16.4.5",
     "ethereumjs-util": "^7.1.5",

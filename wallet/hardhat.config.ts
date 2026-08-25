@@ -86,8 +86,7 @@ const config: HardhatUserConfig = {
         },
     },
     etherscan: {
-        apiKey: ETHERSCAN_API_KEY,
-        customChains: []
+        apiKey: ETHERSCAN_API_KEY
     }, sourcify: {
         enabled: false,
     }

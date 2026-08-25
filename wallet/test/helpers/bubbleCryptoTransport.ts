@@ -2,6 +2,7 @@
  * Transport (HTTP proxy, provider) + crypto for Bubble tests.
  * Deploy, delays, receipt helpers, and chai-style helpers: sibling `testHelpers.ts` in this folder.
  */
+import fs from "fs";
 import hre from "hardhat";
 import fetch from "node-fetch";
 import { Wallet, getBytes, HDNodeWallet, solidityPacked, isAddress } from "ethers";
@@ -10,7 +11,8 @@ import {
   generateRSAKeyPair,
   reconstructUserKey,
   decrypt,
-  encrypt
+  encrypt,
+  verifySignatures
 } from "soda-bubble-sdk";
 
 /** One limb in soda-bubble-sdk encrypt output: ciphertext block or nonce `r` (bytes). */
@@ -273,6 +275,58 @@ function decryptEncryptedOutput(encryptedOutput: Buffer, userAesKey: Buffer): bi
   }
 }
 
+
+/**
+ * MPC evaluator addresses, from `getSigners()` on the deployed decryption verifier. The verifier
+ * address comes from the installed `BubbleAddresses.sol`, so this cannot drift from the library.
+ */
+let cachedSigners: string[] | undefined;
+export async function evaluatorSigners(): Promise<string[]> {
+  if (cachedSigners) return cachedSigners;
+  const { chainId } = await hre.ethers.provider.getNetwork();
+  const src = fs.readFileSync(
+    require.resolve("@sodalabs/bubble-core-contracts/contracts/bubble/BubbleAddresses.sol"),
+    "utf8"
+  );
+  const constants = new Map<string, number>();
+  for (const m of src.matchAll(/constant\s+(CHAIN_\w+)\s*=\s*(\d+)/g)) constants.set(m[1], Number(m[2]));
+  const marker = src.indexOf("function gcDecryptionVerifier");
+  if (marker === -1) throw new Error("BubbleAddresses.sol: gcDecryptionVerifier() not found");
+  let verifier: string | undefined;
+  for (const m of src.slice(marker).matchAll(/chainId == (CHAIN_\w+)\) return (0x[0-9a-fA-F]{40})/g)) {
+    if (constants.get(m[1]) === Number(chainId)) verifier = m[2];
+  }
+  if (!verifier) throw new Error(`no Bubble decryption verifier for chain ${chainId}`);
+  const contract = new hre.ethers.Contract(
+    verifier,
+    ["function getSigners() view returns (address[])"],
+    hre.ethers.provider
+  );
+  const signers: string[] = [...(await contract.getSigners())];
+  if (signers.length === 0) throw new Error("decryption verifier returned no signers");
+  cachedSigners = signers;
+  return signers;
+}
+
+/**
+ * Check the evaluator signatures over `handle || output` before trusting a proxy response.
+ * Without this a misconfigured or hostile proxy could return any value it liked.
+ */
+async function assertOutputSigned(handleBytes: Uint8Array, output: Buffer, mpcSignatures: unknown): Promise<void> {
+  if (!Array.isArray(mpcSignatures) || mpcSignatures.length === 0) {
+    throw new Error("encrypt-to-user response carried no mpc_signatures — refusing to trust it");
+  }
+  const signers = await evaluatorSigners();
+  const signatures = mpcSignatures.map((s: string) => Buffer.from(s, "base64"));
+  if (signatures.length !== signers.length) {
+    throw new Error(`got ${signatures.length} signatures for ${signers.length} signers`);
+  }
+  const message = Buffer.concat([Buffer.from(handleBytes), output]);
+  if (!verifySignatures(message, signatures, signers)) {
+    throw new Error("MPC signatures did not verify — refusing to trust this value");
+  }
+}
+
 export async function decryptValueViaProxy(
   handle: bigint,
   signer: Wallet | HDNodeWallet,
@@ -327,6 +381,7 @@ export async function decryptValueViaProxy(
     throw new Error(`Expected output string in response, got: ${JSON.stringify(data)}`);
   }
   const encryptedOutput = Buffer.from(data.output, "base64");
+  await assertOutputSigned(handleBytes, encryptedOutput, (data as any).mpc_signatures);
   logDebug(debugLogging, `[decryptValueViaProxy] Successfully decrypted handle ${handleLabel}`);
 
   return decryptEncryptedOutput(encryptedOutput, userAesKey);
@@ -455,6 +510,13 @@ export async function decryptMultipleValuesViaProxy(
   if (data.outputs.length !== handles.length) {
     throw new Error(`Expected ${handles.length} outputs, got ${data.outputs.length}`);
   }
+
+  // Verify the evaluator signatures over (all handles || all outputs) before decrypting any of them.
+  await assertOutputSigned(
+    concatenatedHandles,
+    Buffer.concat(data.outputs.map((o: string) => Buffer.from(o, "base64"))),
+    (data as any).mpc_signatures
+  );
 
   // Decrypt each output
   const decryptedValues: bigint[] = [];
