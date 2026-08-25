@@ -223,7 +223,11 @@ export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl
     throw new Error(`Onboarding failed: ${errorText}`);
   }
   
-  const result = (await response.json()) as { rsa_ciphertexts: string; message: string };
+  const result = (await response.json()) as {
+    rsa_ciphertexts: string;
+    mpc_signatures?: string[];
+    message: string;
+  };
   console.log(`[getUserKeyViaProxy] Successfully onboarded address ${userAddress}`);
 
   // 5. Process response
@@ -240,6 +244,11 @@ export async function getUserKeyViaProxy(signer: Wallet | HDNodeWallet, proxyUrl
   const encryptedKeyShare1 = rsaCiphertexts.slice(RSA_CIPHERTEXT_BYTES).toString("hex");
   
   // 6. Reconstruct user key
+  // Do not trust the proxy with the key shares. The evaluators sign rsa_ciphertexts; if those
+  // signatures do not recover to the on-chain signer set, the shares could have been chosen by
+  // whoever answered — and an attacker-known AES key would then encrypt every value we send.
+  await assertOnboardSigned(rsaCiphertexts, result.mpc_signatures);
+
   const decryptedAESKey = reconstructUserKey(privateKey, encryptedKeyShare0, encryptedKeyShare1);
 
   return decryptedAESKey;
@@ -324,6 +333,26 @@ async function assertOutputSigned(handleBytes: Uint8Array, output: Buffer, mpcSi
   const message = Buffer.concat([Buffer.from(handleBytes), output]);
   if (!verifySignatures(message, signatures, signers)) {
     throw new Error("MPC signatures did not verify — refusing to trust this value");
+  }
+}
+
+
+/**
+ * Check the evaluator signatures over the onboarding key shares. The MPC evaluators sign
+ * `rsa_ciphertexts`; accepting shares without this means a misconfigured or hostile proxy can
+ * hand back shares it chose, giving the caller an AES key the attacker already knows.
+ */
+async function assertOnboardSigned(rsaCiphertexts: Buffer, mpcSignatures: unknown): Promise<void> {
+  if (!Array.isArray(mpcSignatures) || mpcSignatures.length === 0) {
+    throw new Error("onboard response carried no mpc_signatures — refusing to trust the key shares");
+  }
+  const signers = await evaluatorSigners();
+  const signatures = mpcSignatures.map((sig: string) => Buffer.from(sig, "base64"));
+  if (signatures.length !== signers.length) {
+    throw new Error(`got ${signatures.length} onboard signatures for ${signers.length} signers`);
+  }
+  if (!verifySignatures(rsaCiphertexts, signatures, signers)) {
+    throw new Error("onboard MPC signatures did not verify — refusing to derive a user key");
   }
 }
 
