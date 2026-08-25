@@ -739,7 +739,13 @@ export function supportedBubbleChainIds(): number[] {
       .filter((id: unknown): id is number => typeof id === "number")
   );
   const offered = [...ids].filter((id) => configured.has(id));
-  return offered.length > 0 ? offered : [...ids];
+  if (offered.length === 0) {
+    throw new Error(
+      `no configured network matches a Bubble chain ` +
+      `(library: ${[...ids]}, configured: ${[...configured]})`
+    );
+  }
+  return offered;
 }
 
 /**

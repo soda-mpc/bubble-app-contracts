@@ -289,10 +289,11 @@ function decryptEncryptedOutput(encryptedOutput: Buffer, userAesKey: Buffer): bi
  * MPC evaluator addresses, from `getSigners()` on the deployed decryption verifier. The verifier
  * address comes from the installed `BubbleAddresses.sol`, so this cannot drift from the library.
  */
-let cachedSigners: string[] | undefined;
+const cachedSigners = new Map<number, string[]>();
 export async function evaluatorSigners(): Promise<string[]> {
-  if (cachedSigners) return cachedSigners;
   const { chainId } = await hre.ethers.provider.getNetwork();
+  const cached = cachedSigners.get(Number(chainId));
+  if (cached) return cached;
   const src = fs.readFileSync(
     require.resolve("@sodalabs/bubble-core-contracts/contracts/bubble/BubbleAddresses.sol"),
     "utf8"
@@ -313,7 +314,7 @@ export async function evaluatorSigners(): Promise<string[]> {
   );
   const signers: string[] = [...(await contract.getSigners())];
   if (signers.length === 0) throw new Error("decryption verifier returned no signers");
-  cachedSigners = signers;
+  cachedSigners.set(Number(chainId), signers);
   return signers;
 }
 
@@ -321,11 +322,16 @@ export async function evaluatorSigners(): Promise<string[]> {
  * Check the evaluator signatures over `handle || output` before trusting a proxy response.
  * Without this a misconfigured or hostile proxy could return any value it liked.
  */
-async function assertOutputSigned(handleBytes: Uint8Array, output: Buffer, mpcSignatures: unknown): Promise<void> {
+export async function assertOutputSigned(
+  handleBytes: Uint8Array,
+  output: Buffer,
+  mpcSignatures: unknown,
+  signerSet?: string[]
+): Promise<void> {
   if (!Array.isArray(mpcSignatures) || mpcSignatures.length === 0) {
     throw new Error("encrypt-to-user response carried no mpc_signatures — refusing to trust it");
   }
-  const signers = await evaluatorSigners();
+  const signers = signerSet ?? (await evaluatorSigners());
   const signatures = mpcSignatures.map((s: string) => Buffer.from(s, "base64"));
   if (signatures.length !== signers.length) {
     throw new Error(`got ${signatures.length} signatures for ${signers.length} signers`);
@@ -342,11 +348,15 @@ async function assertOutputSigned(handleBytes: Uint8Array, output: Buffer, mpcSi
  * `rsa_ciphertexts`; accepting shares without this means a misconfigured or hostile proxy can
  * hand back shares it chose, giving the caller an AES key the attacker already knows.
  */
-async function assertOnboardSigned(rsaCiphertexts: Buffer, mpcSignatures: unknown): Promise<void> {
+export async function assertOnboardSigned(
+  rsaCiphertexts: Buffer,
+  mpcSignatures: unknown,
+  signerSet?: string[]
+): Promise<void> {
   if (!Array.isArray(mpcSignatures) || mpcSignatures.length === 0) {
     throw new Error("onboard response carried no mpc_signatures — refusing to trust the key shares");
   }
-  const signers = await evaluatorSigners();
+  const signers = signerSet ?? (await evaluatorSigners());
   const signatures = mpcSignatures.map((sig: string) => Buffer.from(sig, "base64"));
   if (signatures.length !== signers.length) {
     throw new Error(`got ${signatures.length} onboard signatures for ${signers.length} signers`);

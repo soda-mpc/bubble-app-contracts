@@ -5,8 +5,9 @@
  * appears in calldata, and reads both balances back — each decrypted only by its owner, using
  * that owner's own AES key.
  *
- * Accounts are derived from MNEMONIC (indexes 1 and 2), not generated randomly, so any gas left
- * on them stays recoverable.
+ * The recipient and master accounts are derived from MNEMONIC at m/44'/60'/0'/0/0/1 and /2.
+ * Neither needs gas: onboarding and balance reads are signature-and-HTTP only, so the only
+ * account that spends anything is the deployer.
  *
  *   MNEMONIC="..." npx hardhat run scripts/run-private-erc20-live.ts --network sepolia
  *
@@ -25,7 +26,6 @@ import {
   DELAY_STANDARD_MS,
   deployMockToken,
   deployPrivateToken,
-  fundWalletsForGas,
   getPrivateTokenBalance,
   mintApproveAndShield,
   supportedBubbleChainIds,
@@ -54,17 +54,12 @@ async function main() {
   const aesKey = await getUserKeyViaProxy(signer as any, PROXY_URL);
   console.log("onboarded — AES user key acquired");
 
-  // 2) Recipient and master, derived from MNEMONIC so their keys stay recoverable.
-  //    Only the recipient needs gas: it onboards and reads its own balance. `master` is used
-  //    for its address alone, so funding it would be pure loss.
+  // 2) Recipient and master, derived from MNEMONIC. Neither sends a transaction: onboarding is
+  //    signMessage + POST /onboard, and reading a balance is a view call plus
+  //    signMessage + POST /encrypt-to-user. So neither needs funding.
   const root = hre.ethers.Wallet.fromPhrase(process.env.MNEMONIC);
   const recipient = root.deriveChild(1).connect(hre.ethers.provider);
   const master = root.deriveChild(2);
-  await fundWalletsForGas({
-    sender: signer as any,
-    recipients: [recipient.address],
-    amountWei: hre.ethers.parseEther("0.005"),
-  });
 
   // 3) Deploy the underlying ERC20 and the private token in front of it.
   const mockToken = await deployMockToken(hre, signer);
