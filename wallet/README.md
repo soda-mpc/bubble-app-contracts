@@ -6,6 +6,16 @@ Hardhat project for private ERC20 contracts (UUPS upgradeable proxies) with MPC 
 
 This project uses **npm** only (`package-lock.json`). Do not add `yarn.lock`; use `npm install` / `npm ci` in CI.
 
+## Requirements
+
+**Node 20.19 or newer.** Two things set that floor: `@nomicfoundation/edr`, a direct dependency of
+Hardhat, declares `>= 20`; and `node-fetch` v3 is ESM-only while this project compiles to CommonJS,
+so it is loaded through `require(ESM)`, which landed in 20.19.
+
+`engine-strict=true` in `.npmrc` makes `npm install` refuse a lower version rather than warn. Note
+that `npm run` does not check `engines` at all, so a script started on an unsupported Node will
+still run — the check happens at install time.
+
 ## Setup
 
 ```bash
