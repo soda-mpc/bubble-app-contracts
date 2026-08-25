@@ -4,14 +4,7 @@
   "description": "Private ERC20 contracts with MPC capabilities",
   "scripts": {
     "compile": "hardhat compile",
-    "compile:kurtosis": "hardhat compile",
     "test": "hardhat test",
-    "deploy:kurtosis": "hardhat run scripts/deploy-private-erc20.ts --network kurtosis",
-    "verify:kurtosis": "hardhat verify --network kurtosis",
-    "balance": "hardhat run scripts/get-user-balance.ts --network kurtosis",
-    "balance:decrypt": "hardhat run scripts/decrypt-user-balance.ts --network kurtosis",
-    "balance:proxy": "hardhat run scripts/decrypt-balance-via-proxy.ts --network kurtosis",
-    "get-signing-key": "hardhat run scripts/get-signing-key.ts --network kurtosis",
     "verify:environment": "hardhat run scripts/verify-contracts.ts"
   },
   "dependencies": {

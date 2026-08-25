@@ -34,13 +34,6 @@ const config: HardhatUserConfig = {
             gas: 30000000,
             blockGasLimit: 30000000
         },
-        kurtosis: {
-            chainId: 50505070,
-            url: "https://kurtosis.node.sodalabs.net",
-            accounts: { mnemonic: process.env.MNEMONIC || "" },
-            gas: 3_000_000,
-            gasMultiplier: 1.0
-        },
         "sepolia-arbitrum": {
             chainId: 421614,
             url: rpcUrl("sepolia-arbitrum", `https://arb-sepolia.g.alchemy.com/v2/${ALCHEMY_API_KEY}`),
