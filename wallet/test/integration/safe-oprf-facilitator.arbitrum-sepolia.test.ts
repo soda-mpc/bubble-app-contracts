@@ -42,7 +42,7 @@ import {
   DELAY_MPC_REDEEM_MS,
   delay,
   deployMockToken,
-  deployPrivateToken,
+  deployPrivateTokenGasless,
   expectDecryptViaProxyToFail,
   expectReverted,
   findParsedLogInReceipt,
@@ -126,7 +126,7 @@ describe("Safe OPRF redeem via facilitator on Arbitrum Sepolia", function () {
     agentAesKeyHex = agentAesKey.toString("hex");
 
     mockToken = await deployMockToken(hre, owner, "Facilitator Test USDC", "FTUSDC");
-    privateToken = await deployPrivateToken(hre, owner, {
+    privateToken = await deployPrivateTokenGasless(hre, owner, {
       underlyingAddress: await mockToken.getAddress(),
       ownerAddress: owner.address,
       masterAddress: master.address,

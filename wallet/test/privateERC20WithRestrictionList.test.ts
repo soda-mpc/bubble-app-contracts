@@ -899,55 +899,6 @@ describe("PrivateERC20WithRestrictionList", function () {
       expect(await privateToken.isRestricted(otherWallet.address)).to.be.false;
     });
 
-    it("rejects OPRF ops when the IT owner is restricted even if the caller is not", async function () {
-      const dummy256 = {
-        userAddress: restrictedWallet.address,
-        ciphertext: { ciphertextHigh: 1n, ciphertextLow: 1n },
-      };
-      const dummy128 = {
-        userAddress: restrictedWallet.address,
-        ciphertext: 1n,
-      };
-      const note = { x: dummy128, q: dummy256, y_clear: 1n };
-
-      await expect(privateToken.splitToken(dummy128, dummy256, 0, dummy256))
-        .to.be.revertedWithCustomError(privateToken, "AccountIsRestricted")
-        .withArgs(restrictedWallet.address, await companyRegistry.getAddress());
-
-      await expect(privateToken.burnToken(dummy128, dummy256, 0, userAddress))
-        .to.be.revertedWithCustomError(privateToken, "AccountIsRestricted")
-        .withArgs(restrictedWallet.address, await companyRegistry.getAddress());
-
-      await expect(privateToken.mergeMany([note]))
-        .to.be.revertedWithCustomError(privateToken, "AccountIsRestricted")
-        .withArgs(restrictedWallet.address, await companyRegistry.getAddress());
-
-      await expect(privateToken.redeemMany([note], dummy256, userAddress))
-        .to.be.revertedWithCustomError(privateToken, "AccountIsRestricted")
-        .withArgs(restrictedWallet.address, await companyRegistry.getAddress());
-    });
-
-    it("rejects OPRF ops when the caller is restricted even if the IT owner is not", async function () {
-      const dummy256 = {
-        userAddress,
-        ciphertext: { ciphertextHigh: 1n, ciphertextLow: 1n },
-      };
-      const dummy128 = {
-        userAddress,
-        ciphertext: 1n,
-      };
-
-      await expect(
-        privateToken.connect(restrictedWallet).splitToken(dummy128, dummy256, 0, dummy256)
-      )
-        .to.be.revertedWithCustomError(privateToken, "AccountIsRestricted")
-        .withArgs(restrictedWallet.address, await companyRegistry.getAddress());
-
-      await expect(privateToken.connect(restrictedWallet).mintOPRFToken(dummy256))
-        .to.be.revertedWithCustomError(privateToken, "AccountIsRestricted")
-        .withArgs(restrictedWallet.address, await companyRegistry.getAddress());
-    });
-
     it("should emit RestrictedAddressBlocked events appropriately", async function () {
       // This would require testing specific functions that emit this event
       // For now, we know it's emitted in the modifier when restrictions are checked

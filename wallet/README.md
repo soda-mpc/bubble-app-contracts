@@ -48,7 +48,12 @@ When bumping any pinned package, re-run `npm install`, `npm run compile`, and th
 | `npm run deploy:safe-wallet:kurtosis` | Create a Safe proxy wallet on Kurtosis |
 | `npm run test:safe` | Safe compile + local wallet integration tests |
 | `npm run test:safe:bubble:arbitrum-sepolia` | Safe + PrivateERC20 E2E on Arbitrum Sepolia (live MPC) |
-| `npm run test:safe:oprf-facilitator:arbitrum-sepolia` | User + Safe + agent + facilitator OPRF redeem on Arbitrum Sepolia |
+| `npm run test:safe:oprf-facilitator:arbitrum-sepolia` | User + Safe + agent + in-process facilitator OPRF redeem on Arbitrum Sepolia |
+| `npm run test:safe:oprf-facilitator-service:arbitrum-sepolia` | Same flow via HTTP facilitator (`FACILITATOR_URL`, default `http://localhost:8002`) |
+| `npm run test:gasless:arbitrum-sepolia` | Gasless + original smoke: EIP-712 execute, dest lock, signed redeem, original `msg.sender` mint |
+| `npm run test:oprf:arbitrum-sepolia` | Full original `PrivateERC20Contract256` OPRF suite on Arbitrum Sepolia |
+
+Original `PrivateERC20Contract256` is also covered by `privateERC20Contract256.test.ts` and `test:safe:bubble:arbitrum-sepolia`. Gasless facilitator e2e: `test:safe:oprf-facilitator:arbitrum-sepolia`.
 
 ## Safe smart account (v1.4.1)
 
@@ -57,3 +62,5 @@ Deploy/test helpers use **prebuilt artifacts** from `@safe-global/safe-contracts
 Deployment records are written to `scripts/deployments/safe/`. On networks with canonical Safe deployments (e.g. Base Sepolia), scripts reuse on-chain addresses; on Kurtosis they deploy fresh infrastructure.
 
 See `package.json` for network-specific deploy, verify, and balance scripts.
+
+Agent UI (other repo): [`docs/FE-AGENT-WORKFLOW.md`](docs/FE-AGENT-WORKFLOW.md).

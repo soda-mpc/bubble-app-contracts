@@ -2,11 +2,15 @@
 
 Use this file to onboard agents or developers working in `bubble-app-contracts/wallet`. It captures architecture, integration decisions, and open research.
 
+Frontend (separate repo): copy [`docs/FE-AGENT-WORKFLOW.md`](docs/FE-AGENT-WORKFLOW.md) — issuer/agent screens, note package, gasless `POST /v1/spend`.
+
 ## What this repo is
 
 Hardhat project for **Bubble private ERC20** contracts on confidential/MPC-enabled networks (Kurtosis, Base Sepolia, Arbitrum Sepolia, etc.).
 
 Core contract: `contracts/PrivateERC20Contract256.sol`
+
+Gasless variant: `contracts/PrivateERC20Contract256Gasless.sol` — EIP-712 `executeWithAuthorization` (EIP-1271 for Safes) plus OPRF dest lock for unsigned relays. Facilitator tests deploy this contract.
 
 - UUPS upgradeable proxy pattern
 - Encrypted balances/allowances via `MpcCore` (`@sodalabs/bubble-core-contracts`)

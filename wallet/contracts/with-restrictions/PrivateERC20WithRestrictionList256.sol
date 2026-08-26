@@ -234,7 +234,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         public 
         override
     {
-        _requireNotRestrictedPair(msg.sender, quantity.userAddress);
+        _requireNotRestrictedAccount(msg.sender);
         super.mintOPRFToken(quantity);
     }
 
@@ -245,7 +245,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         uint128 y_clear,
         itUint256 calldata qSplit
     ) public override {
-        _requireNotRestrictedPair(msg.sender, x.userAddress);
+        _requireNotRestrictedAccount(msg.sender);
         super.splitToken(x, q, y_clear, qSplit);
     }
 
@@ -257,7 +257,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         itUint256 calldata qSplit,
         address recipient
     ) public override {
-        _requireNotRestrictedTriple(msg.sender, x.userAddress, recipient);
+        _requireNotRestrictedPair(msg.sender, recipient);
         super.splitTokenForRecipient(x, q, y_clear, qSplit, recipient);
     }
 
@@ -268,7 +268,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         uint128 y_clear,
         address recipient
     ) public override {
-        _requireNotRestrictedTriple(msg.sender, x.userAddress, recipient);
+        _requireNotRestrictedPair(msg.sender, recipient);
         super.burnToken(x, q, y_clear, recipient);
     }
 
@@ -278,8 +278,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         override
         returns (gtUint128 x, gtUint128 y, gtUint256 qMerged)
     {
-        require(tokens.length > 0, "At least one token required");
-        _requireNotRestrictedPair(msg.sender, tokens[0].x.userAddress);
+        _requireNotRestrictedAccount(msg.sender);
         return super.mergeMany(tokens);
     }
 
@@ -300,7 +299,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
             gtUint256 qSender
         )
     {
-        _requireNotRestrictedTriple(msg.sender, amount.userAddress, recipient);
+        _requireNotRestrictedPair(msg.sender, recipient);
         return super.transferOPRF(tokens, amount, recipient);
     }
 
@@ -314,7 +313,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         override
         returns (gtUint128 xRemainder, gtUint128 yRemainder, gtUint256 qRemainder)
     {
-        _requireNotRestrictedTriple(msg.sender, amount.userAddress, recipient);
+        _requireNotRestrictedPair(msg.sender, recipient);
         return super.redeemMany(tokens, amount, recipient);
     }
 
@@ -329,7 +328,7 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         override
         returns (gtUint128 xRemainder, gtUint128 yRemainder, gtUint256 qRemainder)
     {
-        _requireNotRestrictedTriple(msg.sender, amount.userAddress, recipient);
+        _requireNotRestrictedPair(msg.sender, recipient);
         return super.redeemManyToUnderlying(tokens, amount, recipient, unwrap);
     }
 

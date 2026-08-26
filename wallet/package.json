@@ -8,6 +8,7 @@
     "compile:kurtosis": "hardhat compile",
     "test": "hardhat test",
     "test:oprf-private": "hardhat test test/PrivateERC20OPRF.test.ts --network world-mobile-testnet",
+    "test:oprf:arbitrum-sepolia": "hardhat test test/PrivateERC20OPRF.test.ts --network sepolia-arbitrum",
     "deploy:kurtosis": "hardhat run scripts/deploy-private-erc20.ts --network kurtosis",
     "verify:kurtosis": "hardhat verify --network kurtosis",
     "balance": "hardhat run scripts/get-user-balance.ts --network kurtosis",
@@ -25,6 +26,9 @@
     "test:safe": "hardhat test test/integration/safe-infrastructure.test.ts",
     "test:safe:bubble:arbitrum-sepolia": "hardhat test test/integration/safe-private-erc20.arbitrum-sepolia.test.ts --network sepolia-arbitrum",
     "test:safe:oprf-facilitator:arbitrum-sepolia": "hardhat test test/integration/safe-oprf-facilitator.arbitrum-sepolia.test.ts --network sepolia-arbitrum",
+    "test:safe:oprf-facilitator-service:arbitrum-sepolia": "hardhat test test/integration/safe-oprf-facilitator-service.arbitrum-sepolia.test.ts --network sepolia-arbitrum",
+    "test:gasless": "hardhat test test/PrivateERC20Gasless.test.ts",
+    "test:gasless:arbitrum-sepolia": "hardhat test test/PrivateERC20Gasless.test.ts --network sepolia-arbitrum",
     "link:safe": "mkdir -p vendor && ln -sfn ../../../safe-smart-account vendor/safe-smart-account"
   },
   "dependencies": {
@@ -48,10 +52,12 @@
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.0.9",
     "@nomicfoundation/hardhat-ethers": "^3.0.9",
+    "@nomicfoundation/hardhat-ignition": "^0.15.16",
     "@nomicfoundation/hardhat-ignition-ethers": "^0.15.12",
     "@nomicfoundation/hardhat-network-helpers": "^1.0.12",
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "@nomicfoundation/hardhat-verify": "^2.0.14",
+    "@nomicfoundation/ignition-core": "^0.15.15",
     "@openzeppelin/hardhat-upgrades": "3.9.1",
     "@typechain/ethers-v6": "^0.5.1",
     "@typechain/hardhat": "^9.1.0",

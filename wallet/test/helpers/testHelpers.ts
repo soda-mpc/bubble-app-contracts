@@ -91,6 +91,8 @@ export async function getGcAclContract(hre: { ethers: { provider: { getNetwork: 
 }
 
 export const PRIVATE_ERC20_256_FQN = "contracts/PrivateERC20Contract256.sol:PrivateERC20Contract256";
+export const PRIVATE_ERC20_256_GASLESS_FQN =
+  "contracts/PrivateERC20Contract256Gasless.sol:PrivateERC20Contract256Gasless";
 export const ERC1967_PROXY_FQN = "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy";
 
 export const DELAY_SHORT_MS = 2000;
@@ -196,6 +198,41 @@ export async function deployPrivateToken(
     hre,
     signer: defaultSigner,
     contractFqn: PRIVATE_ERC20_256_FQN,
+    initData: (factory) => factory.interface.encodeFunctionData("initializeWithWrappedNative", [
+      name,
+      symbol,
+      underlyingAddress,
+      ownerAddress,
+      masterAddress,
+      underlyingIsWrappedNative,
+    ]),
+  });
+}
+
+export async function deployPrivateTokenGasless(
+  hre: HardhatRuntime,
+  defaultSigner: any,
+  params: {
+    underlyingAddress: string;
+    ownerAddress: string;
+    masterAddress: string;
+    name?: string;
+    symbol?: string;
+    underlyingIsWrappedNative?: boolean;
+  }
+): Promise<any> {
+  const {
+    underlyingAddress,
+    ownerAddress,
+    masterAddress,
+    name = "BubbleToken",
+    symbol = "BUB",
+    underlyingIsWrappedNative = false,
+  } = params;
+  return deployProxyBackedContract({
+    hre,
+    signer: defaultSigner,
+    contractFqn: PRIVATE_ERC20_256_GASLESS_FQN,
     initData: (factory) => factory.interface.encodeFunctionData("initializeWithWrappedNative", [
       name,
       symbol,
