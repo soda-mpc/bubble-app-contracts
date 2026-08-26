@@ -108,11 +108,12 @@ XDC AI uses Safe v1.4.1 as user smart wallets with Allowance Module for session-
 1. **Module path:** Allowance Module + session key for capped agent spends (XDC AI pattern).
 2. **Reuse Safe:** set `SAFE_ADDRESS` env to skip wallet creation on repeat runs.
 3. **Issuer unlinkability:** `y_clear` on `OPRFTokenInvalidated` still lets a note issuer find the spend tx (see anonymous use case).
+4. **Gasless insert grant:** add GCACL `permitFullInsertAccessWithAuthorization` (EIP-712 / EIP-1271). See [`docs/FE-AGENT-WORKFLOW.md`](docs/FE-AGENT-WORKFLOW.md) § Insert ACL. Do not wrap today’s `permitFullInsertAccess` in PrivateERC20 — `permitter` would become the token.
 
 ### Bubble smart-account crypto model (no contract key onboarding)
 
 - Onboard **EOA** only; balances live on Safe/SA address.
-- **Insert:** when `tx.origin != it.userAddress`, `GCHandler.ValidateCiphertext` checks `GCACL.isFullInsertPermitted(userAddress, msg.sender)`. `msg.sender` is the app contract (PrivateERC20), **not** the gas-paying relayer. On Arbitrum Sepolia the handler does **not** consult `isContractInsertPermitted`; granting insert to a facilitator EOA is a no-op. The IT owner must call `GCACL.permitFullInsertAccess(privateTokenAddress, expiration)`.
+- **Insert:** when `tx.origin != it.userAddress`, `GCHandler.ValidateCiphertext` checks `GCACL.isFullInsertPermitted(userAddress, msg.sender)`. `msg.sender` is the app contract (PrivateERC20), **not** the gas-paying relayer. On Arbitrum Sepolia the handler does **not** consult `isContractInsertPermitted`; granting insert to a facilitator EOA is a no-op. Today the IT owner must call `GCACL.permitFullInsertAccess(privateTokenAddress, expiration)` (agent pays gas). Proposed: GCACL `permitFullInsertAccessWithAuthorization` so the facilitator submits an agent-signed grant into the same mapping.
 - **View:** Safe grants view to EOA (`GCACL.permit(handle, eoa)` via Safe `execTransaction`, or `permitFullViewAccess`).
 - **Decrypt:** `decryptValueViaProxy(handle, eoa, key, proxy, owner=Safe)` — already in `bubbleCryptoTransport.ts` / `decryptHandleForOwnerViaProxy`.
 - Reference: bubble `GCHandler.ValidateCiphertext`, `run_private_erc20.py` (soda-contracts examples).
@@ -125,7 +126,7 @@ Canonical flow:
 
 1. **Anonymize (issuer):** Safe `shield` + `mintOPRFToken`. Events mention the Safe only. Handles `(x, y, q)` are permitted to the Safe.
 2. **Handoff (off-chain):** issuer decrypts plaintext `(x, y, q)` and gives those values to the agent out of band. No `splitTokenForRecipient`, no private `transfer`.
-3. **Spend (user + facilitator):** agent encrypts ITs as `userAddress = agent` and grants `GCACL.permitFullInsertAccess(token)`. Facilitator submits `redeemManyToUnderlying` / `burnToken`. `tx.origin` is the facilitator; dest lock pays the agent; remainder is credited to the agent. Events on this tx must not mention the Safe.
+3. **Spend (user + facilitator):** agent encrypts ITs as `userAddress = agent` and grants insert to the token (`GCACL.permitFullInsertAccess` today; signed `permitFullInsertAccessWithAuthorization` once GCACL supports it). Facilitator submits `redeemManyToUnderlying` / `burnToken`. `tx.origin` is the facilitator; dest lock pays the agent; remainder is credited to the agent. Events on this tx must not mention the Safe.
 
 What a public observer sees: `OPRFMinted(Safe, handles)` in one tx, later `Unshield(agent)` from a facilitator tx. No shared addresses. Mint `x`/`q` handles are not the spend handles (re-validated ITs).
 

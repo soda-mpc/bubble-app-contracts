@@ -170,7 +170,10 @@ v1 can be same-browser: issuer and agents share local persistence. v2: clipboard
 
 ```text
 Select note + amount + destination
-  → Ensure GCACL.permitFullInsertAccess(privateToken) once per agent
+  → Insert grant once per agent:
+       POC: faucet → agent calls GCACL.permitFullInsertAccess(privateToken)
+       later: sign EIP-712 PermitFullInsertAccess; facilitator submits
+              permitFullInsertAccessWithAuthorization (see Insert ACL)
   → Build redeemManyToUnderlying calldata
        ITs: userAddress = agent
        recipient = agent
@@ -186,7 +189,7 @@ Select note + amount + destination
 
 **UI states:** `preparing` → `submitted` → `waiting for unshield` → `paying destination` → `done` | `needs attention`.
 
-ACL bootstrap is the one extra on-chain step the agent may need **once**. Prefer facilitator generic relay of that tx (allowlisted `GCACL`) so the agent stays unfunded. Until that exists, a one-time faucet or “sponsor permit” endpoint is OK for demo.
+ACL bootstrap is the one extra on-chain step the agent may need **once**. Today that is `GCACL.permitFullInsertAccess` paid by the agent (after faucet). Intended GCACL change: signed `permitFullInsertAccessWithAuthorization` so the facilitator submits it (see Insert ACL below).
 
 ### 6. Activity
 
@@ -314,6 +317,7 @@ Optional later (ops): `POST /v1/relay/redeem` and `POST /v1/relay/eip3009`. Prod
 | Decrypt `(x, y, q)` | Issuer FE via Bubble proxy |
 | Build `redeemManyToUnderlying` calldata | Agent FE |
 | Sign EIP-712 `executeWithAuthorization` | Agent FE (agent key) |
+| Sign EIP-712 `PermitFullInsertAccess` (proposed GCACL) | Agent FE (agent key); facilitator submits |
 | Sign EIP-3009 | Agent FE (agent key) |
 | Broadcast + wait unshield + 3009 | Facilitator |
 | Store notes / agent keys | FE local (encrypted) |
@@ -322,13 +326,42 @@ Facilitator should receive **encoded calldata + signatures**, not a standing cop
 
 ### Insert ACL (easy to get wrong)
 
-`GCHandler.ValidateCiphertext` checks `isFullInsertPermitted(userAddress, msg.sender)` where `msg.sender` is **PrivateERC20**, not the facilitator.
+`GCHandler.ValidateCiphertext` checks `isFullInsertPermitted(userAddress, msg.sender)` where `msg.sender` is **PrivateERC20**, not the facilitator. Granting insert to the facilitator EOA is a **no-op** on Arbitrum Sepolia.
 
-Granting insert to the facilitator EOA is a **no-op** on Arbitrum Sepolia. The **agent** must call:
+**Today (POC):** the **agent** must call, once (long TTL is fine):
 
 `GCACL.permitFullInsertAccess(privateTokenAddress, expiration)`
 
-once (long TTL is fine for demo).
+`permitter` is always `msg.sender` of that GCACL call. Relaying the agent’s raw EOA tx still charges `from` (the agent). Wrapping the call in PrivateERC20 `executeWithAuthorization` also fails: GCACL would see `permitter = token`. Faucet + agent-submitted permit is the current workaround.
+
+**Proposed GCACL change (full agent gasless):** keep the existing function; add a signed sibling that writes the **same** mapping `ValidateCiphertext` already reads (`permitter = agent`, `permittee = privateToken`). `ValidateCiphertext` does not change. Pattern is ERC-2612 / the same EIP-712 + EIP-1271 style as `executeWithAuthorization`.
+
+```solidity
+function permitFullInsertAccessWithAuthorization(
+    address permitter,      // agent
+    address permittee,      // PrivateERC20
+    uint64 expirationDate,
+    uint256 validAfter,
+    uint256 validBefore,
+    bytes32 nonce,
+    bytes calldata signature
+) external;
+```
+
+Typed data (`verifyingContract` = GCACL):
+
+```text
+PermitFullInsertAccess(address permitter,address permittee,uint64 expirationDate,uint256 validAfter,uint256 validBefore,bytes32 nonce)
+```
+
+Checks: non-zero addresses, `expirationDate > now`, time window, nonce unused for `permitter`, `SignatureChecker.isValidSignatureNow(permitter, hash, signature)`, then the same store write as `permitFullInsertAccess`.
+
+Agent signs; facilitator pays gas and submits. Do **not** set `permittee` to the facilitator. One facilitator tx can run grant then redeem:
+
+1. `GCACL.permitFullInsertAccessWithAuthorization(agent, token, …)`
+2. `token.executeWithAuthorization(…redeemManyToUnderlying…)`
+
+This lives in **bubble-core-contracts** (GCACL), not `PrivateERC20Contract256Gasless`. Until it ships, FE still faucet → agent permit → spend.
 
 ### Dest lock (FE must set recipient = agent)
 
@@ -392,7 +425,7 @@ Underlying **must** support EIP-3009 `transferWithAuthorization` (real USDC or a
 - [ ] Issuer shield / mint / decrypt note
 - [ ] Agent EOA create + Bubble onboard
 - [ ] Local encrypted note store + assign
-- [ ] Agent IT encrypt + `permitFullInsertAccess`
+- [ ] Agent IT encrypt + `permitFullInsertAccess` (faucet POC; later signed `permitFullInsertAccessWithAuthorization`)
 - [ ] EIP-3009 typed-data sign (USDC version / domain)
 - [ ] `POST /v1/spend` + poll + partial-failure CTA
 - [ ] Copy that does not claim issuer unlinkability beyond “no address edge on-chain”
