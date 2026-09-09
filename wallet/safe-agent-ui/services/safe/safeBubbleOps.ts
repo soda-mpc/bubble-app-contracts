@@ -2,7 +2,7 @@ import type { Signer } from "ethers";
 import { Contract, Interface } from "ethers";
 import { GCACL_ABI, getAppContractsConfig } from "~~/config/contracts";
 import { buildItUint256 } from "../bubble/crypto";
-import { encodeContractCall, execSafeTransaction } from "./safeTx";
+import { encodeContractCall, execSafeTransaction, execSafeTransactions } from "./safeTx";
 
 const ERC20_WRITE_ABI = new Interface([
   "function approve(address spender, uint256 amount) returns (bool)",
@@ -171,27 +171,34 @@ export async function ensureSafeViewerAccess(params: {
   return { granted: true, txHash: tx.hash, mode: "contract" };
 }
 
-/** Batch: one Safe permit per missing handle (skips already-permitted). */
+/** Batch: one Safe MultiSend for all missing handle permits (one confirmation). */
 export async function ensureSafeViewerAccessForHandles(params: {
   safeAddress: string;
   signer: Signer;
   viewer: string;
   handles: bigint[];
-}): Promise<{ txHashes: string[] }> {
-  const txHashes: string[] = [];
+  gcAcl?: string;
+}): Promise<{ txHash?: string; permittedCount: number }> {
+  const config = getAppContractsConfig();
+  const gcAcl = params.gcAcl || config.gcAcl;
+  if (!gcAcl) throw new Error("GCACL address not configured");
+
+  const needPermit: bigint[] = [];
   for (const handle of params.handles) {
     if (handle === 0n) continue;
-    const ok = await isHandlePermitted(params.signer, handle, params.viewer);
-    if (ok) continue;
-    const tx = await execSafePermitHandleView({
-      safeAddress: params.safeAddress,
-      signer: params.signer,
-      viewer: params.viewer,
-      handle,
-    });
-    txHashes.push(tx.hash);
+    const ok = await isHandlePermitted(params.signer, handle, params.viewer, gcAcl);
+    if (!ok) needPermit.push(handle);
   }
-  return { txHashes };
+  if (needPermit.length === 0) {
+    return { permittedCount: 0 };
+  }
+
+  const calls = needPermit.map((handle) => ({
+    to: gcAcl,
+    data: encodeContractCall(GCACL_IFACE, "permit", [handle, params.viewer]),
+  }));
+  const result = await execSafeTransactions(params.safeAddress, params.signer, calls);
+  return { txHash: result.hash, permittedCount: needPermit.length };
 }
 
 export async function mintOprfFromSafe(params: {

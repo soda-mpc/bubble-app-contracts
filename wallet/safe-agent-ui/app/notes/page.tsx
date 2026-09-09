@@ -116,24 +116,22 @@ export default function NotesPage() {
         ownerAesKeyHex: aesKeyHex,
       });
 
-      // Permit note handles to EOA (skip if already permitted) — enables unsigned decrypt
-      const { txHashes } = await ensureSafeViewerAccessForHandles({
+      // One MultiSend: permit x/y/q to EOA (enables unsigned decrypt)
+      const permitResult = await ensureSafeViewerAccessForHandles({
         safeAddress: safe.address,
         signer,
         viewer: address,
         handles: [minted.xHandle, minted.yHandle, minted.qHandle],
       });
-      for (const hash of txHashes) {
+      if (permitResult.txHash) {
         recordActivity({
           kind: "permit_view",
-          summary: "Safe permitted owner to decrypt note handle",
-          txHash: hash,
+          summary: `Safe permitted owner to decrypt ${permitResult.permittedCount} note handle(s)`,
+          txHash: permitResult.txHash,
           safeAddress: safe.address,
           noteLabel: label.trim() || undefined,
         });
-      }
-      if (txHashes.length > 0) {
-        toast(`Granted view on ${txHashes.length} note handle(s)…`);
+        toast(`Granted view on ${permitResult.permittedCount} note handle(s)…`);
       }
 
       toast("Waiting for MPC, then decrypting note (no signature)…");
