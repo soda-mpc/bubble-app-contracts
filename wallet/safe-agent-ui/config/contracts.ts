@@ -106,7 +106,11 @@ export const ERC20_ABI = [
 export const GCACL_ABI = [
   "function permit(uint256 handle, address account)",
   "function permitFullInsertAccess(address permittee, uint64 expirationDate)",
+  "function permitContractViewAccess(address permittee, address contractAddress, uint64 expirationDate)",
+  "function permitFullViewAccess(address permittee, uint64 expirationDate)",
   "function isFullInsertPermitted(address permitter, address permittee) view returns (bool)",
   "function isPermitted(uint256 handle, address account) view returns (bool)",
   "function isPermittedToView(address permitter, address permittee, uint256 handle) view returns (bool)",
+  "function isContractViewPermitted(address permitter, address permittee, address contractAddress) view returns (bool)",
+  "function isFullViewPermitted(address permitter, address permittee) view returns (bool)",
 ] as const;

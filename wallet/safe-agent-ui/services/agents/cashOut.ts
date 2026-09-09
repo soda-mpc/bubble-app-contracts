@@ -1,7 +1,7 @@
 import { Contract, JsonRpcProvider, Wallet, getAddress, Interface, formatUnits } from "ethers";
 import { GCACL_ABI, getAppContractsConfig } from "~~/config/contracts";
 import { buildItUint128, buildItUint256 } from "../bubble/crypto";
-import { ensureUserKey, decryptHandlesViaProxy } from "../bubble/proxy";
+import { ensureUserKey, decryptHandlesByOwner } from "../bubble/proxy";
 import { resolveTxFeeOverrides } from "../web3/txFeeOverrides";
 import type { AgentRecord } from "../agents/agentStore";
 import type { NotePackage } from "../notes/noteStore";
@@ -425,13 +425,13 @@ export async function cashOutNoteToClear(params: {
     if (remainder && amount < q) {
       onStatus?.("Decrypting remainder note…");
       await new Promise((r) => setTimeout(r, 8000));
-      const [rx, ry, rq] = await decryptHandlesViaProxy({
+      const [rx, ry, rq] = await decryptHandlesByOwner({
         handles: [
           BigInt(remainder.args[1] as bigint),
           BigInt(remainder.args[2] as bigint),
           BigInt(remainder.args[3] as bigint),
         ],
-        signer,
+        ownerAddress: agentAddress,
         aesKeyHex,
         chainId: config.chainId,
       });

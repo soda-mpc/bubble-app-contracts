@@ -15,9 +15,9 @@ import {
 } from "~~/services/notes/noteStore";
 import { ERC20_ABI, getAppContractsConfig } from "~~/config/contracts";
 import { useActiveSafe } from "~~/hooks/useActiveSafe";
-import { ensureUserKey, decryptHandlesViaProxy } from "~~/services/bubble/proxy";
+import { ensureUserKey, decryptHandlesByOwner } from "~~/services/bubble/proxy";
 import {
-  execSafePermitHandleView,
+  ensureSafeViewerAccessForHandles,
   mintOprfFromSafe,
 } from "~~/services/safe/safeBubbleOps";
 import { walletClientToSigner } from "~~/utils/ethers";
@@ -116,30 +116,32 @@ export default function NotesPage() {
         ownerAesKeyHex: aesKeyHex,
       });
 
-      toast("Granting view on note handles…");
-      for (const handle of [minted.xHandle, minted.yHandle, minted.qHandle]) {
-        const permitTx = await execSafePermitHandleView({
-          safeAddress: safe.address,
-          signer,
-          viewer: address,
-          handle,
-        });
+      // Permit note handles to EOA (skip if already permitted) — enables unsigned decrypt
+      const { txHashes } = await ensureSafeViewerAccessForHandles({
+        safeAddress: safe.address,
+        signer,
+        viewer: address,
+        handles: [minted.xHandle, minted.yHandle, minted.qHandle],
+      });
+      for (const hash of txHashes) {
         recordActivity({
           kind: "permit_view",
           summary: "Safe permitted owner to decrypt note handle",
-          txHash: permitTx.hash,
+          txHash: hash,
           safeAddress: safe.address,
           noteLabel: label.trim() || undefined,
         });
       }
+      if (txHashes.length > 0) {
+        toast(`Granted view on ${txHashes.length} note handle(s)…`);
+      }
 
-      toast("Waiting for MPC, then decrypting note…");
+      toast("Waiting for MPC, then decrypting note (no signature)…");
       await delay(8000);
-      const [x, y, q] = await decryptHandlesViaProxy({
+      const [x, y, q] = await decryptHandlesByOwner({
         handles: [minted.xHandle, minted.yHandle, minted.qHandle],
-        signer,
+        ownerAddress: address,
         aesKeyHex,
-        proxyUrl: config.bubbleProxyUrl,
         chainId: config.chainId,
       });
 

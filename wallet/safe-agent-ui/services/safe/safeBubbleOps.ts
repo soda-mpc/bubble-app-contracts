@@ -60,6 +60,8 @@ export async function shieldFromSafe(params: {
   return execSafeShield(safeAddress, signer, privateToken, amount);
 }
 
+const VIEW_TTL_SECONDS = 365n * 24n * 60n * 60n;
+
 export async function execSafePermitHandleView(params: {
   safeAddress: string;
   signer: Signer;
@@ -74,6 +76,27 @@ export async function execSafePermitHandleView(params: {
   return execSafeTransaction(params.safeAddress, params.signer, { to: gcAcl, data });
 }
 
+/** One-time Safe → EOA view on all handles from a private token (sodawallet-like decrypt UX). */
+export async function execSafePermitContractView(params: {
+  safeAddress: string;
+  signer: Signer;
+  viewer: string;
+  privateToken: string;
+  gcAcl?: string;
+  ttlSeconds?: bigint;
+}) {
+  const config = getAppContractsConfig();
+  const gcAcl = params.gcAcl || config.gcAcl;
+  if (!gcAcl) throw new Error("GCACL address not configured");
+  const expiration = BigInt(Math.floor(Date.now() / 1000)) + (params.ttlSeconds ?? VIEW_TTL_SECONDS);
+  const data = encodeContractCall(GCACL_IFACE, "permitContractViewAccess", [
+    params.viewer,
+    params.privateToken,
+    expiration,
+  ]);
+  return execSafeTransaction(params.safeAddress, params.signer, { to: gcAcl, data });
+}
+
 export async function isHandlePermitted(
   provider: Signer,
   handle: bigint,
@@ -85,6 +108,90 @@ export async function isHandlePermitted(
   if (!address) return false;
   const acl = new Contract(address, GCACL_ABI, provider);
   return Boolean(await acl.isPermitted(handle, account));
+}
+
+export async function isSafeContractViewPermitted(params: {
+  provider: Signer;
+  safeAddress: string;
+  viewer: string;
+  privateToken: string;
+  gcAcl?: string;
+}): Promise<boolean> {
+  const config = getAppContractsConfig();
+  const address = params.gcAcl || config.gcAcl;
+  if (!address) return false;
+  const acl = new Contract(address, GCACL_ABI, params.provider);
+  return Boolean(
+    await acl.isContractViewPermitted(params.safeAddress, params.viewer, params.privateToken)
+  );
+}
+
+/**
+ * Ensure the connected EOA can decrypt Safe-owned handles without (or with minimal) signing.
+ *
+ * Unsigned sodawallet-style decrypt needs `GCACL.permit(handle, eoa)` (handle-level).
+ * Contract view alone only unlocks signed on-behalf decrypt (`owner=Safe`).
+ */
+export async function ensureSafeViewerAccess(params: {
+  safeAddress: string;
+  signer: Signer;
+  viewer: string;
+  privateToken: string;
+  handle?: bigint;
+}): Promise<{ granted: boolean; txHash?: string; mode: "none" | "handle" | "contract" }> {
+  const { safeAddress, signer, viewer, privateToken, handle } = params;
+
+  if (handle !== undefined && handle !== 0n) {
+    const handleOk = await isHandlePermitted(signer, handle, viewer);
+    if (handleOk) return { granted: false, mode: "none" };
+
+    const tx = await execSafePermitHandleView({
+      safeAddress,
+      signer,
+      viewer,
+      handle,
+    });
+    return { granted: true, txHash: tx.hash, mode: "handle" };
+  }
+
+  const contractOk = await isSafeContractViewPermitted({
+    provider: signer,
+    safeAddress,
+    viewer,
+    privateToken,
+  });
+  if (contractOk) return { granted: false, mode: "none" };
+
+  const tx = await execSafePermitContractView({
+    safeAddress,
+    signer,
+    viewer,
+    privateToken,
+  });
+  return { granted: true, txHash: tx.hash, mode: "contract" };
+}
+
+/** Batch: one Safe permit per missing handle (skips already-permitted). */
+export async function ensureSafeViewerAccessForHandles(params: {
+  safeAddress: string;
+  signer: Signer;
+  viewer: string;
+  handles: bigint[];
+}): Promise<{ txHashes: string[] }> {
+  const txHashes: string[] = [];
+  for (const handle of params.handles) {
+    if (handle === 0n) continue;
+    const ok = await isHandlePermitted(params.signer, handle, params.viewer);
+    if (ok) continue;
+    const tx = await execSafePermitHandleView({
+      safeAddress: params.safeAddress,
+      signer: params.signer,
+      viewer: params.viewer,
+      handle,
+    });
+    txHashes.push(tx.hash);
+  }
+  return { txHashes };
 }
 
 export async function mintOprfFromSafe(params: {

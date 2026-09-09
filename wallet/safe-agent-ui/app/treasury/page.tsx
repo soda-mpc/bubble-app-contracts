@@ -6,11 +6,10 @@ import toast from "react-hot-toast";
 import { useAccount, usePublicClient, useWalletClient } from "wagmi";
 import { useActiveSafe } from "~~/hooks/useActiveSafe";
 import { ERC20_ABI, getAppContractsConfig } from "~~/config/contracts";
-import { ensureUserKey, decryptHandleViaProxy } from "~~/services/bubble/proxy";
+import { ensureUserKey, decryptHandleByOwner } from "~~/services/bubble/proxy";
 import {
-  isHandlePermitted,
   readPrivateBalanceHandle,
-  execSafePermitHandleView,
+  ensureSafeViewerAccess,
   shieldFromSafe,
 } from "~~/services/safe/safeBubbleOps";
 import { walletClientToSigner } from "~~/utils/ethers";
@@ -101,29 +100,32 @@ export default function TreasuryPage() {
         return;
       }
 
-      const permitted = await isHandlePermitted(signer, handle, address);
-      if (!permitted) {
-        toast("Granting Safe → owner view permission…");
-        const permitTx = await execSafePermitHandleView({
-          safeAddress: safe.address,
-          signer,
-          viewer: address,
-          handle,
-        });
+      // AES key from localStorage after one-time onboard (same as sodawallet)
+      const aesKeyHex = await ensureUserKey(signer, config.chainId, config.bubbleProxyUrl);
+
+      // Safe tx only if this balance handle is not yet permitted to the EOA
+      const access = await ensureSafeViewerAccess({
+        safeAddress: safe.address,
+        signer,
+        viewer: address,
+        privateToken: config.privateErc20,
+        handle,
+      });
+      if (access.granted && access.txHash) {
+        toast("Granting Safe → owner view on balance handle…");
         recordActivity({
           kind: "permit_view",
           summary: "Safe permitted owner to view private balance",
-          txHash: permitTx.hash,
+          txHash: access.txHash,
           safeAddress: safe.address,
         });
       }
 
-      const aesKeyHex = await ensureUserKey(signer, config.chainId, config.bubbleProxyUrl);
-      const value = await decryptHandleViaProxy({
+      // Unsigned owner decrypt — no MetaMask signMessage (sodawallet path)
+      const value = await decryptHandleByOwner({
         handle,
-        signer,
+        ownerAddress: address,
         aesKeyHex,
-        proxyUrl: config.bubbleProxyUrl,
         chainId: config.chainId,
       });
       const decimals = tokenMeta?.decimals ?? 18;
