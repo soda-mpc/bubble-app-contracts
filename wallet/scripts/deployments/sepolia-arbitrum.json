@@ -1,7 +1,7 @@
 {
   "network": "sepolia-arbitrum",
   "chainId": 421614,
-  "deployedAt": "2026-07-01T15:27:03.869Z",
+  "deployedAt": "2026-09-09T13:18:52.952Z",
   "testToken": {
     "address": "0x15DF3e9761cEc63234c53b8aa576479219d6f789",
     "name": "Test USDC",
@@ -20,6 +20,16 @@
     "blockNumber": 283047809
   },
   "privateToken": {
+    "address": "0x2DD0361D91B019cEeCAD7185dC08267aa399fE07",
+    "implementation": "0x41ac7A52e17a38AB606Bd739490c5D74B67aBF87",
+    "name": "Private TUSDC v2",
+    "symbol": "pTUSDC2",
+    "underlying": "0x15DF3e9761cEc63234c53b8aa576479219d6f789",
+    "variant": "PrivateERC20Contract256",
+    "blockNumber": 307082879,
+    "hasRedeemManyToUnderlying": true
+  },
+  "privateTokenLegacy": {
     "address": "0x260dE54F6fb225Eacfbd83b871a5c5cA3C049610",
     "name": "Private TUSDC",
     "symbol": "pTUSDC",

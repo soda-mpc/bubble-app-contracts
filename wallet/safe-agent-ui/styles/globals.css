@@ -1,0 +1,91 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+@import "./wallet-theme-tokens.css";
+
+:root,
+[data-theme] {
+  background: var(--wallet-bg);
+}
+
+body {
+  min-height: 100vh;
+  background: var(--wallet-bg);
+  color: var(--wallet-text-default);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin-bottom: 0.5rem;
+  line-height: 1.2;
+  color: var(--wallet-text-strong);
+}
+
+.btn {
+  @apply shadow-md;
+}
+
+.btn.btn-ghost {
+  @apply shadow-none;
+}
+
+.btn-primary {
+  background-color: var(--wallet-primary) !important;
+  border-color: var(--wallet-primary) !important;
+  color: var(--wallet-text-inverse) !important;
+}
+
+.btn-primary:hover {
+  background-color: var(--wallet-primary-hover) !important;
+  border-color: var(--wallet-primary-hover) !important;
+}
+
+.panel {
+  background: var(--wallet-surface);
+  border: 1px solid var(--wallet-border);
+  border-radius: 1rem;
+  box-shadow: var(--wallet-shadow-soft);
+}
+
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--wallet-text-strong);
+}
+
+.page-subtitle {
+  color: var(--wallet-text-muted);
+  font-size: 0.95rem;
+  margin-top: 0.35rem;
+}
+
+.field-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--wallet-text-muted);
+  margin-bottom: 0.35rem;
+}
+
+.field-input {
+  width: 100%;
+  border: 1px solid var(--wallet-border);
+  background: var(--wallet-surface);
+  color: var(--wallet-text-strong);
+  border-radius: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  outline: none;
+}
+
+.field-input:focus {
+  border-color: var(--wallet-primary);
+  box-shadow: 0 0 0 3px var(--wallet-primary-soft);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.85rem;
+  word-break: break-all;
+}

@@ -2,7 +2,9 @@
 
 Standalone spec for the **FE app** (and the Python facilitator it talks to). Copy this file into the frontend repo; it does not depend on Hardhat layout.
 
-**Product:** issuer turns clear USDC into an anonymous OPRF note, assigns it to a simulated **agent EOA**, and the agent spends a portion **gaslessly** to a destination. The public chain must not show an address edge from issuer (Safe/EOA) to agent.
+**v1 MVP (narrower):** see [`SAFE-AGENT-UI-MVP.md`](./SAFE-AGENT-UI-MVP.md) — app in `wallet/safe-agent-ui/`, Safe deploy/import, custodial agents in localStorage, **agent-paid** redeem to clear on the agent (**no** facilitator, **no** destination/EIP-3009). This document remains the full gasless + destination product path.
+
+**Product (full path):** issuer turns clear USDC into an anonymous OPRF note, assigns it to a simulated **agent EOA**, and the agent spends a portion **gaslessly** to a destination. The public chain must not show an address edge from issuer (Safe/EOA) to agent.
 
 **Related contracts repo:** `bubble-app-contracts/wallet` — `PrivateERC20Contract256`, Safe helpers, Arbitrum Sepolia tests (`safe-oprf-facilitator*.arbitrum-sepolia.test.ts`). Protocol notes: `CONTEXT.md`.
 
@@ -402,13 +404,17 @@ Underlying **must** support EIP-3009 `transferWithAuthorization` (real USDC or a
 
 ## MVP slice (FE)
 
-1. EOA issuer: shield + mint + decrypt + copy note JSON.
+**Current locked MVP:** [`SAFE-AGENT-UI-MVP.md`](./SAFE-AGENT-UI-MVP.md) (Safe in scope; facilitator + EIP-3009 out).
+
+**Full-path MVP (later / gasless destination):**
+
+1. EOA or Safe issuer: shield + mint + decrypt + copy note JSON.
 2. Create agent EOA in-browser; paste/assign note.
 3. Spend form → build redeem + sign 3009 → `POST /v1/spend` → poll.
 4. Activity list with three tx hashes.
 5. Handle `complete-transfer` when unshield succeeded and 3009 failed.
 
-**Defer:** Safe issuer UI, QR handoff, `splitToken` remainder UX, production key backup.
+**Defer from full path:** QR handoff, `splitToken` remainder UX, production key backup.
 
 ---
 

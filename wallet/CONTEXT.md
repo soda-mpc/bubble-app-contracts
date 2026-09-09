@@ -2,7 +2,7 @@
 
 Use this file to onboard agents or developers working in `bubble-app-contracts/wallet`. It captures architecture, integration decisions, and open research.
 
-Frontend (separate repo): copy [`docs/FE-AGENT-WORKFLOW.md`](docs/FE-AGENT-WORKFLOW.md) — issuer/agent screens, note package, gasless `POST /v1/spend`.
+Frontend: MVP plan & decisions in [`docs/SAFE-AGENT-UI-MVP.md`](docs/SAFE-AGENT-UI-MVP.md) (app lives in `wallet/safe-agent-ui/`, extract later). Full protocol / gasless facilitator path: [`docs/FE-AGENT-WORKFLOW.md`](docs/FE-AGENT-WORKFLOW.md).
 
 ## What this repo is
 
@@ -105,10 +105,11 @@ XDC AI uses Safe v1.4.1 as user smart wallets with Allowance Module for session-
 
 ## Open tasks (suggested next steps)
 
-1. **Module path:** Allowance Module + session key for capped agent spends (XDC AI pattern).
-2. **Reuse Safe:** set `SAFE_ADDRESS` env to skip wallet creation on repeat runs.
-3. **Issuer unlinkability:** `y_clear` on `OPRFTokenInvalidated` still lets a note issuer find the spend tx (see anonymous use case).
-4. **Gasless insert grant:** add GCACL `permitFullInsertAccessWithAuthorization` (EIP-712 / EIP-1271). See [`docs/FE-AGENT-WORKFLOW.md`](docs/FE-AGENT-WORKFLOW.md) § Insert ACL. Do not wrap today’s `permitFullInsertAccess` in PrivateERC20 — `permitter` would become the token.
+1. **Safe Agent UI MVP:** implement per [`docs/SAFE-AGENT-UI-MVP.md`](docs/SAFE-AGENT-UI-MVP.md) — scaffold `wallet/safe-agent-ui`, Safe deploy/import, agents + OPRF mint/assign, agent-paid redeem to clear (no facilitator/destination in v1).
+2. **Module path:** Allowance Module + session key for capped agent spends (XDC AI pattern).
+3. **Reuse Safe:** set `SAFE_ADDRESS` env to skip wallet creation on repeat runs.
+4. **Issuer unlinkability:** `y_clear` on `OPRFTokenInvalidated` still lets a note issuer find the spend tx (see anonymous use case).
+5. **Gasless insert grant:** add GCACL `permitFullInsertAccessWithAuthorization` (EIP-712 / EIP-1271). See [`docs/FE-AGENT-WORKFLOW.md`](docs/FE-AGENT-WORKFLOW.md) § Insert ACL. Do not wrap today’s `permitFullInsertAccess` in PrivateERC20 — `permitter` would become the token.
 
 ### Bubble smart-account crypto model (no contract key onboarding)
 

@@ -159,6 +159,26 @@ async function main(): Promise<number> {
     },
   ];
 
+  // Current private token (v2+) — implementation has empty constructor; proxy linked via hardhat-verify separately
+  const privateTokenAny = deployment.privateToken as {
+    address: string;
+    implementation?: string;
+    variant?: string;
+  };
+  if (privateTokenAny.implementation) {
+    const variant = privateTokenAny.variant || "PrivateERC20Contract256";
+    const fqn =
+      variant === "PrivateERC20Contract256Gasless"
+        ? "contracts/PrivateERC20Contract256Gasless.sol:PrivateERC20Contract256Gasless"
+        : "contracts/PrivateERC20Contract256.sol:PrivateERC20Contract256";
+    targets.push({
+      name: `${variant} (Implementation)`,
+      address: privateTokenAny.implementation,
+      constructorArguments: [],
+      contract: fqn,
+    });
+  }
+
   let ok = 0;
   let fail = 0;
   for (const target of targets) {

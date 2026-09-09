@@ -1,0 +1,32 @@
+:root,
+[data-theme] {
+  --wallet-primary: #15805d;
+  --wallet-primary-hover: #0f694b;
+  --wallet-primary-soft: #e4f5ed;
+  --wallet-primary-soft-strong: #d3ecdf;
+  --wallet-primary-rgb: 21, 128, 93;
+
+  --wallet-bg: #f7f9f6;
+  --wallet-surface: #ffffff;
+  --wallet-surface-muted: #f1f5f1;
+  --wallet-border: #dfe7df;
+  --wallet-border-soft: #ccd9cf;
+  --wallet-border-primary: rgba(var(--wallet-primary-rgb), 0.25);
+  --wallet-overlay: rgba(20, 35, 26, 0.38);
+  --wallet-shadow-soft: 0 1px 3px rgba(23, 42, 29, 0.08);
+  --wallet-shadow-modal: 0 12px 32px rgba(23, 42, 29, 0.18);
+
+  --wallet-text-strong: #18251c;
+  --wallet-text-default: #46564a;
+  --wallet-text-muted: #718075;
+  --wallet-text-subtle: #8c9a8f;
+  --wallet-text-inverse: #ffffff;
+
+  --wallet-success: #15805d;
+  --wallet-success-soft: #e4f5ed;
+  --wallet-warning: #a86608;
+  --wallet-warning-soft: #fff4d9;
+  --wallet-error: #c94f4f;
+  --wallet-error-soft: #fbeaea;
+  --wallet-error-border: #f1caca;
+}
