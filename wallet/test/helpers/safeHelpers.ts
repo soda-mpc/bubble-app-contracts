@@ -8,10 +8,18 @@ export {
 export type { DeployedSafe, SafeInfrastructure } from "../../scripts/safe/safe-core";
 export {
   SafeOperation,
+  buildPrevalidatedSignature,
   buildSafeTransaction,
   calculateSafeTransactionHash,
   encodeContractCall,
   execSafeTransaction,
+  execSafeTransactions,
+  packSafeSignatures,
   signSafeTransaction,
 } from "../../scripts/safe/safe-tx";
-export type { SafeMetaTransaction, SafeTransaction } from "../../scripts/safe/safe-tx";
+export type {
+  SafeExecOptions,
+  SafeMetaTransaction,
+  SafeSignature,
+  SafeTransaction,
+} from "../../scripts/safe/safe-tx";

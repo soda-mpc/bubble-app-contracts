@@ -1,8 +1,10 @@
 import type { HardhatRuntimeEnvironment } from "hardhat/types";
+import type { Signer } from "ethers";
 import { Interface } from "ethers";
 import {
   encodeContractCall,
   execSafeTransaction,
+  type SafeExecOptions,
 } from "../../scripts/safe/safe-tx";
 import { deploySafeWallet, getOrDeploySafeInfrastructure } from "./safeHelpers";
 import { GCACL_ABI, getGcAclAddress } from "./testHelpers";
@@ -39,6 +41,15 @@ export type ItUint128Payload = {
   userAddress: string;
   ciphertext: bigint;
 };
+
+const VIEW_TTL_SECONDS = 365n * 24n * 60n * 60n;
+
+function execOptions(extraSigners?: Signer[]): SafeExecOptions | undefined {
+  if (!extraSigners?.length) {
+    return undefined;
+  }
+  return { extraSigners };
+}
 
 export async function resolveSafeForTests(
   hre: HardhatRuntimeEnvironment,
@@ -82,20 +93,22 @@ export async function execSafeErc20Approve(
   ownerSigner: any,
   tokenAddress: string,
   spenderAddress: string,
-  amount: bigint
+  amount: bigint,
+  extraSigners?: Signer[]
 ) {
   const data = encodeContractCall(new Interface([...ERC20_ABI]), "approve", [spenderAddress, amount]);
-  return execSafeTransaction(safeAddress, ownerSigner, { to: tokenAddress, data });
+  return execSafeTransaction(safeAddress, ownerSigner, { to: tokenAddress, data }, execOptions(extraSigners));
 }
 
 export async function execSafeShield(
   safeAddress: string,
   ownerSigner: any,
   privateTokenAddress: string,
-  amount: bigint
+  amount: bigint,
+  extraSigners?: Signer[]
 ) {
   const data = encodeContractCall(new Interface([...PRIVATE_ERC20_ABI]), "shield", [amount]);
-  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data });
+  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data }, execOptions(extraSigners));
 }
 
 export async function execSafeClearTransfer(
@@ -103,11 +116,12 @@ export async function execSafeClearTransfer(
   ownerSigner: any,
   privateTokenAddress: string,
   recipientAddress: string,
-  amount: bigint
+  amount: bigint,
+  extraSigners?: Signer[]
 ) {
   const clearTransferIface = new Interface(["function transfer(address to, uint256 amount) returns (bool)"]);
   const data = clearTransferIface.encodeFunctionData("transfer", [recipientAddress, amount]);
-  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data });
+  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data }, execOptions(extraSigners));
 }
 
 export async function execSafeEncryptedTransfer(
@@ -118,13 +132,14 @@ export async function execSafeEncryptedTransfer(
   itPayload: {
     userAddress: string;
     ciphertext: { ciphertextHigh: bigint; ciphertextLow: bigint };
-  }
+  },
+  extraSigners?: Signer[]
 ) {
   const data = encodeContractCall(new Interface([...PRIVATE_ERC20_TRANSFER_ABI]), "transfer", [
     recipientAddress,
     itPayload,
   ]);
-  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data });
+  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data }, execOptions(extraSigners));
 }
 
 /** Safe grants the owner GCACL view on a specific balance handle. */
@@ -133,12 +148,34 @@ export async function execSafePermitHandleView(
   safeAddress: string,
   ownerSigner: any,
   viewerAddress: string,
-  handle: bigint
+  handle: bigint,
+  extraSigners?: Signer[]
 ) {
   const chainId = Number((await hre.ethers.provider.getNetwork()).chainId);
   const gcAclAddress = getGcAclAddress(chainId);
   const data = encodeContractCall(new Interface([...GCACL_ABI]), "permit", [handle, viewerAddress]);
-  return execSafeTransaction(safeAddress, ownerSigner, { to: gcAclAddress, data });
+  return execSafeTransaction(safeAddress, ownerSigner, { to: gcAclAddress, data }, execOptions(extraSigners));
+}
+
+/** Safe grants contract-wide view so an EOA can decrypt Safe-owned handles on-behalf (owner=Safe). */
+export async function execSafePermitContractView(
+  hre: HardhatRuntimeEnvironment,
+  safeAddress: string,
+  ownerSigner: any,
+  viewerAddress: string,
+  contractAddress: string,
+  extraSigners?: Signer[],
+  ttlSeconds = VIEW_TTL_SECONDS
+) {
+  const chainId = Number((await hre.ethers.provider.getNetwork()).chainId);
+  const gcAclAddress = getGcAclAddress(chainId);
+  const expiration = BigInt(Math.floor(Date.now() / 1000)) + ttlSeconds;
+  const data = encodeContractCall(new Interface([...GCACL_ABI]), "permitContractViewAccess", [
+    viewerAddress,
+    contractAddress,
+    expiration,
+  ]);
+  return execSafeTransaction(safeAddress, ownerSigner, { to: gcAclAddress, data }, execOptions(extraSigners));
 }
 
 export async function mintUnderlyingToSafe(
@@ -155,11 +192,12 @@ export async function execSafePermitHandleViews(
   safeAddress: string,
   ownerSigner: any,
   viewerAddress: string,
-  handles: bigint[]
+  handles: bigint[],
+  extraSigners?: Signer[]
 ) {
   for (const handle of handles) {
     if (handle === 0n) continue;
-    await execSafePermitHandleView(hre, safeAddress, ownerSigner, viewerAddress, handle);
+    await execSafePermitHandleView(hre, safeAddress, ownerSigner, viewerAddress, handle, extraSigners);
   }
 }
 
@@ -167,10 +205,11 @@ export async function execSafeMintOprfToken(
   safeAddress: string,
   ownerSigner: any,
   privateTokenAddress: string,
-  quantityIt: ItUint256Payload
+  quantityIt: ItUint256Payload,
+  extraSigners?: Signer[]
 ) {
   const data = encodeContractCall(new Interface([...PRIVATE_ERC20_OPRF_ABI]), "mintOPRFToken", [quantityIt]);
-  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data });
+  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data }, execOptions(extraSigners));
 }
 
 export async function execSafeSplitTokenForRecipient(
@@ -183,7 +222,8 @@ export async function execSafeSplitTokenForRecipient(
     yClear: bigint;
     qSplitIt: ItUint256Payload;
     recipient: string;
-  }
+  },
+  extraSigners?: Signer[]
 ) {
   const data = encodeContractCall(new Interface([...PRIVATE_ERC20_OPRF_ABI]), "splitTokenForRecipient", [
     params.xIt,
@@ -192,7 +232,7 @@ export async function execSafeSplitTokenForRecipient(
     params.qSplitIt,
     params.recipient,
   ]);
-  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data });
+  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data }, execOptions(extraSigners));
 }
 
 export async function execSafeBurnToken(
@@ -204,7 +244,8 @@ export async function execSafeBurnToken(
     qIt: ItUint256Payload;
     yClear: bigint;
     recipient: string;
-  }
+  },
+  extraSigners?: Signer[]
 ) {
   const data = encodeContractCall(new Interface([...PRIVATE_ERC20_OPRF_ABI]), "burnToken", [
     params.xIt,
@@ -212,7 +253,7 @@ export async function execSafeBurnToken(
     params.yClear,
     params.recipient,
   ]);
-  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data });
+  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data }, execOptions(extraSigners));
 }
 
 export async function execSafeRedeemMany(
@@ -223,12 +264,13 @@ export async function execSafeRedeemMany(
     tokens: Array<{ xIt: ItUint128Payload; qIt: ItUint256Payload; yClear: bigint }>;
     amountIt: ItUint256Payload;
     recipient: string;
-  }
+  },
+  extraSigners?: Signer[]
 ) {
   const data = encodeContractCall(new Interface([...PRIVATE_ERC20_OPRF_ABI]), "redeemMany", [
     params.tokens.map((token) => [token.xIt, token.qIt, token.yClear]),
     params.amountIt,
     params.recipient,
   ]);
-  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data });
+  return execSafeTransaction(safeAddress, ownerSigner, { to: privateTokenAddress, data }, execOptions(extraSigners));
 }

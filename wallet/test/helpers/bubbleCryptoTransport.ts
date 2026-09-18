@@ -581,3 +581,22 @@ export function prepareMessageForBubble256(
 
   return { encryptedHigh, encryptedLow, messageBytes: getBytes(messageBytes) };
 }
+
+function uint256To32Bytes(value: bigint): Buffer {
+  return Buffer.from(value.toString(16).padStart(UINT256_HEX_CHARS, "0"), "hex");
+}
+
+/**
+ * Locally open an unsigned itUint256 ciphertext with the AES key it was encrypted under.
+ * Used so co-signers can learn the amount in Safe calldata (encrypt-to-user is not involved).
+ */
+export function decryptItUint256(
+  userAesKey: Buffer,
+  ciphertextHigh: bigint,
+  ciphertextLow: bigint
+): bigint {
+  return decryptEncryptedOutput(
+    Buffer.concat([uint256To32Bytes(ciphertextHigh), uint256To32Bytes(ciphertextLow)]),
+    userAesKey
+  );
+}

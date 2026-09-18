@@ -26,6 +26,7 @@
     "deploy:safe-wallet:kurtosis": "hardhat run scripts/safe/create-wallet.ts --network kurtosis",
     "test:safe": "hardhat test test/integration/safe-infrastructure.test.ts",
     "test:safe:bubble:arbitrum-sepolia": "hardhat test test/integration/safe-private-erc20.arbitrum-sepolia.test.ts --network sepolia-arbitrum",
+    "test:safe:multisig:arbitrum-sepolia": "hardhat test test/integration/safe-multisig-2of3.arbitrum-sepolia.test.ts --network sepolia-arbitrum",
     "test:safe:oprf-facilitator:arbitrum-sepolia": "hardhat test test/integration/safe-oprf-facilitator.arbitrum-sepolia.test.ts --network sepolia-arbitrum",
     "test:safe:oprf-facilitator-service:arbitrum-sepolia": "hardhat test test/integration/safe-oprf-facilitator-service.arbitrum-sepolia.test.ts --network sepolia-arbitrum",
     "test:gasless": "hardhat test test/PrivateERC20Gasless.test.ts",
