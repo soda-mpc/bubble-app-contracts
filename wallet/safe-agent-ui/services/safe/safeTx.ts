@@ -2,6 +2,7 @@ import type { Provider, Signer } from "ethers";
 import {
   Contract,
   Interface,
+  TypedDataEncoder,
   ZeroHash,
   concat,
   getAddress,
@@ -38,6 +39,18 @@ export type SafeTransaction = {
   nonce: bigint;
 };
 
+export type SafeSignature = {
+  signer: string;
+  data: string;
+};
+
+export type SafeExecOptions = {
+  /** Already-signed EIP-712 owner signatures (65-byte hex). */
+  extraSignatures?: SafeSignature[];
+  /** Local demo co-owner wallets that will EIP-712-sign the built SafeTx. */
+  extraSigners?: Signer[];
+};
+
 const EIP712_SAFE_TX_TYPE = {
   SafeTx: [
     { type: "address", name: "to" },
@@ -56,6 +69,7 @@ const EIP712_SAFE_TX_TYPE = {
 const SAFE_EXEC_ABI = [
   "function nonce() view returns (uint256)",
   "function getOwners() view returns (address[])",
+  "function getThreshold() view returns (uint256)",
   "function execTransaction(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,bytes signatures) payable returns (bool success)",
 ] as const;
 
@@ -106,7 +120,7 @@ function resolveMultiSendCallOnly(chainId: number): string {
   return getAddress(address);
 }
 
-async function buildSafeTransaction(
+export async function buildSafeTransaction(
   safe: { nonce: () => Promise<bigint> },
   metaTx: SafeMetaTransaction
 ): Promise<SafeTransaction> {
@@ -134,7 +148,7 @@ function normalizeSafeSignature(signature: string): string {
   return signature;
 }
 
-async function signSafeTransaction(
+export async function signSafeTransaction(
   signer: Signer,
   safeAddress: string,
   chainId: bigint | number,
@@ -159,35 +173,124 @@ async function signSafeTransaction(
   return normalizeSafeSignature(signature);
 }
 
-async function resolveSafeSignature(
-  signer: Signer,
-  safe: Contract,
+/** Concatenate 65-byte signatures in strictly increasing owner-address order (Safe v1.4.1). */
+export function packSafeSignatures(signatures: SafeSignature[]): string {
+  if (signatures.length === 0) {
+    throw new Error("Safe requires at least one signature");
+  }
+  const sorted = [...signatures].sort((a, b) => {
+    const left = getAddress(a.signer).toLowerCase();
+    const right = getAddress(b.signer).toLowerCase();
+    if (left < right) return -1;
+    if (left > right) return 1;
+    return 0;
+  });
+  for (let i = 1; i < sorted.length; i++) {
+    if (getAddress(sorted[i].signer) === getAddress(sorted[i - 1].signer)) {
+      throw new Error(`Duplicate Safe signer ${sorted[i].signer}`);
+    }
+  }
+  return concat(sorted.map((signature) => signature.data));
+}
+
+export function calculateSafeTransactionHash(
   safeAddress: string,
   chainId: bigint | number,
   safeTx: SafeTransaction
-): Promise<string> {
-  const ownerAddress = getAddress(await signer.getAddress());
-  const owners = (await safe.getOwners()) as string[];
-  const isOwner = owners.some((o) => getAddress(o) === ownerAddress);
-  // 1-of-1 (or any threshold) when the connected owner submits: use pre-validated sig (no EIP-712 popup)
-  if (isOwner) {
-    return buildPrevalidatedSignature(ownerAddress);
-  }
-  return signSafeTransaction(signer, safeAddress, chainId, safeTx);
+): string {
+  return TypedDataEncoder.hash(
+    { chainId, verifyingContract: safeAddress },
+    EIP712_SAFE_TX_TYPE,
+    {
+      to: safeTx.to,
+      value: safeTx.value,
+      data: safeTx.data,
+      operation: safeTx.operation,
+      safeTxGas: safeTx.safeTxGas,
+      baseGas: safeTx.baseGas,
+      gasPrice: safeTx.gasPrice,
+      gasToken: safeTx.gasToken,
+      refundReceiver: safeTx.refundReceiver,
+      nonce: safeTx.nonce,
+    }
+  );
 }
 
-export async function execSafeTransaction(
-  safeAddress: string,
-  signer: Signer,
-  metaTx: SafeMetaTransaction
-): Promise<{
+async function collectSafeSignatures(params: {
+  signer: Signer;
+  safe: Contract & { getOwners: () => Promise<string[]>; getThreshold: () => Promise<bigint> };
+  safeAddress: string;
+  chainId: bigint | number;
+  safeTx: SafeTransaction;
+  extraSignatures?: SafeSignature[];
+  extraSigners?: Signer[];
+}): Promise<string> {
+  const { signer, safe, safeAddress, chainId, safeTx, extraSignatures, extraSigners } = params;
+  const submitter = getAddress(await signer.getAddress());
+  const owners = (await safe.getOwners()).map((owner) => getAddress(owner));
+  const ownerSet = new Set(owners.map((owner) => owner.toLowerCase()));
+  const threshold = Number(await safe.getThreshold());
+
+  if (!ownerSet.has(submitter.toLowerCase())) {
+    throw new Error(`Submitter ${submitter} is not a Safe owner`);
+  }
+
+  if (threshold === 1) {
+    return buildPrevalidatedSignature(submitter);
+  }
+
+  const collected: SafeSignature[] = [
+    { signer: submitter, data: buildPrevalidatedSignature(submitter) },
+  ];
+  const have = new Set([submitter.toLowerCase()]);
+
+  for (const extra of extraSignatures || []) {
+    const address = getAddress(extra.signer);
+    if (have.has(address.toLowerCase())) continue;
+    if (!ownerSet.has(address.toLowerCase())) {
+      throw new Error(`${address} is not a Safe owner`);
+    }
+    collected.push({ signer: address, data: normalizeSafeSignature(extra.data) });
+    have.add(address.toLowerCase());
+  }
+
+  for (const extraSigner of extraSigners || []) {
+    if (collected.length >= threshold) break;
+    const address = getAddress(await extraSigner.getAddress());
+    if (have.has(address.toLowerCase())) continue;
+    if (!ownerSet.has(address.toLowerCase())) {
+      throw new Error(`${address} is not a Safe owner`);
+    }
+    collected.push({
+      signer: address,
+      data: await signSafeTransaction(extraSigner, safeAddress, chainId, safeTx),
+    });
+    have.add(address.toLowerCase());
+  }
+
+  if (collected.length < threshold) {
+    throw new Error(
+      `Safe threshold is ${threshold}; need ${threshold - collected.length} more owner signature(s). Paste co-signer EIP-712 signatures or generate demo co-owners on the Safe page.`
+    );
+  }
+  return packSafeSignatures(collected);
+}
+
+export type ExecResult = {
   receipt: {
     status?: number | null;
     logs?: readonly { topics: readonly string[]; data: string }[];
   };
   safeTx: SafeTransaction;
   hash: string;
-}> {
+};
+
+export async function execSafeTransaction(
+  safeAddress: string,
+  signer: Signer,
+  metaTx: SafeMetaTransaction,
+  options?: SafeExecOptions
+): Promise<ExecResult> {
   const provider = signer.provider;
   if (!provider) {
     throw new Error("Safe execution requires a provider");
@@ -197,6 +300,7 @@ export async function execSafeTransaction(
   const safe = new Contract(safeAddress, SAFE_EXEC_ABI, signer) as Contract & {
     nonce: () => Promise<bigint>;
     getOwners: () => Promise<string[]>;
+    getThreshold: () => Promise<bigint>;
     execTransaction: (
       ...args: unknown[]
     ) => Promise<{
@@ -209,7 +313,15 @@ export async function execSafeTransaction(
     }>;
   };
   const safeTx = await buildSafeTransaction(safe, metaTx);
-  const signature = await resolveSafeSignature(signer, safe, safeAddress, network.chainId, safeTx);
+  const signatures = await collectSafeSignatures({
+    signer,
+    safe,
+    safeAddress,
+    chainId: network.chainId,
+    safeTx,
+    extraSignatures: options?.extraSignatures,
+    extraSigners: options?.extraSigners,
+  });
   const feeOverrides = await resolveTxFeeOverrides(provider as Provider);
 
   const tx = await safe.execTransaction(
@@ -222,7 +334,7 @@ export async function execSafeTransaction(
     safeTx.gasPrice,
     safeTx.gasToken,
     safeTx.refundReceiver,
-    signature,
+    signatures,
     feeOverrides
   );
   const receipt = await tx.wait();
@@ -232,24 +344,18 @@ export async function execSafeTransaction(
   return { receipt, safeTx, hash: tx.hash };
 }
 
-/** Batch multiple Calls into one Safe tx via MultiSendCallOnly (one MetaMask confirmation). */
+/** Batch Calls into one Safe tx via MultiSendCallOnly. */
 export async function execSafeTransactions(
   safeAddress: string,
   signer: Signer,
-  metaTxs: SafeMetaTransaction[]
-): Promise<{
-  receipt: {
-    status?: number | null;
-    logs?: readonly { topics: readonly string[]; data: string }[];
-  };
-  safeTx: SafeTransaction;
-  hash: string;
-}> {
+  metaTxs: SafeMetaTransaction[],
+  options?: SafeExecOptions
+): Promise<ExecResult> {
   if (metaTxs.length === 0) {
     throw new Error("execSafeTransactions requires at least one call");
   }
   if (metaTxs.length === 1) {
-    return execSafeTransaction(safeAddress, signer, metaTxs[0]);
+    return execSafeTransaction(safeAddress, signer, metaTxs[0], options);
   }
 
   const provider = signer.provider;
@@ -264,9 +370,31 @@ export async function execSafeTransactions(
   );
   const data = MULTISEND_ABI.encodeFunctionData("multiSend", [packed]);
 
-  return execSafeTransaction(safeAddress, signer, {
-    to: multiSendAddress,
-    data,
-    operation: SafeOperation.DelegateCall,
-  });
+  return execSafeTransaction(
+    safeAddress,
+    signer,
+    {
+      to: multiSendAddress,
+      data,
+      operation: SafeOperation.DelegateCall,
+    },
+    options
+  );
+}
+
+/** Preview a Safe tx (for co-signers) without executing. */
+export async function previewSafeTransaction(
+  safeAddress: string,
+  signer: Signer,
+  metaTx: SafeMetaTransaction
+): Promise<{ safeTx: SafeTransaction; hash: string; chainId: number }> {
+  const provider = signer.provider;
+  if (!provider) throw new Error("Safe preview requires a provider");
+  const network = await provider.getNetwork();
+  const safe = new Contract(safeAddress, SAFE_EXEC_ABI, signer) as Contract & {
+    nonce: () => Promise<bigint>;
+  };
+  const safeTx = await buildSafeTransaction(safe, metaTx);
+  const hash = calculateSafeTransactionHash(safeAddress, network.chainId, safeTx);
+  return { safeTx, hash, chainId: Number(network.chainId) };
 }

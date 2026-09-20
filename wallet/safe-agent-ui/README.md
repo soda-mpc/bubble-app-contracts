@@ -17,16 +17,17 @@ npm run dev
 
 Open [http://localhost:3010](http://localhost:3010).
 
-## What’s working now (Phase 0 / early Phase 1)
+## What’s working now
 
 - App shell (Soda green theme, sidebar, MetaMask connect, Arb Sepolia guard)
-- Safe **import** (ownership check) and **deploy** 1-of-1 (canonical Safe 1.4.1)
+- Safe **import**, **deploy 1-of-1**, and **deploy k-of-n** (e.g. 2-of-3 with local demo co-owners)
+- Shared AES for IT inspection; personal Bubble keys for vault decrypt (`owner = Safe` after contract view)
+- Treasury: MultiSend shield + view grants, encrypted private transfer, decrypt
 - Agents create/list/delete (localStorage, including private keys — demo only)
-- Notes placeholder + off-chain assign
-- Treasury / Act balance reads when `NEXT_PUBLIC_UNDERLYING` is set
+- Notes mint / assign / agent cash-out when tokens are configured
 
 ## Next
 
-- Shield + private balance
-- On-chain mintOPRFToken + decrypt
-- Agent-paid redeem to clear
+- Paste external co-signer EIP-712 signatures (multi-device)
+- Safe Transaction Service / pending-tx queue
+- Facilitator gasless spend path

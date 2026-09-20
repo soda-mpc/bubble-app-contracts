@@ -9,6 +9,7 @@ export type ActivityKind =
   | "safe_import"
   | "shield"
   | "permit_view"
+  | "transfer"
   | "mint_note"
   | "assign_note"
   | "agent_create"
@@ -35,6 +36,7 @@ const KIND_LABELS: Record<ActivityKind, string> = {
   safe_import: "Safe import",
   shield: "Shield",
   permit_view: "Permit view",
+  transfer: "Private transfer",
   mint_note: "Mint note",
   assign_note: "Assign note",
   agent_create: "Agent created",

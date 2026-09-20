@@ -122,12 +122,33 @@ export async function deployOneOfOneSafe(
   ownerAddress: string,
   saltNonce = BigInt(Date.now())
 ): Promise<ActiveSafe & { deployTxHash: string }> {
+  return deploySafeWallet(signer, [ownerAddress], 1, saltNonce);
+}
+
+export async function deploySafeWallet(
+  signer: JsonRpcSigner,
+  owners: string[],
+  threshold: number,
+  saltNonce = BigInt(Date.now())
+): Promise<ActiveSafe & { deployTxHash: string }> {
+  const normalizedOwners = owners.map((o) => getAddress(o));
+  if (normalizedOwners.length === 0) {
+    throw new Error("Safe requires at least one owner");
+  }
+  if (threshold < 1 || threshold > normalizedOwners.length) {
+    throw new Error(`Invalid threshold ${threshold} for ${normalizedOwners.length} owners`);
+  }
+  const unique = new Set(normalizedOwners.map((o) => o.toLowerCase()));
+  if (unique.size !== normalizedOwners.length) {
+    throw new Error("Duplicate owners are not allowed");
+  }
+
   const provider = getSignerProvider(signer);
   const network = await provider.getNetwork();
   const { singleton, factory: factoryAddress } = resolveCanonicalSafeAddresses(Number(network.chainId));
 
   const factory = new Contract(factoryAddress, SAFE_PROXY_FACTORY_ABI, signer);
-  const initializer = encodeSafeSetup([ownerAddress], 1);
+  const initializer = encodeSafeSetup(normalizedOwners, threshold);
   const predicted: string = await factory.createProxyWithNonce.staticCall(
     singleton,
     initializer,
