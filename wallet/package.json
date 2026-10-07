@@ -9,6 +9,8 @@
     "test": "hardhat test",
     "test:oprf-private": "hardhat test test/PrivateERC20OPRF.test.ts --network world-mobile-testnet",
     "test:oprf:arbitrum-sepolia": "hardhat test test/PrivateERC20OPRF.test.ts --network sepolia-arbitrum",
+    "test:shield-and-mint:arbitrum-sepolia": "hardhat test test/PrivateERC20ShieldAndMint.arbitrum-sepolia.test.ts --network sepolia-arbitrum",
+    "test:vault-e2e:arbitrum-sepolia": "hardhat test test/PrivateERC20VaultE2E.arbitrum-sepolia.test.ts --network sepolia-arbitrum",
     "deploy:kurtosis": "hardhat run scripts/deploy-private-erc20.ts --network kurtosis",
     "verify:kurtosis": "hardhat verify --network kurtosis",
     "balance": "hardhat run scripts/get-user-balance.ts --network kurtosis",

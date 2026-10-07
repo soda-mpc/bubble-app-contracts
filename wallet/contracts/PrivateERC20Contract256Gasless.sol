@@ -845,6 +845,60 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
         
         emit OPRFMinted(_msgSender(), x, y, actualTransferred);
     }
+
+    /// @notice Shields a clear amount of underlying and mints an OPRF note for that amount to the caller.
+    function shieldAndMint(uint256 amount)
+        public
+        virtual
+        whenNotPaused
+        returns (gtUint128 x, gtUint128 y, gtUint256 q)
+    {
+        return _shieldAndMint(amount, _msgSender());
+    }
+
+    /// @notice Shields a clear amount of underlying from the caller and mints the OPRF note to `recipient`.
+    /// @dev The caller's private balance is unchanged. Underlying is escrowed here and this contract's private
+    ///      balance increases by `amount`, which backs the note on a later burn.
+    /// @param amount Clear underlying amount to pull, escrow, and mint. Must be greater than zero.
+    /// @param recipient Account permitted to decrypt the new note.
+    function shieldAndMint(uint256 amount, address recipient)
+        public
+        virtual
+        whenNotPaused
+        returns (gtUint128 x, gtUint128 y, gtUint256 q)
+    {
+        require(recipient != address(0), "Recipient cannot be zero address");
+        return _shieldAndMint(amount, recipient);
+    }
+
+    function _shieldAndMint(uint256 amount, address recipient)
+        internal
+        nonReentrant
+        returns (gtUint128 x, gtUint128 y, gtUint256 q)
+    {
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        address sender = _msgSender();
+        require(amount > 0, "Amount must be greater than 0");
+        require($.underlying.transferFrom(sender, address(this), amount), "Transfer failed");
+        $._totalSupply += amount;
+
+        gtUint256 amountGt = MpcCore.setPublic256(amount);
+        MpcCore.permitThis(amountGt);
+
+        gtUint256 contractBalanceGt = _balanceOf(address(this));
+        gtUint256 newContractBalanceGt = MpcCore.add(contractBalanceGt, amountGt);
+        $.balances[address(this)] = newContractBalanceGt;
+        MpcCore.permitThis(newContractBalanceGt);
+
+        (x, y) = MpcCore.oprfMint($._oprfKey, amountGt);
+        MpcCore.permit(x, recipient);
+        MpcCore.permit(y, recipient);
+        MpcCore.permit(amountGt, recipient);
+        q = amountGt;
+
+        emit Shield(sender, amount);
+        emit OPRFMinted(recipient, x, y, q);
+    }
     
     /// @notice Internal function that performs the core split logic: burn, calculate remainder, and mint new tokens
     /// @param xGT The validated x value from OPRF minting

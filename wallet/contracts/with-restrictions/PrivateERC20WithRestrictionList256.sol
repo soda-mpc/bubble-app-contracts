@@ -238,6 +238,26 @@ contract PrivateERC20WithRestrictionList256 is PrivateERC20Contract256, Restrict
         super.mintOPRFToken(quantity);
     }
 
+    /// @notice Override shieldAndMint to include restriction list checks
+    function shieldAndMint(uint256 amount)
+        public
+        override
+        returns (gtUint128 x, gtUint128 y, gtUint256 q)
+    {
+        _requireNotRestrictedAccount(msg.sender);
+        return super.shieldAndMint(amount);
+    }
+
+    /// @notice Override shieldAndMint to include restriction list checks for the caller and the note recipient.
+    function shieldAndMint(uint256 amount, address recipient)
+        public
+        override
+        returns (gtUint128 x, gtUint128 y, gtUint256 q)
+    {
+        _requireNotRestrictedPair(msg.sender, recipient);
+        return super.shieldAndMint(amount, recipient);
+    }
+
     /// @notice Override splitToken to include restriction list checks
     function splitToken(
         itUint128 calldata x,
