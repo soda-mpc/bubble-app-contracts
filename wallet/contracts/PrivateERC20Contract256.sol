@@ -374,12 +374,20 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         }
         return balance;
     }
+    /// @dev Value ciphertexts must belong to the caller, or to `tx.origin` when an owner EOA executes
+    ///      through its Safe. Otherwise anyone can replay a public IT while this token holds that user's
+    ///      insert grant and receive decrypt permission on the value.
+    function _validateOwnIt(itUint256 calldata it) private returns (gtUint256) {
+        require(it.userAddress == msg.sender || it.userAddress == tx.origin, "IT not owned by caller");
+        return MpcCore.validateCiphertext(it);
+    }
+
     /// @notice Transfers tokens using an encrypted and signed value
     /// @param _to The address to transfer to
     /// @param _it The encrypted and signed transfer amount
     /// @return The handle to the transfer's result
     function transfer(address _to, itUint256 calldata _it) public virtual whenNotPaused returns (gtBool) {
-        gtUint256 value = MpcCore.validateCiphertext(_it);
+        gtUint256 value = _validateOwnIt(_it);
         MpcCore.permitTransient(value, msg.sender); // Give transient permission the the sender, so the contractTransfer check will pass
         return contractTransfer(_to, value);
     }
@@ -412,7 +420,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         // Check for self-transfer
         if (msg.sender == _to) {
             gtBool hasSufficientBalance = MpcCore.ge(_balanceOf(msg.sender), _value);
-            _permitAndEmitPrivateTransfer(msg.sender, _to, _value, hasSufficientBalance);
+            _permitAndEmitPrivateTransfer(msg.sender, _to, _value, MpcCore.not(hasSufficientBalance));
             return MpcCore.setPublic(true);
         }
 
@@ -428,7 +436,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param _it The encrypted and signed transfer amount
     /// @return The handle to the transfer's result
     function transferFrom(address _from, address _to, itUint256 calldata _it) public virtual whenNotPaused returns (gtBool) {
-        gtUint256 value = MpcCore.validateCiphertext(_it);
+        gtUint256 value = _validateOwnIt(_it);
         MpcCore.permitTransient(value, msg.sender); // Give transient permission the the sender, so the contractTransferFrom check will pass
         return contractTransferFrom(_from, _to, value);
     }
@@ -471,7 +479,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
         if (_from == _to) {
             // Check if allowance is sufficient (we just validate, don't subtract since it's a self-transfer)
             gtBool hasSufficientAllowance = MpcCore.ge(allowance, _value);
-            _permitAndEmitPrivateTransfer(_from, _to, _value, hasSufficientAllowance);
+            _permitAndEmitPrivateTransfer(_from, _to, _value, MpcCore.not(hasSufficientAllowance));
             return hasSufficientAllowance;
         }
 
@@ -487,7 +495,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param _it The encrypted and signed approval amount
     /// @return True if the approval was successful
     function approve(address _spender, itUint256 calldata _it) public virtual whenNotPaused returns (bool) {
-        gtUint256 value = MpcCore.validateCiphertext(_it);
+        gtUint256 value = _validateOwnIt(_it);
         MpcCore.permitTransient(value, msg.sender);
         return contractApprove(_spender, value);
     }
@@ -567,23 +575,22 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     }
 
     /// @notice Emits PrivateTransfer and grants both parties permission to decrypt the credited amount.
-    function _permitAndEmitPrivateTransfer(address from, address to, gtUint256 amount, gtBool success) private {
-        _permitAndEmitPrivateTransfer(from, to, address(0), amount, success);
+    function _permitAndEmitPrivateTransfer(address from, address to, gtUint256 amount, gtBool failed) private {
+        _permitAndEmitPrivateTransfer(from, to, address(0), amount, failed);
     }
 
     /// @notice Emits PrivateTransfer and grants decrypt permission to from, to, and an optional third party.
-    /// @dev `amount` is masked to zero via `success` (e.g. the transfer's own result bool) rather than
-    /// derived from a before/after balance delta, since the transfer primitives already report whether
-    /// the requested amount was actually credited.
+    /// @dev The emitted amount is `amount`, or zero when `failed` is true. `MpcCore.mux(bit, a, b)` returns `b`
+    ///      when `bit` is true, so callers pass the negated success bit (e.g. `not(result)` of the transfer).
     function _permitAndEmitPrivateTransfer(
         address from,
         address to,
         address additionalPermittee,
         gtUint256 amount,
-        gtBool success
+        gtBool failed
     ) private {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        gtUint256 transferredAmount = MpcCore.mux(success, amount, $.zero);
+        gtUint256 transferredAmount = MpcCore.mux(failed, amount, $.zero);
         MpcCore.permit(transferredAmount, to);
         MpcCore.permit(transferredAmount, from);
         if (additionalPermittee != address(0) && additionalPermittee != from && additionalPermittee != to) {
@@ -735,7 +742,7 @@ contract PrivateERC20Contract256 is DecryptionCaller, UUPSUpgradeable, Ownable2S
     /// @param quantity The encrypted quantity/amount for the OPRF token
     function mintOPRFToken(itUint256 calldata quantity) public virtual whenNotPaused {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        gtUint256 qGT = MpcCore.validateCiphertext(quantity);
+        gtUint256 qGT = _validateOwnIt(quantity);
         
         gtUint256 contractBalanceBefore = _balanceOf(address(this));
         
