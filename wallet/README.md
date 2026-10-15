@@ -28,7 +28,7 @@ Packages that affect **compiled bytecode**, **storage layout**, **compiler outpu
 | `solc` | 0.8.26 | Must match `hardhat.config.ts` `solidity.version` and contract `pragma solidity ^0.8.26` |
 | `hardhat` | 2.27.1 | Compile/deploy/test runner |
 | `soda-sdk` | (see `package.json`) | MPC/crypto integration used in scripts and tests |
-| `@sodalabs/bubble-core-contracts` | git ref `update-contracts-version` | Shared on-chain primitives (commit resolved in lockfile) |
+| `@sodalabs/bubble-core-contracts` | git ref `transient-insert-grant` | Shared on-chain primitives (commit resolved in lockfile) |
 | `@safe-global/safe-contracts` | 1.4.1 | Prebuilt Safe v1.4.1 artifacts for deploy/test helpers |
 | `@safe-global/safe-deployments` | 1.37.62 | Canonical Safe addresses on public networks |
 
