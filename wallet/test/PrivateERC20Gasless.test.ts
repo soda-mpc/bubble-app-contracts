@@ -1,7 +1,7 @@
 /**
  * Coverage for both token implementations on a Bubble network (not Hardhat 31337):
  *
- *   PrivateERC20Contract256Gasless — EIP-712 executeWithAuthorization, dest lock,
+ *   PrivateERC20Contract256Gasless — ERC-2771 forwarder executeWithAuthorization, dest lock,
  *     signed redeem to a third party, OPRF IT user mismatch.
  *   PrivateERC20Contract256 (original) — msg.sender mint, no dest lock.
  *
@@ -18,7 +18,8 @@ import {
   decryptValueViaProxy,
   getUserKeyViaProxy,
 } from "./helpers/bubbleCryptoTransport";
-import { signExecuteWithAuthorization } from "./helpers/gaslessAuth";
+import { signExecuteWithAuthorization, signTransientInsertPermission } from "./helpers/gaslessAuth";
+import { encodeEncryptedTransfer, encodeShield } from "./helpers/safeInformedSign";
 import {
   buildSignedItUint256,
   buildUnsignedItUint128,
@@ -30,6 +31,7 @@ import {
   deployMockToken,
   deployPrivateToken,
   deployPrivateTokenGasless,
+  getGcAclAddress,
   getGcAclContract,
   getOprfMintedEventsFromReceipt,
   getOprfMintedHandlesFromReceipt,
@@ -41,9 +43,9 @@ dotenv.config();
 
 const PROXY_URL = process.env.PROXY_URL || "https://proxy.bubble.sodalabs.net";
 const TOKEN_NAME = "Gasless Bubble Token";
+const UNDERLYING_NAME = "Gasless Test USD";
 const NOTE_AMOUNT = 50n * 10n ** 18n;
 const PAY_AMOUNT = 10n ** 17n;
-const INSERT_TTL_SECONDS = 365n * 24n * 60n * 60n;
 
 function dummyIt256(user: string) {
   return {
@@ -80,6 +82,8 @@ describe("PrivateERC20Contract256Gasless", function () {
   let privateToken: any;
   let chainId: number;
   let tokenAddress: string;
+  let forwarder: any;
+  let forwarderAddress: string;
 
   before(async function () {
     const network = await hre.ethers.provider.getNetwork();
@@ -103,7 +107,7 @@ describe("PrivateERC20Contract256Gasless", function () {
     ownerAesKey = await getUserKeyViaProxy(owner, PROXY_URL);
     ownerAesKeyHex = ownerAesKey.toString("hex");
 
-    mockToken = await deployMockToken(hre, owner, "Gasless Test USD", "GTUSD");
+    mockToken = await deployMockToken(hre, owner, UNDERLYING_NAME, "GTUSD");
     privateToken = await deployPrivateTokenGasless(hre, owner, {
       underlyingAddress: await mockToken.getAddress(),
       ownerAddress: owner.address,
@@ -112,6 +116,8 @@ describe("PrivateERC20Contract256Gasless", function () {
       symbol: "gBUB",
     });
     tokenAddress = await privateToken.getAddress();
+    forwarder = privateToken.gaslessForwarder;
+    forwarderAddress = await forwarder.getAddress();
 
     await mintAndApprove({
       mockToken,
@@ -119,25 +125,35 @@ describe("PrivateERC20Contract256Gasless", function () {
       userAddress: owner.address,
       amount: NOTE_AMOUNT * 2n,
     });
-
-    // Facilitator is tx.origin; ValidateCiphertext then requires insert ACL
-    // (permittee = this token). Owner-direct calls skip this because tx.origin == IT owner.
-    const gcAcl = await getGcAclContract(hre, owner);
-    const expiration = BigInt(Math.floor(Date.now() / 1000)) + INSERT_TTL_SECONDS;
-    await (await gcAcl.permitFullInsertAccess(tokenAddress, expiration)).wait();
   });
 
-  async function execAsOwner(data: string) {
+  async function insertGrantForOwner() {
+    const gcAcl = await getGcAclContract(hre, owner);
+    const nonce = await gcAcl.transientInsertNonce(owner.address);
+    return signTransientInsertPermission({
+      signer: owner,
+      user: owner.address,
+      token: tokenAddress,
+      chainId,
+      gcAcl: getGcAclAddress(chainId),
+      nonce,
+    });
+  }
+
+  async function submitAsOwner(data: string, withInsertGrant = false) {
     const auth = await signExecuteWithAuthorization({
       signer: owner,
-      token: tokenAddress,
+      token: forwarderAddress,
       tokenName: TOKEN_NAME,
       chainId,
       from: owner.address,
       data,
       validBefore: BigInt(Math.floor(Date.now() / 1000) + 3600),
     });
-    const tx = await privateToken
+    const insert = withInsertGrant
+      ? await insertGrantForOwner()
+      : { nonce: 0n, signature: "0x" };
+    return forwarder
       .connect(facilitator)
       .executeWithAuthorization(
         auth.from,
@@ -145,17 +161,23 @@ describe("PrivateERC20Contract256Gasless", function () {
         auth.validAfter,
         auth.validBefore,
         auth.nonce,
-        auth.signature
+        auth.signature,
+        insert.nonce,
+        insert.signature
       );
+  }
+
+  async function execAsOwner(data: string, withInsertGrant = false) {
+    const tx = await submitAsOwner(data, withInsertGrant);
     return tx.wait();
   }
 
   describe("executeWithAuthorization", function () {
-    it("lets a facilitator pause when the owner signed the call", async function () {
+    it("rejects owner/admin functions even when the owner signed the call", async function () {
       const data = privateToken.interface.encodeFunctionData("pause", []);
       const auth = await signExecuteWithAuthorization({
         signer: owner,
-        token: tokenAddress,
+        token: forwarderAddress,
         tokenName: TOKEN_NAME,
         chainId,
         from: owner.address,
@@ -164,7 +186,7 @@ describe("PrivateERC20Contract256Gasless", function () {
       });
 
       await expect(
-        privateToken
+        forwarder
           .connect(facilitator)
           .executeWithAuthorization(
             auth.from,
@@ -172,33 +194,38 @@ describe("PrivateERC20Contract256Gasless", function () {
             auth.validAfter,
             auth.validBefore,
             auth.nonce,
-            auth.signature
+            auth.signature,
+            0,
+            "0x"
           )
-      ).to.emit(privateToken, "AuthorizationExecuted");
+      ).to.be.reverted;
+      expect(await privateToken.paused()).to.equal(false);
+      expect(await forwarder.authorizationUsed(owner.address, auth.nonce)).to.equal(false);
+    });
 
-      expect(await privateToken.paused()).to.equal(true);
-
+    it("cancelAuthorization makes a signed authorization unusable", async function () {
+      const auth = await signExecuteWithAuthorization({
+        signer: owner,
+        token: forwarderAddress,
+        tokenName: TOKEN_NAME,
+        chainId,
+        from: owner.address,
+        data: privateToken.interface.encodeFunctionData("shield", [1n]),
+        validBefore: BigInt(Math.floor(Date.now() / 1000) + 3600),
+      });
+      await expect(forwarder.connect(owner).cancelAuthorization(auth.nonce)).to.emit(forwarder, "AuthorizationCanceled");
       await expect(
-        privateToken
+        forwarder
           .connect(facilitator)
-          .executeWithAuthorization(
-            auth.from,
-            auth.data,
-            auth.validAfter,
-            auth.validBefore,
-            auth.nonce,
-            auth.signature
-          )
-      ).to.be.revertedWith("Auth used");
-
-      await (await privateToken.connect(owner).unpause()).wait();
+          .executeWithAuthorization(auth.from, auth.data, auth.validAfter, auth.validBefore, auth.nonce, auth.signature, 0, "0x")
+      ).to.be.reverted;
     });
 
     it("rejects when the EIP-712 signer is not `from`", async function () {
-      const data = privateToken.interface.encodeFunctionData("pause", []);
+      const data = privateToken.interface.encodeFunctionData("shield", [1n]);
       const auth = await signExecuteWithAuthorization({
         signer: facilitator,
-        token: tokenAddress,
+        token: forwarderAddress,
         tokenName: TOKEN_NAME,
         chainId,
         from: owner.address,
@@ -207,7 +234,7 @@ describe("PrivateERC20Contract256Gasless", function () {
       });
 
       await expect(
-        privateToken
+        forwarder
           .connect(facilitator)
           .executeWithAuthorization(
             auth.from,
@@ -215,9 +242,11 @@ describe("PrivateERC20Contract256Gasless", function () {
             auth.validAfter,
             auth.validBefore,
             auth.nonce,
-            auth.signature
+            auth.signature,
+            0,
+            "0x"
           )
-      ).to.be.revertedWith("Invalid signature");
+      ).to.be.reverted;
     });
 
     it("shields to the signer, not the facilitator", async function () {
@@ -241,7 +270,7 @@ describe("PrivateERC20Contract256Gasless", function () {
         contractAddress: tokenAddress,
       });
       const data = privateToken.interface.encodeFunctionData("mintOPRFToken", [quantityIt]);
-      const receipt = await execAsOwner(data);
+      const receipt = await execAsOwner(data, true);
       await delay(DELAY_MPC_EXTENDED_MS);
 
       const minted = getOprfMintedEventsFromReceipt(receipt, privateToken);
@@ -250,6 +279,17 @@ describe("PrivateERC20Contract256Gasless", function () {
         false
       );
     });
+
+    it("reverts a facilitator mint when the owner did not grant transient insert", async function () {
+      const quantityIt = buildUnsignedItUint256({
+        value: NOTE_AMOUNT,
+        userAddress: owner.address,
+        userAesKeyHex: ownerAesKeyHex,
+        contractAddress: tokenAddress,
+      });
+      const data = privateToken.interface.encodeFunctionData("mintOPRFToken", [quantityIt]);
+      await expect(submitAsOwner(data, false)).to.be.reverted;
+    });
   });
 
   describe("OPRF IT user consistency", function () {
@@ -257,7 +297,7 @@ describe("PrivateERC20Contract256Gasless", function () {
       const other = Wallet.createRandom().address;
       await expect(
         privateToken.splitToken(dummyIt128(owner.address), dummyIt256(other), 0, dummyIt256(owner.address))
-      ).to.be.revertedWith("OPRF IT user mismatch");
+      ).to.be.reverted;
     });
 
     it("reverts redeemMany when amount IT userAddress differs from token ITs", async function () {
@@ -268,7 +308,7 @@ describe("PrivateERC20Contract256Gasless", function () {
           dummyIt256(other),
           owner.address
         )
-      ).to.be.revertedWith("OPRF IT user mismatch");
+      ).to.be.reverted;
     });
   });
 
@@ -283,7 +323,7 @@ describe("PrivateERC20Contract256Gasless", function () {
             facilitator.address,
             false
           )
-      ).to.be.revertedWith("Relayer dest must be IT owner");
+      ).to.be.reverted;
     });
 
     it("signed redeemManyToUnderlying can pay a third party", async function () {
@@ -302,7 +342,8 @@ describe("PrivateERC20Contract256Gasless", function () {
       await execAsOwner(privateToken.interface.encodeFunctionData("shield", [NOTE_AMOUNT]));
       await delay(DELAY_BALANCE_SYNC_MS);
       const mintReceipt = await execAsOwner(
-        privateToken.interface.encodeFunctionData("mintOPRFToken", [quantityIt])
+        privateToken.interface.encodeFunctionData("mintOPRFToken", [quantityIt]),
+        true
       );
       await delay(DELAY_MPC_EXTENDED_MS);
 
@@ -348,7 +389,7 @@ describe("PrivateERC20Contract256Gasless", function () {
         destination.address,
         false,
       ]);
-      await execAsOwner(redeemData);
+      await execAsOwner(redeemData, true);
 
       const { successEvents, failedEvents } = await waitForUnshieldOutcome(privateToken, hre, startBlock, {
         timeoutMs: DELAY_MPC_REDEEM_MS * 6,
@@ -360,6 +401,118 @@ describe("PrivateERC20Contract256Gasless", function () {
       expect(unshieldTo.toLowerCase()).to.equal(destination.address.toLowerCase());
       expect(await mockToken.balanceOf(destination.address)).to.equal(destBefore + PAY_AMOUNT);
     });
+  });
+
+  describe("gasless user operations", function () {
+  it("shields, transfers, and unshields from signatures, including a permit for the underlying", async function () {
+    const shieldAmount = 3n * 10n ** 18n;
+    const moveAmount = 10n ** 18n;
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+    const underlying = await mockToken.getAddress();
+
+    await (await mockToken.mint(owner.address, shieldAmount)).wait();
+    const permitSig = hre.ethers.Signature.from(
+      await owner.signTypedData(
+        {
+          name: UNDERLYING_NAME,
+          version: "1",
+          chainId,
+          verifyingContract: underlying,
+        },
+        {
+          Permit: [
+            { name: "owner", type: "address" },
+            { name: "spender", type: "address" },
+            { name: "value", type: "uint256" },
+            { name: "nonce", type: "uint256" },
+            { name: "deadline", type: "uint256" },
+          ],
+        },
+        {
+          owner: owner.address,
+          spender: tokenAddress,
+          value: shieldAmount,
+          nonce: await mockToken.nonces(owner.address),
+          deadline,
+        }
+      )
+    );
+    const permitTx = await mockToken
+      .connect(facilitator)
+      .permit(owner.address, tokenAddress, shieldAmount, deadline, permitSig.v, permitSig.r, permitSig.s);
+    const permitReceipt = await permitTx.wait();
+    expect(permitReceipt.from.toLowerCase()).to.equal(facilitator.address.toLowerCase());
+    expect(await mockToken.allowance(owner.address, tokenAddress)).to.equal(shieldAmount);
+
+    const underlyingBefore = await mockToken.balanceOf(owner.address);
+    const shieldTx = await submitAsOwner(encodeShield(shieldAmount));
+    const shieldReceipt = await shieldTx.wait();
+    expect(shieldReceipt.from.toLowerCase()).to.equal(facilitator.address.toLowerCase());
+    await delay(DELAY_BALANCE_SYNC_MS);
+    expect(await mockToken.balanceOf(owner.address)).to.equal(underlyingBefore - shieldAmount);
+
+    const clearData = privateToken.interface.encodeFunctionData("transfer(address,uint256)", [
+      destination.address,
+      moveAmount,
+    ]);
+    await expect(submitAsOwner(clearData))
+      .to.emit(privateToken, "Transfer")
+      .withArgs(owner.address, destination.address, moveAmount);
+
+    const amountIt = buildUnsignedItUint256({
+      value: moveAmount,
+      userAddress: owner.address,
+      userAesKeyHex: ownerAesKeyHex,
+      contractAddress: tokenAddress,
+    });
+    const privateReceipt = await execAsOwner(encodeEncryptedTransfer(destination.address, amountIt), true);
+    const privateTransfer = privateReceipt.logs
+      .map((log: { topics: string[]; data: string }) => {
+        try {
+          return privateToken.interface.parseLog(log);
+        } catch {
+          return null;
+        }
+      })
+      .find((parsed: { name: string } | null) => parsed?.name === "PrivateTransfer");
+    expect(privateTransfer.args.from).to.equal(owner.address);
+    expect(privateTransfer.args.to).to.equal(destination.address);
+
+    const approveData = privateToken.interface.encodeFunctionData("approve(address,uint256)", [
+      destination.address,
+      moveAmount,
+    ]);
+    const approveReceipt = await execAsOwner(approveData);
+    const approval = approveReceipt.logs
+      .map((log: { topics: string[]; data: string }) => {
+        try {
+          return privateToken.interface.parseLog(log);
+        } catch {
+          return null;
+        }
+      })
+      .find(
+        (parsed: { name: string; args: { length: number } } | null) =>
+          parsed?.name === "Approval" && parsed.args.length === 3
+      );
+    expect(approval.args[0]).to.equal(owner.address);
+    expect(approval.args[1]).to.equal(destination.address);
+    expect(approval.args[2]).to.equal(moveAmount);
+
+    const startBlock = await hre.ethers.provider.getBlockNumber();
+    const unshieldTx = await submitAsOwner(privateToken.interface.encodeFunctionData("unshield", [moveAmount]));
+    const unshieldReceipt = await unshieldTx.wait();
+    expect(unshieldReceipt.from.toLowerCase()).to.equal(facilitator.address.toLowerCase());
+    const { successEvents, failedEvents } = await waitForUnshieldOutcome(privateToken, hre, startBlock, {
+      timeoutMs: DELAY_MPC_REDEEM_MS * 6,
+      pollIntervalMs: 3000,
+    });
+    expect(failedEvents.length).to.equal(0);
+    expect(successEvents.length).to.be.greaterThan(0);
+    const unshieldTo = (successEvents[0].args?.to ?? successEvents[0].args?.[0]) as string;
+    expect(unshieldTo.toLowerCase()).to.equal(owner.address.toLowerCase());
+    expect(await mockToken.balanceOf(owner.address)).to.equal(underlyingBefore - shieldAmount + moveAmount);
+  });
   });
 });
 

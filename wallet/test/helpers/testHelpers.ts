@@ -74,6 +74,9 @@ export const GCACL_ABI = [
   "function isContractViewPermitted(address permitter, address permittee, address contractAddress) view returns (bool)",
   "function isPermittedToView(address permitter, address permittee, uint256 handle) view returns (bool)",
   "function isContractInsertPermitted(address permitter, address permittee, address contractAddress) view returns (bool)",
+  "function transientInsertNonce(address user) view returns (uint256)",
+  "function transientInsertPermission(address user, uint256 nonce, bytes signature)",
+  "function isTransientInsertPermitted(address user, address contractAddress) view returns (bool)",
 ] as const;
 
 export function getGcAclAddress(chainId: number): string {
@@ -93,6 +96,9 @@ export async function getGcAclContract(hre: { ethers: { provider: { getNetwork: 
 export const PRIVATE_ERC20_256_FQN = "contracts/PrivateERC20Contract256.sol:PrivateERC20Contract256";
 export const PRIVATE_ERC20_256_GASLESS_FQN =
   "contracts/PrivateERC20Contract256Gasless.sol:PrivateERC20Contract256Gasless";
+export const PRIVATE_OPRF_NOTES_FQN = "contracts/libraries/PrivateOPRFNotes.sol:PrivateOPRFNotes";
+export const PRIVATE_ERC20_GASLESS_FORWARDER_FQN =
+  "contracts/PrivateERC20GaslessForwarder.sol:PrivateERC20GaslessForwarder";
 export const ERC1967_PROXY_FQN = "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy";
 
 export const DELAY_SHORT_MS = 2000;
@@ -150,11 +156,15 @@ async function deployProxyBackedContract(params: {
   hre: HardhatRuntime;
   signer: any;
   contractFqn: string;
+  libraries?: Record<string, string>;
   initData?: (factory: any) => string;
   postDeploy?: (contract: any, factory: any) => Promise<void>;
 }): Promise<any> {
-  const { hre, signer, contractFqn, initData, postDeploy } = params;
-  const ContractFactory = await hre.ethers.getContractFactory(contractFqn, signer);
+  const { hre, signer, contractFqn, libraries, initData, postDeploy } = params;
+  const ContractFactory = await hre.ethers.getContractFactory(
+    contractFqn,
+    libraries ? { signer, libraries } : signer
+  );
   const implementation = await ContractFactory.deploy();
   await implementation.waitForDeployment();
   await waitForDeploymentConfirmation(implementation, hre);
@@ -219,6 +229,8 @@ export async function deployPrivateTokenGasless(
     name?: string;
     symbol?: string;
     underlyingIsWrappedNative?: boolean;
+    /** Reuse an already deployed PrivateOPRFNotes library instead of deploying a new one. */
+    oprfNotesLibrary?: string;
   }
 ): Promise<any> {
   const {
@@ -229,10 +241,12 @@ export async function deployPrivateTokenGasless(
     symbol = "BUB",
     underlyingIsWrappedNative = false,
   } = params;
-  return deployProxyBackedContract({
+  const oprfNotesLibrary = params.oprfNotesLibrary ?? (await deployPrivateOPRFNotesLibrary(hre, defaultSigner));
+  const token = await deployProxyBackedContract({
     hre,
     signer: defaultSigner,
     contractFqn: PRIVATE_ERC20_256_GASLESS_FQN,
+    libraries: { [PRIVATE_OPRF_NOTES_FQN]: oprfNotesLibrary },
     initData: (factory) => factory.interface.encodeFunctionData("initializeWithWrappedNative", [
       name,
       symbol,
@@ -242,6 +256,32 @@ export async function deployPrivateTokenGasless(
       underlyingIsWrappedNative,
     ]),
   });
+  // Exposed so deploy scripts can record and verify the linked library.
+  token.oprfNotesLibrary = oprfNotesLibrary;
+
+  const forwarderFactory = await hre.ethers.getContractFactory(PRIVATE_ERC20_GASLESS_FORWARDER_FQN, defaultSigner);
+  const forwarder = await forwarderFactory.deploy(await token.getAddress());
+  await forwarder.waitForDeployment();
+  await waitForDeploymentConfirmation(forwarder, hre);
+  token.gaslessForwarder = forwarder;
+
+  if ((await defaultSigner.getAddress()).toLowerCase() === ownerAddress.toLowerCase()) {
+    await (await token.setTrustedForwarder(await forwarder.getAddress())).wait();
+  } else {
+    console.warn(
+      `[deployPrivateTokenGasless] owner ${ownerAddress} must call setTrustedForwarder(${await forwarder.getAddress()})`
+    );
+  }
+  return token;
+}
+
+/** Deploys the PrivateOPRFNotes library linked by PrivateERC20Contract256Gasless. Returns its address. */
+export async function deployPrivateOPRFNotesLibrary(hre: HardhatRuntime, signer: any): Promise<string> {
+  const factory = await hre.ethers.getContractFactory(PRIVATE_OPRF_NOTES_FQN, signer);
+  const library = await factory.deploy();
+  await library.waitForDeployment();
+  await waitForDeploymentConfirmation(library, hre);
+  return library.getAddress();
 }
 
 export async function deployPrivateTokenImplementation(

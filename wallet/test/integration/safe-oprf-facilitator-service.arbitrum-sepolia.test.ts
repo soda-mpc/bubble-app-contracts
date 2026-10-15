@@ -200,6 +200,7 @@ describe("Safe OPRF spend via HTTP facilitator service (Arbitrum Sepolia)", func
   });
 
   it("faucets the agent, then completes POST /v1/spend (redeem → unshield → EIP-3009)", async function () {
+    const forwarderAddress = await privateToken.trustedForwarder();
     const privateTokenAddress = await privateToken.getAddress();
     const underlyingAddress = await mockToken.getAddress();
 
@@ -250,7 +251,7 @@ describe("Safe OPRF spend via HTTP facilitator service (Arbitrum Sepolia)", func
     const executeValidBefore = BigInt(Math.floor(Date.now() / 1000) + EIP3009_VALID_SLACK_SECONDS);
     const executeAuth = await signExecuteWithAuthorization({
       signer: agent,
-      token: privateTokenAddress,
+      token: forwarderAddress,
       tokenName,
       chainId: networkChainId,
       from: agent.address,
@@ -280,7 +281,8 @@ describe("Safe OPRF spend via HTTP facilitator service (Arbitrum Sepolia)", func
       idempotencyKey: randomUUID(),
       redeem: {
         privateToken: privateTokenAddress,
-        to: privateTokenAddress,
+        // The facilitator submits executeWithAuthorization to the token's ERC-2771 forwarder.
+        to: forwarderAddress,
         data: innerRedeemData,
         expectedRecipient: agent.address,
         tokenName,

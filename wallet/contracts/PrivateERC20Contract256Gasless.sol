@@ -7,15 +7,25 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
-import "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import "@sodalabs/bubble-core-contracts/contracts/bubble/DecryptionCaller.sol";
 import {IWrappedNative} from "./PrivateERC20Contract256.sol";
+import {
+    PrivateERC20Contract256Storage,
+    UnshieldRequest,
+    OPRFToken,
+    privateERC20Storage,
+    privateBalanceOf
+} from "./libraries/PrivateERC20GaslessStorage.sol";
+import {PrivateOPRFNotes} from "./libraries/PrivateOPRFNotes.sol";
+
 /// @title PrivateERC20Contract256Gasless
 /// @notice Implementation of ERC20 token standard with enhanced privacy features using MPC
 /// @dev This contract implements the ERC20 standard while ensuring confidentiality of token transactions through encryption.
 ///      This contract is deployed using an UUPS proxy.
-///      Gasless variant: EIP-712 executeWithAuthorization + OPRF dest lock for unsigned relays.
+///      Gasless variant: ERC-2771. A trusted PrivateERC20GaslessForwarder verifies the user's EIP-712 authorization
+///      and calls the normal entrypoints with the signer appended to calldata; `_msgSender()` returns it.
+///      Admin functions ignore the forwarder. OPRF note logic lives in the linked PrivateOPRFNotes library; only the
+///      IT owner can route a note's value away from the IT owner.
 ///
 /// @notice Key Features:
 /// @notice Privacy Enhancement:
@@ -39,7 +49,7 @@ import {IWrappedNative} from "./PrivateERC20Contract256.sol";
 /// @notice Approval Mechanism:
 /// @dev An approval mechanism is implemented to allow token holders to grant spending permissions (allowances) to other addresses.
 /// Approvals are also stored in handles form within the contract's state variables.
-contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ownable2StepUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable, EIP712Upgradeable {
+contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ownable2StepUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable {
     /// @notice Emitted when tokens are transferred in the clear
     /// @param _from The address of the sender
     /// @param _to The address of the recipient
@@ -66,7 +76,7 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
     event MasterUpdated(address indexed oldMaster, address indexed newMaster);
     event EmergencyRecovery(address indexed owner, uint256 amount);
     event NativeRecovered(address indexed to, uint256 amount);
-    event AuthorizationExecuted(address indexed from, bytes32 indexed nonce);
+    event TrustedForwarderUpdated(address indexed oldForwarder, address indexed newForwarder);
     
     // OPRF Minting Events
     event OPRFMinted(address indexed user, gtUint128 x, gtUint128 y, gtUint256 q);
@@ -86,67 +96,12 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
     // Reason codes: 1=split, 2=merged, 3=burned
     event OPRFTokenInvalidated(address indexed user, gtUint128 x, gtUint256 q, uint128 y, uint8 reason);
     
-    /// @custom:storage-location erc7201:bubble.storage.PrivateERC20Contract256
-    struct PrivateERC20Contract256Storage {
-        /// @notice The name of the token
-        string _name;
-        /// @notice The symbol of the token
-        string _symbol;
-        /// @notice The total supply of tokens
-        uint256 _totalSupply;
-        /// @notice Constant zero value used to initialize balances
-        /// @dev This is stored in storage to save gas on repeated zero checks
-        gtUint256 zero;
-        /// @notice Mapping of encrypted token balances for each address
-        /// @dev The balance is stored as a handle that requires encryption and decryption under the user's secret key to get the actual value
-        mapping(address => gtUint256) balances;
-        /// @notice Mapping of encrypted allowances for each address pair
-        /// @dev The allowance is stored as a handle that requires decryption to get the actual value
-        mapping(address => mapping(address => gtUint256)) allowances;
-        /// @notice The master address for unshield operations
-        address master;
-        /// @notice The standard ERC20 token that can be wrapped
-        IERC20 underlying;
-        /// @notice OPRF key management - initialized in initializer
-        gtUint128 _oprfKey;
-        /// @notice Storage for unshield requests
-        mapping(uint256 => UnshieldRequest) unshieldRequests;
-        /// @notice Decimals used by the underlying token for shield/unshield conversion
-        uint8 underlyingDecimals;
-        /// @notice Whether underlying decimals were initialized in storage
-        bool underlyingDecimalsInitialized;
-        /// @notice Whether underlying token supports unwrap to native token (WETH/WPOL style)
-        bool underlyingIsWrappedNative;
-    }
-    
-    /// @notice Storage for unshield requests
-    struct UnshieldRequest {
-        address user;
-        bool unwrapNative;
-    }
-
-    /// The storage location of the PrivateERC20Contract256Storage struct.
-    /// Calculated using the formula: keccak256(abi.encode(uint256(keccak256("bubble.storage.PrivateERC20Contract256")) - 1)) & ~bytes32(uint256(0xff))
-    /// @dev This value is calculated using the ERC-7201 standard formula.
-    ///      The last byte is 0x00 as required by ERC-7201.
-    ///      Calculated using: bubble/core/scripts/calculate_storage_locations.py
-    bytes32 private constant PrivateERC20Contract256StorageLocation = 0x9deef7192d493ef71cbd7c46c5b8e4088a630550d613be0294e8c5db63409100;
-    
-    // Struct for OPRF token parameters
-    struct OPRFToken {
-        itUint128 x;
-        itUint256 q;
-        uint128 y_clear;
-    }
-    
-    bytes32 public constant EXECUTE_WITH_AUTHORIZATION_TYPEHASH = keccak256(
-        "ExecuteWithAuthorization(address from,bytes data,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
-    );
+    // PrivateERC20Contract256Storage, UnshieldRequest and OPRFToken live in libraries/PrivateERC20GaslessStorage.sol
+    // (same ERC-7201 slot and layout) so the linked PrivateOPRFNotes library shares them.
 
     /// @custom:storage-location erc7201:bubble.storage.PrivateERC20Contract256Gasless
     struct GaslessStorage {
-        mapping(address => mapping(bytes32 => bool)) authorizationUsed;
-        address currentAuthFrom;
+        address trustedForwarder;
     }
 
     /// keccak256(abi.encode(uint256(keccak256("bubble.storage.PrivateERC20Contract256Gasless")) - 1)) & ~bytes32(uint256(0xff))
@@ -163,71 +118,95 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
         _disableInitializers();
     }
 
-    /// @notice Returns the logical sender (EIP-712 `from` during executeWithAuthorization).
-    function _msgSender() internal view override returns (address) {
-        address authFrom = _getGaslessStorage().currentAuthFrom;
-        if (authFrom != address(0)) {
-            return authFrom;
-        }
-        return super._msgSender();
+    // ---------------------------------------------------------------------------------------------
+    // ERC-2771 context
+    // ---------------------------------------------------------------------------------------------
+
+    /// @notice The forwarder whose calls carry the signer as the last 20 bytes of calldata.
+    function trustedForwarder() public view returns (address) {
+        return _getGaslessStorage().trustedForwarder;
     }
 
-    function _permitUserHandle(gtUint256 value) private {
-        MpcCore.permitTransient(value, _msgSender());
-        MpcCore.permitThis(value);
+    function isTrustedForwarder(address forwarder) public view returns (bool) {
+        return forwarder != address(0) && forwarder == trustedForwarder();
     }
 
-    function authorizationUsed(address account, bytes32 nonce) external view returns (bool) {
-        return _getGaslessStorage().authorizationUsed[account][nonce];
-    }
-
-    /// @notice Facilitator entry: run `data` as `from` after EIP-712 / EIP-1271 verification.
-    function executeWithAuthorization(
-        address from,
-        bytes calldata data,
-        uint256 validAfter,
-        uint256 validBefore,
-        bytes32 nonce,
-        bytes calldata signature
-    ) external returns (bytes memory) {
-        require(from != address(0), "from cannot be zero");
-        require(_getGaslessStorage().currentAuthFrom == address(0), "nested auth");
-        require(data.length >= 4, "empty data");
-        require(bytes4(data) != this.executeWithAuthorization.selector, "nested execute");
-        require(block.timestamp > validAfter, "Auth not yet valid");
-        require(block.timestamp < validBefore, "Auth expired");
-
+    /// @notice Sets the gasless forwarder. Zero disables gasless calls.
+    function setTrustedForwarder(address forwarder) external onlyOwner {
+        require(forwarder != address(this), "Forwarder cannot be token");
         GaslessStorage storage $g = _getGaslessStorage();
-        require(!$g.authorizationUsed[from][nonce], "Auth used");
-
-        bytes32 structHash = keccak256(
-            abi.encode(
-                EXECUTE_WITH_AUTHORIZATION_TYPEHASH,
-                from,
-                keccak256(data),
-                validAfter,
-                validBefore,
-                nonce
-            )
-        );
-        require(
-            SignatureChecker.isValidSignatureNow(from, _hashTypedDataV4(structHash), signature),
-            "Invalid signature"
-        );
-
-        $g.authorizationUsed[from][nonce] = true;
-        $g.currentAuthFrom = from;
-        (bool ok, bytes memory ret) = address(this).call(data);
-        $g.currentAuthFrom = address(0);
-        if (!ok) {
-            assembly {
-                revert(add(ret, 32), mload(ret))
-            }
-        }
-        emit AuthorizationExecuted(from, nonce);
-        return ret;
+        emit TrustedForwarderUpdated($g.trustedForwarder, forwarder);
+        $g.trustedForwarder = forwarder;
     }
-    
+
+    function _isForwarded() private view returns (bool) {
+        return isTrustedForwarder(msg.sender) && msg.data.length >= 20;
+    }
+
+    function _msgSender() internal view override returns (address) {
+        if (_isForwarded()) {
+            return address(bytes20(msg.data[msg.data.length - 20:]));
+        }
+        return msg.sender;
+    }
+
+    function _msgData() internal view override returns (bytes calldata) {
+        if (_isForwarded()) {
+            return msg.data[:msg.data.length - 20];
+        }
+        return msg.data;
+    }
+
+    function _contextSuffixLength() internal view override returns (uint256) {
+        return _isForwarded() ? 20 : 0;
+    }
+
+    /// @dev Who chose an OPRF op's arguments: the signer on a forwarded call, otherwise `tx.origin`
+    ///      (the owner EOA, also when executing through its Safe). On a direct call, any contract the user
+    ///      transacts with in that transaction acts with the user's authority over note destinations.
+    ///      Facilitator relays stay closed: `tx.origin` is the facilitator, not the user.
+    function _authorizer() private view returns (address) {
+        return _isForwarded() ? _msgSender() : tx.origin;
+    }
+
+    /// @dev Admin functions are never authorized by a forwarded signature.
+    function _checkOwner() internal view override {
+        if (owner() != msg.sender) {
+            revert OwnableUnauthorizedAccount(msg.sender);
+        }
+    }
+
+    function acceptOwnership() public override {
+        require(!_isForwarded(), "Not via forwarder");
+        super.acceptOwnership();
+    }
+
+    /// @notice Consumes the signer's GCACL transient insert grant so this token may validate the signer's
+    ///         ciphertexts for the rest of the transaction. Only the forwarder calls this, right before the
+    ///         forwarded operation.
+    function consumeInsertGrant(uint256 insertNonce, bytes calldata insertSignature) external {
+        require(_isForwarded(), "Only forwarder");
+        MpcCore.transientInsertPermission(_msgSender(), insertNonce, insertSignature);
+    }
+
+    /// @dev Value ciphertexts must belong to the caller: the signer on a forwarded call, or the direct caller /
+    ///      `tx.origin` (an owner EOA executing through its Safe). The `tx.origin` arm is the same phishing class
+    ///      as `_authorizer`: a contract the user calls in that transaction can pass the user's public IT into
+    ///      `approve` or `transfer` and receive decrypt permission. A stranger cannot. Facilitator relays do not
+    ///      take this arm, because the call is forwarded and `tx.origin` is the facilitator.
+    function _validateOwnIt(itUint256 memory it) private returns (gtUint256) {
+        require(
+            it.userAddress == _msgSender() || (!_isForwarded() && it.userAddress == tx.origin),
+            "IT not owned by caller"
+        );
+        return MpcCore.validateCiphertext(it);
+    }
+
+    /// @dev Raw-handle entrypoints: `account` (the real caller or the signer) must already hold rights on `value`.
+    function _requireHandlePermitted(gtUint256 value, address account) private view {
+        require(MpcCore.isPermitted(value, account), "Handle not permitted");
+    }
+
     /// @notice Initializes the token contract, assigning the contract owner and setting the underlying ERC20 token
     /// @param name_ The name of the token
     /// @param symbol_ The symbol of the token
@@ -283,7 +262,6 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
         __Ownable_init(owner_);
         __ReentrancyGuard_init();
         __Pausable_init();
-        __EIP712_init(name_, "1");
         
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         $._name = name_;
@@ -310,9 +288,7 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
      * @dev Returns the PrivateERC20Contract256Storage storage location.
      */
     function _getPrivateERC20Contract256Storage() internal pure returns (PrivateERC20Contract256Storage storage $) {
-        assembly {
-            $.slot := PrivateERC20Contract256StorageLocation
-        }
+        return privateERC20Storage();
     }
     
     /**
@@ -453,21 +429,20 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
     /// @param add The address to get the balance from
     /// @return The balance handle
     function _balanceOf(address add) private view returns (gtUint256) {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        gtUint256 balance = $.balances[add];
-        if (gtUint256.unwrap(balance) == 0){ // 0 means that no balance has been set, set it to 0
-            balance = $.zero;
-        }
-        return balance;
+        return privateBalanceOf(add);
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // User entrypoints. Each one is a thin wrapper that passes the real caller to the internal
+    // implementation; on a forwarded call `_msgSender()` is the signer.
+    // ---------------------------------------------------------------------------------------------
+
     /// @notice Transfers tokens using an encrypted and signed value
     /// @param _to The address to transfer to
     /// @param _it The encrypted and signed transfer amount
     /// @return The handle to the transfer's result
-    function transfer(address _to, itUint256 calldata _it) public virtual whenNotPaused returns (gtBool) {
-        gtUint256 value = MpcCore.validateCiphertext(_it);
-        _permitUserHandle(value); // Give transient permission the the sender, so the contractTransfer check will pass
-        return contractTransfer(_to, value);
+    function transfer(address _to, itUint256 memory _it) public virtual whenNotPaused returns (gtBool) {
+        return _contractTransfer(_msgSender(), _to, _validateOwnIt(_it));
     }
 
     /// @notice Transfers tokens using a clear value
@@ -475,131 +450,71 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
     /// @param _value The amount of tokens to transfer
     /// @return The handle to the transfer's result
     function transfer(address _to, uint256 _value) public virtual whenNotPaused returns (gtBool) {
-        // Check for self-transfer
-       if (_msgSender() == _to) {
-           emit Transfer(_msgSender(), _to, _value);
-           return MpcCore.setPublic(true);
-       }
-        
-        (gtUint256 fromBalance, gtUint256 toBalance) = _getBalances(_msgSender(), _to);
-        (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result) = MpcCore.transfer(fromBalance, toBalance, _value);
-        _setNewBalances(_msgSender(), _to, newFromBalance, newToBalance);
-        emit Transfer(_msgSender(), _to, _value);
-        return result;
+        return _transferClear(_msgSender(), _to, _value);
     }
+
     /// @notice Transfers the amount of tokens given in the handle _value to address _to
     /// @param _to The address to transfer to
     /// @param _value The handle to the amount of tokens to transfer
     /// @return The handle to the transfer's result
     function contractTransfer(address _to, gtUint256 _value) public virtual whenNotPaused returns (gtBool) {
-        // Check if the sender is permitted to use the _value handle
-        require(MpcCore.isSenderPermitted(_value));
-        
-        // Check for self-transfer
-        if (_msgSender() == _to) {
-            gtBool hasSufficientBalance = MpcCore.ge(_balanceOf(_msgSender()), _value);
-            _permitAndEmitPrivateTransfer(_msgSender(), _to, _value, hasSufficientBalance);
-            return MpcCore.setPublic(true);
-        }
-
-        (gtUint256 fromBalance, gtUint256 toBalance) = _getBalances(_msgSender(), _to);
-        (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result) = MpcCore.transfer(fromBalance, toBalance, _value);
-        _setNewBalances(_msgSender(), _to, newFromBalance, newToBalance);
-        _permitAndEmitPrivateTransfer(_msgSender(), _to, _value, MpcCore.not(result));
-        return result;
+        _requireHandlePermitted(_value, _msgSender());
+        return _contractTransfer(_msgSender(), _to, _value);
     }
+
     /// @notice Transfers the amount of tokens given inside the IT (an encrypted and signed value) from one address to another
     /// @param _from The address to transfer from
     /// @param _to The address to transfer to
     /// @param _it The encrypted and signed transfer amount
     /// @return The handle to the transfer's result
-    function transferFrom(address _from, address _to, itUint256 calldata _it) public virtual whenNotPaused returns (gtBool) {
-        gtUint256 value = MpcCore.validateCiphertext(_it);
-        _permitUserHandle(value); // Give transient permission the the sender, so the contractTransferFrom check will pass
-        return contractTransferFrom(_from, _to, value);
+    function transferFrom(address _from, address _to, itUint256 memory _it) public virtual whenNotPaused returns (gtBool) {
+        return _contractTransferFrom(_msgSender(), _from, _to, _validateOwnIt(_it));
     }
+
     /// @notice Transfers the amount of tokens given in the clear from one address to another
     /// @param _from The address to transfer from
     /// @param _to The address to transfer to
     /// @param _value The amount of tokens to transfer
     /// @return The handle to the transfer's result
     function transferFrom(address _from, address _to, uint256 _value) public virtual whenNotPaused returns (gtBool) {
-        gtUint256 allowance = _getGTAllowance(_from, _msgSender());
-
-        // Check for self-transfer
-        if (_from == _to) {
-            // Still check allowance for self-transfers to maintain ERC20 compliance
-            gtUint256 valueGt = MpcCore.setPublic256(_value);
-            MpcCore.permitThis(valueGt);
-            // Check if allowance is sufficient (we just validate, don't subtract since it's a self-transfer)
-            gtBool hasSufficientAllowance = MpcCore.ge(allowance, valueGt);
-            emit Transfer(_from, _to, _value);
-            return hasSufficientAllowance;
-        }
-        
-        (gtUint256 fromBalance, gtUint256 toBalance) = _getBalances(_from, _to);
-        (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result, gtUint256 newAllowance) = MpcCore.transferWithAllowance(fromBalance, toBalance, _value, allowance);
-        _setApproveValue(_from, _msgSender(), newAllowance);
-        _setNewBalances(_from, _to, newFromBalance, newToBalance);
-        emit Transfer(_from, _to, _value);
-        return result;
+        return _transferFromClear(_msgSender(), _from, _to, _value);
     }
+
     /// @notice Transfers the amount of tokens given in the handle from one address to another
     /// @param _from The address to transfer from
     /// @param _to The address to transfer to
     /// @param _value The encrypted transfer amount
     /// @return The handle to the transfer's result
     function contractTransferFrom(address _from, address _to, gtUint256 _value) public virtual whenNotPaused returns (gtBool) {
-        // Check if the sender is permitted to use the _value handle
-        require(MpcCore.isSenderPermitted(_value));
-        gtUint256 allowance = _getGTAllowance(_from, _msgSender());
-        // Check for self-transfer
-        if (_from == _to) {
-            // Check if allowance is sufficient (we just validate, don't subtract since it's a self-transfer)
-            gtBool hasSufficientAllowance = MpcCore.ge(allowance, _value);
-            _permitAndEmitPrivateTransfer(_from, _to, _value, hasSufficientAllowance);
-            return hasSufficientAllowance;
-        }
-
-        (gtUint256 fromBalance, gtUint256 toBalance) = _getBalances(_from, _to);
-        (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result, gtUint256 newAllowance) = MpcCore.transferWithAllowance(fromBalance, toBalance, _value, allowance);
-        _setApproveValue(_from, _msgSender(), newAllowance);
-        _setNewBalances(_from, _to, newFromBalance, newToBalance);
-        _permitAndEmitPrivateTransfer(_from, _to, _value, MpcCore.not(result));
-        return result;
+        _requireHandlePermitted(_value, _msgSender());
+        return _contractTransferFrom(_msgSender(), _from, _to, _value);
     }
+
     /// @notice Approves a spender to transfer the amount of tokens given inside the IT (an encrypted and signed value)
     /// @param _spender The address that will be approved
     /// @param _it The encrypted and signed approval amount
     /// @return True if the approval was successful
-    function approve(address _spender, itUint256 calldata _it) public virtual whenNotPaused returns (bool) {
-        gtUint256 value = MpcCore.validateCiphertext(_it);
-        _permitUserHandle(value);
-        return contractApprove(_spender, value);
+    function approve(address _spender, itUint256 memory _it) public virtual whenNotPaused returns (bool) {
+        return _contractApprove(_msgSender(), _spender, _validateOwnIt(_it));
     }
+
     /// @notice Approves a spender to transfer the amount of tokens given in the clear
     /// @param _spender The address that will be approved
     /// @param _value The amount of tokens to approve
     /// @return True if the approval was successful
     function approve(address _spender, uint256 _value) public virtual whenNotPaused returns (bool) {
-        address owner = _msgSender();
-        gtUint256 gt = MpcCore.setPublic256(_value);
-        _setApproveValue(owner, _spender, gt);
-        emit Approval(owner, _spender, _value);
-        return true;
+        return _approveClear(_msgSender(), _spender, _value);
     }
+
     /// @notice Approves a spender to transfer the amount of tokens given in the handle
     /// @param _spender The address that will be approved
     /// @param _value The handle to the approval amount
     /// @return True if the approval was successful
     function contractApprove(address _spender, gtUint256 _value) public virtual whenNotPaused returns (bool) {
-        // Check if the sender is permitted to use the _value handle
-        require(MpcCore.isSenderPermitted(_value));
-        address owner = _msgSender();
-        _setApproveValue(owner, _spender, _value);
-        emit Approval(owner, _spender);
-        return true;
+        _requireHandlePermitted(_value, _msgSender());
+        return _contractApprove(_msgSender(), _spender, _value);
     }
+
     /// @notice Returns the handle to the allowance of a spender
     /// @dev The returned handle requires encryption and decryption under the user's secret key to get the actual value
     /// @param _owner The address of the token owner
@@ -609,18 +524,351 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
         require(_owner == _msgSender() || _spender == _msgSender());
         return _getGTAllowance(_owner, _spender);
     }
+
+    /// @notice Shield standard ERC20 tokens into private tokens
+    /// @dev Private tokens mirror the underlying token decimals, so shielded amounts are one-to-one.
+    function shield(uint256 amount) public virtual nonReentrant whenNotPaused returns (bool) {
+        return _shield(_msgSender(), amount);
+    }
+
+    // Function to unshield private tokens back to standard ERC20 tokens
+    function unshield(uint256 privateAmount) public virtual whenNotPaused returns (bool) {
+        return _unshieldTo(_msgSender(), privateAmount, _msgSender());
+    }
+
+    // Function to unshield private tokens back to standard ERC20 tokens for master address
+    function unshieldForMaster(uint256 privateAmount) public virtual whenNotPaused returns (bool) {
+        return _unshieldTo(_msgSender(), privateAmount, _getPrivateERC20Contract256Storage().master);
+    }
+
+    /// @notice Mints an OPRF token for the caller using encrypted parameters.
+    /// @param quantity The encrypted quantity/amount for the OPRF token
+    function mintOPRFToken(itUint256 memory quantity) public virtual whenNotPaused {
+        _mintOPRFToken(_msgSender(), quantity);
+    }
+
+    /// @notice Shields a clear amount of underlying and mints an OPRF note for that amount to the caller.
+    function shieldAndMint(uint256 amount)
+        public
+        virtual
+        nonReentrant
+        whenNotPaused
+        returns (gtUint128 x, gtUint128 y, gtUint256 q)
+    {
+        return _shieldAndMint(_msgSender(), amount, _msgSender());
+    }
+
+    /// @notice Shields a clear amount of underlying from the caller and mints the OPRF note to `recipient`.
+    /// @dev The caller's private balance is unchanged. Underlying is escrowed here and this contract's private
+    ///      balance increases by `amount`, which backs the note on a later burn.
+    /// @param amount Clear underlying amount to pull, escrow, and mint. Must be greater than zero.
+    /// @param recipient Account permitted to decrypt the new note.
+    function shieldAndMint(uint256 amount, address recipient)
+        public
+        virtual
+        nonReentrant
+        whenNotPaused
+        returns (gtUint128 x, gtUint128 y, gtUint256 q)
+    {
+        require(recipient != address(0), "Recipient cannot be zero address");
+        return _shieldAndMint(_msgSender(), amount, recipient);
+    }
+
+    /// @notice Splits an OPRF token into remainder and payment portions using encrypted parameters
+    /// @param x The encrypted x value from OPRF minting
+    /// @param q The encrypted quantity from OPRF minting
+    /// @param y_clear The clear (unencrypted) y value for splitting
+    /// @param qSplit The encrypted amount to split off as payment
+    function splitToken(
+        itUint128 memory x,
+        itUint256 memory q,
+        uint128 y_clear,
+        itUint256 memory qSplit
+    ) public virtual whenNotPaused {
+        PrivateOPRFNotes.splitToken(_msgSender(), _authorizer(), x, q, y_clear, qSplit);
+    }
+
+    /// @notice Splits an OPRF token for anonymous transfer to a recipient
+    /// @dev Unless the IT owner authorized the call, `recipient` must be the IT owner.
+    /// @param x The encrypted x coordinate of the OPRF token
+    /// @param q The encrypted quantity/amount of the OPRF token
+    /// @param y_clear The clear (unencrypted) y coordinate of the OPRF token
+    /// @param qSplit The encrypted amount to split off as payment
+    /// @param recipient The address of the recipient who will receive the split values
+    function splitTokenForRecipient(
+        itUint128 memory x,
+        itUint256 memory q,
+        uint128 y_clear,
+        itUint256 memory qSplit,
+        address recipient
+    ) public virtual whenNotPaused {
+        PrivateOPRFNotes.splitTokenForRecipient(_msgSender(), _authorizer(), x, q, y_clear, qSplit, recipient);
+    }
+
+    /// @notice Burns an OPRF token and transfers the burned amount to recipient
+    /// @dev Unless the IT owner authorized the call, `recipient` must be the IT owner.
+    /// @param x The encrypted x value from OPRF minting or split
+    /// @param q The encrypted quantity from OPRF minting or split
+    /// @param y_clear The clear (unencrypted) y value for burning
+    /// @param recipient The address to receive the burned tokens
+    function burnToken(
+        itUint128 memory x,
+        itUint256 memory q,
+        uint128 y_clear,
+        address recipient
+    ) public virtual whenNotPaused {
+        PrivateOPRFNotes.burnToken(_msgSender(), _authorizer(), x, q, y_clear, recipient);
+    }
+
+    /// @notice Merges multiple OPRF tokens by burning them all and creating a new token with the total amount
+    /// @param tokens Array of OPRF token parameters to merge
+    function mergeMany(
+        OPRFToken[] memory tokens
+    ) public virtual whenNotPaused returns (gtUint128 x, gtUint128 y, gtUint256 qMerged) {
+        return PrivateOPRFNotes.mergeMany(_msgSender(), _authorizer(), tokens);
+    }
+
+    /// @notice Transfers OPRF tokens to a recipient by burning input tokens and minting new tokens
+    /// @dev Unless the IT owner authorized the call, `recipient` must be the IT owner.
+    /// @param tokens Array of OPRF token parameters to burn
+    /// @param amount Encrypted amount to transfer to recipient
+    /// @param recipient Address of the recipient who will receive the tokens
+    function transferOPRF(
+        OPRFToken[] memory tokens,
+        itUint256 memory amount,
+        address recipient
+    ) public virtual whenNotPaused returns (
+        gtUint128 xRecipient,
+        gtUint128 yRecipient,
+        gtUint256 qRecipient,
+        gtUint128 xSender,
+        gtUint128 ySender,
+        gtUint256 qSender
+    ) {
+        return PrivateOPRFNotes.transferOPRF(_msgSender(), _authorizer(), tokens, amount, recipient);
+    }
+
+    /// @notice Redeems multiple OPRF tokens by burning them all, transferring the specified amount as private tokens to recipient, and minting a leftover OPRF token if there's a remainder
+    /// @dev Unless the IT owner authorized the call, `recipient` must be the IT owner.
+    /// @param tokens Array of OPRF token parameters to burn
+    /// @param amount Encrypted amount to transfer to recipient as private tokens
+    /// @param recipient Address of the recipient who will receive the private tokens
+    function redeemMany(
+        OPRFToken[] memory tokens,
+        itUint256 memory amount,
+        address recipient
+    ) public virtual whenNotPaused returns (
+        gtUint128 xRemainder,
+        gtUint128 yRemainder,
+        gtUint256 qRemainder
+    ) {
+        return PrivateOPRFNotes.redeemMany(_msgSender(), _authorizer(), tokens, amount, recipient);
+    }
+
+    /// @notice Redeems multiple OPRF tokens and directly unshields the redeemed amount to underlying tokens for recipient.
+    /// @dev The redeemed amount never remains in recipient's private balance: it is credited and immediately debited before unshield callback.
+    /// @dev Unless the IT owner authorized the call, `recipient` must be the IT owner.
+    /// @param tokens Array of OPRF token parameters to burn
+    /// @param amount Encrypted amount to redeem and unshield
+    /// @param recipient Address receiving the underlying tokens after callback
+    /// @param unwrap If true, unwrap wrapped-native underlying and send native token
+    function redeemManyToUnderlying(
+        OPRFToken[] memory tokens,
+        itUint256 memory amount,
+        address recipient,
+        bool unwrap
+    ) public virtual whenNotPaused returns (
+        gtUint128 xRemainder,
+        gtUint128 yRemainder,
+        gtUint256 qRemainder
+    ) {
+        return _redeemManyToUnderlying(_msgSender(), _authorizer(), tokens, amount, recipient, unwrap);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Internal implementations. `sender` is the account whose balance/allowance is used and who is
+    // credited. For OPRF ops, `authorizer` is who chose the arguments: `tx.origin` on a direct call
+    // (the owner EOA, also when executing through its Safe), or the signer on a forwarded call.
+    // ---------------------------------------------------------------------------------------------
+
+    function _transferClear(address sender, address _to, uint256 _value) private returns (gtBool) {
+        if (sender == _to) {
+            emit Transfer(sender, _to, _value);
+            return MpcCore.setPublic(true);
+        }
+
+        (gtUint256 fromBalance, gtUint256 toBalance) = _getBalances(sender, _to);
+        (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result) = MpcCore.transfer(fromBalance, toBalance, _value);
+        _setNewBalances(sender, _to, newFromBalance, newToBalance);
+        emit Transfer(sender, _to, _value);
+        return result;
+    }
+
+    /// @dev `_value` must already be usable by this contract (validated IT or a handle `sender` was checked against).
+    function _contractTransfer(address sender, address _to, gtUint256 _value) private returns (gtBool) {
+        if (sender == _to) {
+            gtBool hasSufficientBalance = MpcCore.ge(_balanceOf(sender), _value);
+            _permitAndEmitPrivateTransfer(sender, _to, _value, MpcCore.not(hasSufficientBalance));
+            return MpcCore.setPublic(true);
+        }
+
+        (gtUint256 fromBalance, gtUint256 toBalance) = _getBalances(sender, _to);
+        (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result) = MpcCore.transfer(fromBalance, toBalance, _value);
+        _setNewBalances(sender, _to, newFromBalance, newToBalance);
+        _permitAndEmitPrivateTransfer(sender, _to, _value, MpcCore.not(result));
+        return result;
+    }
+
+    function _transferFromClear(address spender, address _from, address _to, uint256 _value) private returns (gtBool) {
+        gtUint256 allowance_ = _getGTAllowance(_from, spender);
+
+        if (_from == _to) {
+            // Still check allowance for self-transfers to maintain ERC20 compliance
+            gtUint256 valueGt = MpcCore.setPublic256(_value);
+            MpcCore.permitThis(valueGt);
+            gtBool hasSufficientAllowance = MpcCore.ge(allowance_, valueGt);
+            emit Transfer(_from, _to, _value);
+            return hasSufficientAllowance;
+        }
+
+        (gtUint256 fromBalance, gtUint256 toBalance) = _getBalances(_from, _to);
+        (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result, gtUint256 newAllowance) = MpcCore.transferWithAllowance(fromBalance, toBalance, _value, allowance_);
+        _setApproveValue(_from, spender, newAllowance);
+        _setNewBalances(_from, _to, newFromBalance, newToBalance);
+        emit Transfer(_from, _to, _value);
+        return result;
+    }
+
+    function _contractTransferFrom(address spender, address _from, address _to, gtUint256 _value) private returns (gtBool) {
+        gtUint256 allowance_ = _getGTAllowance(_from, spender);
+
+        if (_from == _to) {
+            gtBool hasSufficientAllowance = MpcCore.ge(allowance_, _value);
+            _permitAndEmitPrivateTransfer(_from, _to, _value, MpcCore.not(hasSufficientAllowance));
+            return hasSufficientAllowance;
+        }
+
+        (gtUint256 fromBalance, gtUint256 toBalance) = _getBalances(_from, _to);
+        (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result, gtUint256 newAllowance) = MpcCore.transferWithAllowance(fromBalance, toBalance, _value, allowance_);
+        _setApproveValue(_from, spender, newAllowance);
+        _setNewBalances(_from, _to, newFromBalance, newToBalance);
+        _permitAndEmitPrivateTransfer(_from, _to, _value, MpcCore.not(result));
+        return result;
+    }
+
+    function _approveClear(address owner_, address _spender, uint256 _value) private returns (bool) {
+        _setApproveValue(owner_, _spender, MpcCore.setPublic256(_value));
+        emit Approval(owner_, _spender, _value);
+        return true;
+    }
+
+    function _contractApprove(address owner_, address _spender, gtUint256 _value) private returns (bool) {
+        _setApproveValue(owner_, _spender, _value);
+        emit Approval(owner_, _spender);
+        return true;
+    }
+
+    function _shield(address sender, uint256 amount) private returns (bool) {
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        require(amount > 0, "Amount must be greater than 0");
+        require($.underlying.transferFrom(sender, address(this), amount), "Transfer failed");
+        gtUint256 newBalanceGt = MpcCore.add(_balanceOf(sender), MpcCore.setPublic256(amount));
+        $.balances[sender] = newBalanceGt;
+        $._totalSupply += amount;
+        // Permit the contract and the user to use the new balance handle
+        MpcCore.permitThis(newBalanceGt);
+        MpcCore.permit(newBalanceGt, sender);
+        emit Shield(sender, amount);
+        return true;
+    }
+
+    function _unshieldTo(address sender, uint256 privateAmount, address recipient) private returns (bool) {
+        require(privateAmount > 0, "Amount must be greater than 0");
+        gtUint256 amountGt = MpcCore.setPublic256(privateAmount);
+
+        // user balance = 10, want to unshield 3. checkedSubWithOverflowBit(10, 3) = 7, amount to unshield = bal before 10 sub new balance 7 = 3
+        // user balance = 5, want to unshield 7. checkedSubWithOverflowBit(5, 7) = 5, amount to unshield = bal before 5 sub new balance 5 = 0
+        gtUint256 amountToUnshieldGt = _debitBalanceForUnshield(sender, amountGt);
+
+        _requestUnshieldFromHandle(amountToUnshieldGt, recipient, false);
+
+        emit UnshieldRequested(recipient, privateAmount);
+        return true;
+    }
+
+    /// @dev The note amount is the transfer result: the full quantity, or zero if the pull did not
+    ///      credit the contract. That is the same mask `PrivateTransfer` already emits.
+    function _mintOPRFToken(address minter, itUint256 memory quantity) private {
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        gtUint256 qGT = _validateOwnIt(quantity);
+        gtBool moved = _contractTransfer(minter, address(this), qGT);
+
+        // mux(bit, a, b) returns b when bit is true. not(moved) is true when the pull failed.
+        gtUint256 mintedAmount = MpcCore.mux(MpcCore.not(moved), qGT, $.zero);
+        MpcCore.permitThis(mintedAmount);
+
+        (gtUint128 x, gtUint128 y) = MpcCore.oprfMint($._oprfKey, mintedAmount);
+
+        MpcCore.permit(x, minter);
+        MpcCore.permit(y, minter);
+        MpcCore.permit(mintedAmount, minter);
+
+        emit OPRFMinted(minter, x, y, mintedAmount);
+    }
+
+    function _shieldAndMint(address sender, uint256 amount, address recipient)
+        private
+        returns (gtUint128 x, gtUint128 y, gtUint256 q)
+    {
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        require(amount > 0, "Amount must be greater than 0");
+        require($.underlying.transferFrom(sender, address(this), amount), "Transfer failed");
+        $._totalSupply += amount;
+
+        gtUint256 amountGt = MpcCore.setPublic256(amount);
+        MpcCore.permitThis(amountGt);
+
+        gtUint256 newContractBalanceGt = MpcCore.add(_balanceOf(address(this)), amountGt);
+        $.balances[address(this)] = newContractBalanceGt;
+        MpcCore.permitThis(newContractBalanceGt);
+
+        (x, y) = MpcCore.oprfMint($._oprfKey, amountGt);
+        MpcCore.permit(x, recipient);
+        MpcCore.permit(y, recipient);
+        MpcCore.permit(amountGt, recipient);
+        q = amountGt;
+
+        emit Shield(sender, amount);
+        emit OPRFMinted(recipient, x, y, q);
+    }
+
+    function _redeemManyToUnderlying(
+        address sender,
+        address authorizer,
+        OPRFToken[] memory tokens,
+        itUint256 memory amount,
+        address recipient,
+        bool unwrap
+    ) private returns (gtUint128 x, gtUint128 y, gtUint256 q) {
+        if (unwrap) {
+            require(_getPrivateERC20Contract256Storage().underlyingIsWrappedNative, "Underlying unwrap not configured");
+        }
+        gtUint256 amountToUnshieldGt;
+        (x, y, q, amountToUnshieldGt) =
+            PrivateOPRFNotes.redeemManyToUnderlying(sender, authorizer, tokens, amount, recipient);
+        _requestUnshieldFromHandle(amountToUnshieldGt, recipient, unwrap);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Balance / allowance / unshield helpers
+    // ---------------------------------------------------------------------------------------------
+
     /// @notice Returns the handles to the balances of two addresses
-    /// @param _from The address to get the balance from
-    /// @param _to The address to get the balance to
-    /// @return The balance handles for both addresses
     function _getBalances(address _from, address _to) private view returns (gtUint256, gtUint256) {
         return (_balanceOf(_from), _balanceOf(_to));
     }
+
     /// @notice Sets the new balances handles for two addresses
-    /// @param _from The address to set the balance for
-    /// @param _to The address to set the balance for
-    /// @param newFromBalance The new balance handle for _from
-    /// @param newToBalance The new balance handle for _to
     function _setNewBalances(address _from, address _to, gtUint256 newFromBalance, gtUint256 newToBalance) private {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         // Store the new balances handles in the mapping
@@ -634,53 +882,18 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
         MpcCore.permit(newToBalance, _to);
     }
 
-    /// @notice Moves tokens from a user to the contract using MPC transfer primitives
-    /// @param fromAmount Handle to transfer from the caller; caller must control the handle
-    function _transferToContract(gtUint256 fromAmount) private {
-        // Ensure the external caller can authorize use of the encrypted amount
-        _permitUserHandle(fromAmount);
-        contractTransfer(address(this), fromAmount);
-    }
-
-    /// @notice Moves tokens from the contract to a recipient using MPC transfer primitives
-    /// @param recipient The address receiving the transferred handle
-    /// @param amount The handle to transfer; the contract must already be permitted on it
-    function _transferFromContract(address recipient, gtUint256 amount) private {
-        (gtUint256 fromBalance, gtUint256 toBalance) = _getBalances(address(this), recipient);
-        (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result) = MpcCore.transfer(fromBalance, toBalance, amount);
-        _setNewBalances(address(this), recipient, newFromBalance, newToBalance);
-        _permitAndEmitPrivateTransfer(address(this), recipient, _msgSender(), amount, MpcCore.not(result));
-    }
-
     /// @notice Emits PrivateTransfer and grants both parties permission to decrypt the credited amount.
-    function _permitAndEmitPrivateTransfer(address from, address to, gtUint256 amount, gtBool success) private {
-        _permitAndEmitPrivateTransfer(from, to, address(0), amount, success);
-    }
-
-    /// @notice Emits PrivateTransfer and grants decrypt permission to from, to, and an optional third party.
-    /// @dev `amount` is masked to zero via `success` (e.g. the transfer's own result bool) rather than
-    /// derived from a before/after balance delta, since the transfer primitives already report whether
-    /// the requested amount was actually credited.
-    function _permitAndEmitPrivateTransfer(
-        address from,
-        address to,
-        address additionalPermittee,
-        gtUint256 amount,
-        gtBool success
-    ) private {
+    /// @dev The emitted amount is `amount`, or zero when `failed` is true. `MpcCore.mux(bit, a, b)` returns `b` when
+    ///      `bit` is true, so callers pass the negated success bit (e.g. `not(result)` of the transfer).
+    function _permitAndEmitPrivateTransfer(address from, address to, gtUint256 amount, gtBool failed) private {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        gtUint256 transferredAmount = MpcCore.mux(success, amount, $.zero);
+        gtUint256 transferredAmount = MpcCore.mux(failed, amount, $.zero);
         MpcCore.permit(transferredAmount, to);
         MpcCore.permit(transferredAmount, from);
-        if (additionalPermittee != address(0) && additionalPermittee != from && additionalPermittee != to) {
-            MpcCore.permit(transferredAmount, additionalPermittee);
-        }
         emit PrivateTransfer(from, to, transferredAmount);
     }
+
     /// @notice Returns the handle to the allowance of a spender
-    /// @param _owner The address of the token owner
-    /// @param _spender The address of the spender
-    /// @return The allowance handle
     function _getGTAllowance(address _owner, address _spender) private view returns (gtUint256) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         if (gtUint256.unwrap($.allowances[_owner][_spender]) == 0) {
@@ -689,10 +902,8 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
             return $.allowances[_owner][_spender];
         }
     }
+
     /// @notice Sets the new handle to the allowance for a spender
-    /// @param _owner The address of the token owner
-    /// @param _spender The address of the spender
-    /// @param _value The new allowance handle
     function _setApproveValue(address _owner, address _spender, gtUint256 _value) private {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         $.allowances[_owner][_spender] = _value;
@@ -706,48 +917,6 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         return $.underlyingDecimals;
     }
-
-    /// @notice Shield standard ERC20 tokens into private tokens
-    /// @dev Private tokens mirror the underlying token decimals, so shielded amounts are one-to-one.
-    function shield(uint256 amount) public virtual nonReentrant whenNotPaused returns (bool) {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        require(amount > 0, "Amount must be greater than 0");
-        require($.underlying.transferFrom(_msgSender(), address(this), amount), "Transfer failed");
-        gtUint256 balanceGt = _balanceOf(_msgSender());
-        gtUint256 newBalanceGt = MpcCore.add(balanceGt, MpcCore.setPublic256(amount));
-        $.balances[_msgSender()] = newBalanceGt;
-        $._totalSupply += amount;
-        // Permit the contract and the user to use the new balance handle
-        MpcCore.permitThis(newBalanceGt);
-        MpcCore.permit(newBalanceGt, _msgSender());
-        emit Shield(_msgSender(), amount);
-        return true;
-    }
-    // Function to unshield private tokens back to standard ERC20 tokens
-    function unshield(uint256 privateAmount) public virtual whenNotPaused returns (bool) {
-        return _unshieldTo(privateAmount, _msgSender());
-    }
-
-    // Function to unshield private tokens back to standard ERC20 tokens for master address
-    function unshieldForMaster(uint256 privateAmount) public virtual whenNotPaused returns (bool) {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        return _unshieldTo(privateAmount, $.master);
-    }
-
-    // Internal function to handle unshield logic
-    function _unshieldTo(uint256 privateAmount, address recipient) internal returns (bool) {
-       require(privateAmount > 0, "Amount must be greater than 0");
-       gtUint256 amountGt = MpcCore.setPublic256(privateAmount);
-
-       // user balance = 10, want to unshield 3. checkedSubWithOverflowBit(10, 3) = 7, amount to unshield = bal before 10 sub new balance 7 = 3
-       // user balance = 5, want to unshield 7. checkedSubWithOverflowBit(5, 7) = 5, amount to unshield = bal before 5 sub new balance 5 = 0
-       gtUint256 amountToUnshieldGt = _debitBalanceForUnshield(_msgSender(), amountGt);
-
-       _requestUnshieldFromHandle(amountToUnshieldGt, recipient);
-       
-       emit UnshieldRequested(recipient, privateAmount);
-       return true;
-   }
 
     function _debitBalanceForUnshield(
         address account,
@@ -763,13 +932,6 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
         MpcCore.permitThis(balanceAfter);
         MpcCore.permit(balanceAfter, account);
         $.balances[account] = balanceAfter;
-    }
-
-    /// @notice Requests unshielding for an encrypted private-token amount handle.
-    /// @param amountToUnshieldGt The encrypted private-token amount to decrypt and unshield.
-    /// @param recipient Recipient of the underlying token transfer in callback.
-    function _requestUnshieldFromHandle(gtUint256 amountToUnshieldGt, address recipient) internal {
-        _requestUnshieldFromHandle(amountToUnshieldGt, recipient, false);
     }
 
     /// @notice Requests unshielding for an encrypted private-token amount handle.
@@ -814,533 +976,5 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
 
         // Clean up the request
         delete $.unshieldRequests[decryptID];
-
     }
-    
-    /// @notice Mints an OPRF token for the caller using encrypted parameters
-    /// @param quantity The encrypted quantity/amount for the OPRF token
-    function mintOPRFToken(itUint256 calldata quantity) public virtual whenNotPaused {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        gtUint256 qGT = MpcCore.validateCiphertext(quantity);
-        
-        gtUint256 contractBalanceBefore = _balanceOf(address(this));
-        
-        // Transfer tokens from user to contract
-        _transferToContract(qGT);
-        
-        // Calculate actual transferred amount
-        gtUint256 contractBalanceAfter = _balanceOf(address(this));
-        (gtBool overflowBit, gtUint256 actualTransferredCandidate) =
-            MpcCore.checkedSubWithOverflowBit(contractBalanceAfter, contractBalanceBefore);
-        gtUint256 actualTransferred = MpcCore.mux(overflowBit, actualTransferredCandidate, $.zero);
-        MpcCore.permitThis(actualTransferred);
-        
-        // Mint OPRF token using the contract's internal key
-        (gtUint128 x, gtUint128 y) = MpcCore.oprfMint($._oprfKey, actualTransferred);
-        
-        MpcCore.permit(x, _msgSender());
-        MpcCore.permit(y, _msgSender());
-        MpcCore.permit(actualTransferred, _msgSender());
-        
-        
-        emit OPRFMinted(_msgSender(), x, y, actualTransferred);
-    }
-
-    /// @notice Shields a clear amount of underlying and mints an OPRF note for that amount to the caller.
-    function shieldAndMint(uint256 amount)
-        public
-        virtual
-        whenNotPaused
-        returns (gtUint128 x, gtUint128 y, gtUint256 q)
-    {
-        return _shieldAndMint(amount, _msgSender());
-    }
-
-    /// @notice Shields a clear amount of underlying from the caller and mints the OPRF note to `recipient`.
-    /// @dev The caller's private balance is unchanged. Underlying is escrowed here and this contract's private
-    ///      balance increases by `amount`, which backs the note on a later burn.
-    /// @param amount Clear underlying amount to pull, escrow, and mint. Must be greater than zero.
-    /// @param recipient Account permitted to decrypt the new note.
-    function shieldAndMint(uint256 amount, address recipient)
-        public
-        virtual
-        whenNotPaused
-        returns (gtUint128 x, gtUint128 y, gtUint256 q)
-    {
-        require(recipient != address(0), "Recipient cannot be zero address");
-        return _shieldAndMint(amount, recipient);
-    }
-
-    function _shieldAndMint(uint256 amount, address recipient)
-        internal
-        nonReentrant
-        returns (gtUint128 x, gtUint128 y, gtUint256 q)
-    {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        address sender = _msgSender();
-        require(amount > 0, "Amount must be greater than 0");
-        require($.underlying.transferFrom(sender, address(this), amount), "Transfer failed");
-        $._totalSupply += amount;
-
-        gtUint256 amountGt = MpcCore.setPublic256(amount);
-        MpcCore.permitThis(amountGt);
-
-        gtUint256 contractBalanceGt = _balanceOf(address(this));
-        gtUint256 newContractBalanceGt = MpcCore.add(contractBalanceGt, amountGt);
-        $.balances[address(this)] = newContractBalanceGt;
-        MpcCore.permitThis(newContractBalanceGt);
-
-        (x, y) = MpcCore.oprfMint($._oprfKey, amountGt);
-        MpcCore.permit(x, recipient);
-        MpcCore.permit(y, recipient);
-        MpcCore.permit(amountGt, recipient);
-        q = amountGt;
-
-        emit Shield(sender, amount);
-        emit OPRFMinted(recipient, x, y, q);
-    }
-    
-    /// @notice Internal function that performs the core split logic: burn, calculate remainder, and mint new tokens
-    /// @param xGT The validated x value from OPRF minting
-    /// @param qGT The validated quantity from OPRF minting
-    /// @param qSplitGT The validated amount to split off as payment
-    /// @param y_clear The clear (unencrypted) y value for splitting
-    /// @return xrRemainder The x value of the remainder token
-    /// @return yRemainder The y value of the remainder token
-    /// @return qRemainder The quantity of the remainder token
-    /// @return xrPay The x value of the payment token
-    /// @return qPay The quantity of the payment token
-    /// @return yPay The y value of the payment token
-    function _splitTokenInternal(
-        gtUint128 xGT,
-        gtUint256 qGT,
-        gtUint256 qSplitGT,
-        uint128 y_clear,
-        address attributedUser
-    ) internal returns (
-        gtUint128 xrRemainder,
-        gtUint128 yRemainder,
-        gtUint256 qRemainder,
-        gtUint128 xrPay,
-        gtUint256 qPay,
-        gtUint128 yPay
-    ) {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        
-        // Burn the original token to validate it and get the burned amount
-        gtUint256 qBurned = MpcCore.oprfBurn($._oprfKey, xGT, qGT, y_clear);
-        MpcCore.permitThis(qBurned);
-        
-        // Use checked subtraction to avoid underflow when requested split exceeds burned amount.
-        // If overflow occurs, keep full amount as remainder and set payment to zero.
-        (gtBool overflowBit, gtUint256 qRemainderCandidate) = MpcCore.checkedSubWithOverflowBit(qBurned, qSplitGT);
-        qRemainder = MpcCore.mux(overflowBit, qRemainderCandidate, qBurned);
-        qPay = MpcCore.mux(overflowBit, qSplitGT, $.zero);
-        MpcCore.permitThis(qRemainder);
-        MpcCore.permitThis(qPay);
-        
-        // Mint two new tokens: remainder and payment
-        (xrRemainder, yRemainder) = MpcCore.oprfMint($._oprfKey, qRemainder);
-        (xrPay, yPay) = MpcCore.oprfMint($._oprfKey, qPay);
-        
-        // Attribute invalidation to the credited user (Safe on exec, IT owner on relayer).
-        emit OPRFTokenInvalidated(attributedUser, xGT, qGT, y_clear, 1); // 1=split
-    }
-
-    /// @notice Splits an OPRF token into remainder and payment portions using encrypted parameters
-    /// @param x The encrypted x value from OPRF minting
-    /// @param q The encrypted quantity from OPRF minting
-    /// @param y_clear The clear (unencrypted) y value for splitting
-    /// @param qSplit The encrypted amount to split off as payment
-    function splitToken(
-        itUint128 calldata x,
-        itUint256 calldata q,
-        uint128 y_clear,
-        itUint256 calldata qSplit
-    ) public virtual whenNotPaused {
-        address creditTo = _oprfCreditTo(_oprfNoteOwner(x, q, qSplit));
-
-        // Validate and decrypt the encrypted parameters
-        gtUint128 xGT = MpcCore.validateCiphertext(x);
-        gtUint256 qGT = MpcCore.validateCiphertext(q);
-        gtUint256 qSplitGT = MpcCore.validateCiphertext(qSplit);
-        
-        // Perform the split operation
-        (gtUint128 xrRemainder, gtUint128 yRemainder, gtUint256 qRemainder, gtUint128 xrPay, gtUint256 qPay, gtUint128 yPay) = 
-            _splitTokenInternal(xGT, qGT, qSplitGT, y_clear, creditTo);
-        
-        // Permit the note owner (or Safe, when the owner executes) to decrypt the results
-        MpcCore.permit(xrRemainder, creditTo);
-        MpcCore.permit(qRemainder, creditTo);
-        MpcCore.permit(yRemainder, creditTo);
-        MpcCore.permit(xrPay, creditTo);
-        MpcCore.permit(qPay, creditTo);
-        MpcCore.permit(yPay, creditTo);
-        
-        // Emit events
-        emit OPRFSplit(creditTo, xrRemainder, qRemainder, yRemainder, xrPay, qPay, yPay);
-        emit OPRFMinted(creditTo, xrRemainder, yRemainder, qRemainder);
-        emit OPRFMinted(creditTo, xrPay, yPay, qPay);
-    }
-
-    /// @notice Splits an OPRF token for anonymous transfer to a recipient
-    /// @param x The encrypted x coordinate of the OPRF token
-    /// @param q The encrypted quantity/amount of the OPRF token
-    /// @param y_clear The clear (unencrypted) y coordinate of the OPRF token
-    /// @param qSplit The encrypted amount to split off as payment
-    /// @param recipient The address of the recipient who will receive the split values
-    function splitTokenForRecipient(
-        itUint128 calldata x,
-        itUint256 calldata q,
-        uint128 y_clear,
-        itUint256 calldata qSplit,
-        address recipient
-    ) public virtual whenNotPaused {
-        address owner = _oprfNoteOwner(x, q, qSplit);
-        _requireOprfRelayerDest(owner, recipient);
-        address creditTo = _oprfCreditTo(owner);
-
-        // Validate and decrypt the encrypted parameters
-        gtUint128 xGT = MpcCore.validateCiphertext(x);
-        gtUint256 qGT = MpcCore.validateCiphertext(q);
-        gtUint256 qSplitGT = MpcCore.validateCiphertext(qSplit);
-        
-        // Perform the split operation
-        (gtUint128 xrRemainder, gtUint128 yRemainder, gtUint256 qRemainder, gtUint128 xrPay, gtUint256 qPay, gtUint128 yPay) = 
-            _splitTokenInternal(xGT, qGT, qSplitGT, y_clear, creditTo);
-        
-        MpcCore.permit(xrRemainder, creditTo);
-        MpcCore.permit(qRemainder, creditTo);
-        MpcCore.permit(yRemainder, creditTo);
-        
-        MpcCore.permit(xrPay, recipient);
-        MpcCore.permit(qPay, recipient);
-        MpcCore.permit(yPay, recipient);
-        
-        emit OPRFMinted(creditTo, xrRemainder, yRemainder, qRemainder);
-        emit OPRFMinted(recipient, xrPay, yPay, qPay);
-        emit OPRFSplitForRecipient(creditTo, recipient, xrRemainder, qRemainder, yRemainder, xrPay, qPay, yPay);
-    }
-    
-    /// @notice Burns an OPRF token and transfers the burned amount to recipient
-    /// @param x The encrypted x value from OPRF minting or split
-    /// @param q The encrypted quantity from OPRF minting or split
-    /// @param y_clear The clear (unencrypted) y value for burning
-    /// @param recipient The address to receive the burned tokens
-    function burnToken(
-        itUint128 calldata x,
-        itUint256 calldata q,
-        uint128 y_clear,
-        address recipient
-    ) public virtual whenNotPaused {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        address owner = _oprfNoteOwner(x, q);
-        _requireOprfRelayerDest(owner, recipient);
-        address creditTo = _oprfCreditTo(owner);
-
-        // Validate and decrypt the encrypted parameters
-        gtUint128 xGT = MpcCore.validateCiphertext(x);
-        gtUint256 qGT = MpcCore.validateCiphertext(q);
-        
-        
-        // Call oprfBurn to validate and get the burned amount using the contract's internal key
-        // If the OPRF token is invalid, burnedAmount will be 0
-        gtUint256 burnedAmount = MpcCore.oprfBurn($._oprfKey, xGT, qGT, y_clear);
-        
-        // Give the contract permission to use the burned amount
-        MpcCore.permitThis(burnedAmount);
-        
-        // Transfer the burned amount from contract to recipient
-        _transferFromContract(recipient, burnedAmount);
-        
-        MpcCore.permit(burnedAmount, creditTo);
-
-        emit OPRFTokenInvalidated(creditTo, xGT, qGT, y_clear, 3); // 3=burned
-        emit OPRFBurned(creditTo, recipient, burnedAmount);
-    }
-
-    /// @notice Internal function that burns multiple OPRF tokens and accumulates the total burned amount
-    /// @param tokens Array of OPRF token parameters to burn
-    /// @return totalBurned The total amount burned from all tokens
-    function _burnTokensAndAccumulate(
-        OPRFToken[] calldata tokens
-    ) internal returns (gtUint256 totalBurned) {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        address attributedUser = _oprfCreditTo(_oprfTokensOwner(tokens));
-        
-        // Initialize total burned amount with zero (MPC operations grant transient permission automatically)
-        totalBurned = $.zero;
-        
-        // Burn each token and accumulate the burned amounts
-        for (uint256 i = 0; i < tokens.length; i++) {
-            // Validate ciphertexts (grants transient permission to contract)
-            gtUint128 xGT = MpcCore.validateCiphertext(tokens[i].x);
-            gtUint256 qGT = MpcCore.validateCiphertext(tokens[i].q);
-            
-            // oprfBurn grants transient permission for burnedAmount
-            gtUint256 burnedAmount = MpcCore.oprfBurn($._oprfKey, xGT, qGT, tokens[i].y_clear);
-            
-            // add grants transient permission for totalBurned
-            totalBurned = MpcCore.add(totalBurned, burnedAmount);
-            
-            emit OPRFTokenInvalidated(attributedUser, xGT, qGT, tokens[i].y_clear, 3); // 3=burned
-            emit OPRFBurned(attributedUser, address(this), burnedAmount);
-        }
-    }
-
-    /// @notice Merges multiple OPRF tokens by burning them all and creating a new token with the total amount
-    /// @param tokens Array of OPRF token parameters to merge
-    /// @return x The encrypted x value of the newly minted token
-    /// @return y The encrypted y value of the newly minted token
-    /// @return qMerged The encrypted quantity of the newly minted token (total of all burned tokens)
-    function mergeMany(
-        OPRFToken[] calldata tokens
-    ) public virtual whenNotPaused returns (gtUint128 x, gtUint128 y, gtUint256 qMerged) {
-        address creditTo = _oprfCreditTo(_oprfTokensOwner(tokens));
-
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        
-        // Burn all tokens and get the total burned amount
-        gtUint256 totalBurned = _burnTokensAndAccumulate(tokens);
-        
-        // Mint a new OPRF token with the total burned amount using the contract's internal key
-        (x, y) = MpcCore.oprfMint($._oprfKey, totalBurned);
-        
-        MpcCore.permit(x, creditTo);
-        MpcCore.permit(y, creditTo);
-        MpcCore.permit(totalBurned, creditTo);
-        
-        qMerged = totalBurned;
-        
-        emit OPRFMinted(creditTo, x, y, qMerged);
-        emit OPRFMerged(creditTo, x, qMerged, y);
-    }
-
-    /// @notice Transfers OPRF tokens to a recipient by burning input tokens and minting new tokens
-    /// @param tokens Array of OPRF token parameters to burn
-    /// @param amount Encrypted amount to transfer to recipient
-    /// @param recipient Address of the recipient who will receive the tokens
-    /// @return xRecipient The encrypted x value of the recipient's minted token
-    /// @return yRecipient The encrypted y value of the recipient's minted token
-    /// @return qRecipient The encrypted quantity of the recipient's minted token
-    /// @return xSender The encrypted x value of the sender's remainder token
-    /// @return ySender The encrypted y value of the sender's remainder token
-    /// @return qSender The encrypted quantity of the sender's remainder token
-    function transferOPRF(
-        OPRFToken[] calldata tokens,
-        itUint256 calldata amount,
-        address recipient
-    ) public virtual whenNotPaused returns (
-        gtUint128 xRecipient,
-        gtUint128 yRecipient,
-        gtUint256 qRecipient,
-        gtUint128 xSender,
-        gtUint128 ySender,
-        gtUint256 qSender
-    ) {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-        _validateOPRFSpendInputs(tokens.length, recipient);
-        address budgetOwner = _oprfBudgetOwner(tokens, amount);
-        _requireOprfRelayerDest(budgetOwner, recipient);
-        address creditTo = _oprfCreditTo(budgetOwner);
-
-        (, gtUint256 recipientAmount, gtUint256 senderAmount) = _calculateOPRFSpendAmounts(tokens, amount);
-        
-        // Mint OPRF tokens (oprfMint grants transient permission)
-        (xRecipient, yRecipient) = MpcCore.oprfMint($._oprfKey, recipientAmount);
-        (xSender, ySender) = MpcCore.oprfMint($._oprfKey, senderAmount);
-        
-        MpcCore.permit(xRecipient, recipient);
-        MpcCore.permit(yRecipient, recipient);
-        MpcCore.permit(recipientAmount, recipient);
-        MpcCore.permit(recipientAmount, creditTo);
-        
-        MpcCore.permit(xSender, creditTo);
-        MpcCore.permit(ySender, creditTo);
-        MpcCore.permit(senderAmount, creditTo);
-        
-        qRecipient = recipientAmount;
-        qSender = senderAmount;
-        
-        emit OPRFTransferred(creditTo, recipient, recipientAmount);
-        emit OPRFMinted(recipient, xRecipient, yRecipient, qRecipient);
-        emit OPRFMinted(creditTo, xSender, ySender, qSender);
-    }
-
-    function _validateOPRFSpendInputs(uint256 tokenCount, address recipient) private pure {
-        require(tokenCount > 0, "At least one token required");
-        require(recipient != address(0), "Recipient cannot be zero address");
-    }
-
-    /// @notice Budget owner is `it.userAddress`. All OPRF/amount ITs must agree so a relayer cannot mix signers.
-    function _oprfBudgetOwner(
-        OPRFToken[] calldata tokens,
-        itUint256 calldata amount
-    ) private pure returns (address owner) {
-        owner = _oprfTokensOwner(tokens);
-        require(amount.userAddress == owner, "OPRF IT user mismatch");
-    }
-
-    function _oprfNoteOwner(itUint128 calldata x, itUint256 calldata q) private pure returns (address owner) {
-        owner = x.userAddress;
-        require(owner != address(0), "OPRF owner cannot be zero");
-        require(q.userAddress == owner, "OPRF IT user mismatch");
-    }
-
-    function _oprfNoteOwner(
-        itUint128 calldata x,
-        itUint256 calldata q,
-        itUint256 calldata extra
-    ) private pure returns (address owner) {
-        owner = _oprfNoteOwner(x, q);
-        require(extra.userAddress == owner, "OPRF IT user mismatch");
-    }
-
-    function _oprfTokensOwner(OPRFToken[] calldata tokens) private pure returns (address owner) {
-        require(tokens.length > 0, "At least one token required");
-        owner = tokens[0].x.userAddress;
-        require(owner != address(0), "OPRF owner cannot be zero");
-        for (uint256 i = 0; i < tokens.length; ++i) {
-            require(tokens[i].x.userAddress == owner && tokens[i].q.userAddress == owner, "OPRF IT user mismatch");
-        }
-    }
-
-    /// @dev Relayer (`tx.origin != IT owner`) may only credit the owner. Owner/Safe (`tx.origin == owner`) keep caller-chosen dest.
-    function _requireOprfRelayerDest(address owner, address recipient) private view {
-        // Signed execute binds recipient in calldata; unsigned relay keeps dest lock.
-        if (_getGaslessStorage().currentAuthFrom != address(0)) {
-            return;
-        }
-        if (tx.origin != owner) {
-            require(recipient == owner, "Relayer dest must be IT owner");
-        }
-    }
-
-    /// @dev Remainder credit: Safe exec keeps `_msgSender()` (the Safe); a relayer credits the IT owner.
-    function _oprfCreditTo(address owner) private view returns (address) {
-        return tx.origin == owner ? _msgSender() : owner;
-    }
-
-    function _calculateOPRFSpendAmounts(
-        OPRFToken[] calldata tokens,
-        itUint256 calldata amount
-    ) private returns (
-        gtUint256 totalBurned,
-        gtUint256 spendAmount,
-        gtUint256 remainderAmount
-    ) {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-
-        totalBurned = _burnTokensAndAccumulate(tokens);
-        gtUint256 amountToTransfer = MpcCore.validateCiphertext(amount);
-        (gtBool overflowBit, gtUint256 remainder) = MpcCore.checkedSubWithOverflowBit(totalBurned, amountToTransfer);
-
-        spendAmount = MpcCore.mux(overflowBit, amountToTransfer, $.zero);
-        remainderAmount = MpcCore.mux(overflowBit, remainder, totalBurned);
-    }
-
-    function _mintRedeemRemainder(
-        address budgetOwner,
-        address recipient,
-        gtUint256 totalBurned,
-        gtUint256 recipientAmount,
-        gtUint256 senderRemainder
-    ) private returns (
-        gtUint128 xRemainder,
-        gtUint128 yRemainder,
-        gtUint256 qRemainder
-    ) {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-
-        address creditTo = _oprfCreditTo(budgetOwner);
-
-        (xRemainder, yRemainder) = MpcCore.oprfMint($._oprfKey, senderRemainder);
-
-        MpcCore.permit(xRemainder, creditTo);
-        MpcCore.permit(yRemainder, creditTo);
-        MpcCore.permit(senderRemainder, creditTo);
-        MpcCore.permit(recipientAmount, creditTo);
-        MpcCore.permit(totalBurned, creditTo);
-
-        qRemainder = senderRemainder;
-
-        emit OPRFBurned(creditTo, recipient, totalBurned);
-        emit OPRFMinted(creditTo, xRemainder, yRemainder, qRemainder);
-    }
-
-    function _unshieldRedeemedRecipientAmount(
-        address recipient,
-        gtUint256 recipientAmount,
-        bool unwrap
-    ) private {
-        gtUint256 amountToUnshieldGt = _debitBalanceForUnshield(recipient, recipientAmount);
-        _requestUnshieldFromHandle(amountToUnshieldGt, recipient, unwrap);
-    }
-
-    /// @notice Redeems multiple OPRF tokens by burning them all, transferring the specified amount as private tokens to recipient, and minting a leftover OPRF token if there's a remainder
-    /// @param tokens Array of OPRF token parameters to burn
-    /// @param amount Encrypted amount to transfer to recipient as private tokens
-    /// @param recipient Address of the recipient who will receive the private tokens
-    /// @return xRemainder The encrypted x value of the sender's remainder token (if any)
-    /// @return yRemainder The encrypted y value of the sender's remainder token (if any)
-    /// @return qRemainder The encrypted quantity of the sender's remainder token (if any)
-    function redeemMany(
-        OPRFToken[] calldata tokens,
-        itUint256 calldata amount,
-        address recipient
-    ) public virtual whenNotPaused returns (
-        gtUint128 xRemainder,
-        gtUint128 yRemainder,
-        gtUint256 qRemainder
-    ) {
-        _validateOPRFSpendInputs(tokens.length, recipient);
-        address budgetOwner = _oprfBudgetOwner(tokens, amount);
-        _requireOprfRelayerDest(budgetOwner, recipient);
-
-        (gtUint256 totalBurned, gtUint256 recipientAmount, gtUint256 senderRemainder) =
-            _calculateOPRFSpendAmounts(tokens, amount);
-
-        _transferFromContract(recipient, recipientAmount);
-
-        return _mintRedeemRemainder(budgetOwner, recipient, totalBurned, recipientAmount, senderRemainder);
-    }
-
-    /// @notice Redeems multiple OPRF tokens and directly unshields the redeemed amount to underlying tokens for recipient.
-    /// @dev The redeemed amount never remains in recipient's private balance: it is credited and immediately debited before unshield callback.
-    /// @dev Relayer (`tx.origin != it.userAddress`) must set `recipient` to the IT owner; owner/Safe may choose any dest.
-    /// @param tokens Array of OPRF token parameters to burn
-    /// @param amount Encrypted amount to redeem and unshield
-    /// @param recipient Address receiving the underlying tokens after callback
-    /// @param unwrap If true, unwrap wrapped-native underlying and send native token
-    /// @return xRemainder The encrypted x value of the sender's remainder token (if any)
-    /// @return yRemainder The encrypted y value of the sender's remainder token (if any)
-    /// @return qRemainder The encrypted quantity of the sender's remainder token (if any)
-    function redeemManyToUnderlying(
-        OPRFToken[] calldata tokens,
-        itUint256 calldata amount,
-        address recipient,
-        bool unwrap
-    ) public virtual whenNotPaused returns (
-        gtUint128 xRemainder,
-        gtUint128 yRemainder,
-        gtUint256 qRemainder
-    ) {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-
-        _validateOPRFSpendInputs(tokens.length, recipient);
-        address budgetOwner = _oprfBudgetOwner(tokens, amount);
-        _requireOprfRelayerDest(budgetOwner, recipient);
-        if (unwrap) {
-            require($.underlyingIsWrappedNative, "Underlying unwrap not configured");
-        }
-
-        (gtUint256 totalBurned, gtUint256 recipientAmount, gtUint256 senderRemainder) =
-            _calculateOPRFSpendAmounts(tokens, amount);
-
-        _transferFromContract(recipient, recipientAmount);
-        _unshieldRedeemedRecipientAmount(recipient, recipientAmount, unwrap);
-
-        return _mintRedeemRemainder(budgetOwner, recipient, totalBurned, recipientAmount, senderRemainder);
-    }
-
 }
