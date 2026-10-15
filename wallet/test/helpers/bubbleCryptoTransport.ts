@@ -671,3 +671,15 @@ export function prepareMessageForBubble256(
 
   return { encryptedHigh, encryptedLow, messageBytes: getBytes(messageBytes) };
 }
+
+/**
+ * Locally open an unsigned itUint256 ciphertext with the AES key it was encrypted under.
+ */
+export function decryptItUint256(
+  userAesKey: Buffer,
+  ciphertextHigh: bigint,
+  ciphertextLow: bigint
+): bigint {
+  const to32 = (value: bigint) => Buffer.from(value.toString(16).padStart(UINT256_HEX_CHARS, "0"), "hex");
+  return decryptEncryptedOutput(Buffer.concat([to32(ciphertextHigh), to32(ciphertextLow)]), userAesKey);
+}

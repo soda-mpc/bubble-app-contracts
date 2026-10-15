@@ -159,6 +159,35 @@ async function main(): Promise<number> {
     },
   ];
 
+  const gasless = deployment as DeploymentResult & {
+    gaslessTestToken?: { address: string; name: string; symbol: string };
+    gaslessFactory?: { library: string; implementation: string; factory: string };
+  };
+  if (gasless.gaslessTestToken) {
+    targets.push({
+      name: "TUSDC (gasless test token)",
+      address: gasless.gaslessTestToken.address,
+      constructorArguments: [gasless.gaslessTestToken.name, gasless.gaslessTestToken.symbol],
+      contract: "contracts/TUSDC.sol:TUSDC",
+    });
+  }
+  if (gasless.gaslessFactory) {
+    targets.push(
+      {
+        name: "PrivateOPRFNotes (Library)",
+        address: gasless.gaslessFactory.library,
+        constructorArguments: [],
+        contract: "contracts/libraries/PrivateOPRFNotes.sol:PrivateOPRFNotes",
+      },
+      {
+        name: "PrivateERC20GaslessFactory",
+        address: gasless.gaslessFactory.factory,
+        constructorArguments: [gasless.gaslessFactory.implementation],
+        contract: "contracts/PrivateERC20GaslessFactory.sol:PrivateERC20GaslessFactory",
+      }
+    );
+  }
+
   let ok = 0;
   let fail = 0;
   for (const target of targets) {
