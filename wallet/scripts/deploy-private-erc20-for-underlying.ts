@@ -42,7 +42,7 @@ async function main() {
   const underlying =
     process.env.UNDERLYING_ADDRESS ||
     existingUnderlying ||
-    "0x15DF3e9761cEc63234c53b8aa576479219d6f789";
+    "0x3bf988D8242f0F915aa012E317f0498f6F03E513";
   const tokenName = process.env.TOKEN_NAME || "Private TUSDC v2";
   const tokenSymbol = process.env.TOKEN_SYMBOL || "pTUSDC2";
   const ownerAddress = process.env.OWNER_ADDRESS || deployer.address;
@@ -82,6 +82,10 @@ async function main() {
   const hasRedeem = implCode.toLowerCase().includes(redeemSel.toLowerCase());
   console.log("\nProxy:", proxyAddress);
   console.log("Implementation:", implAddress);
+  if (gasless) {
+    console.log("PrivateOPRFNotes library:", (privateToken as any).oprfNotesLibrary);
+    console.log("Gasless forwarder:", await (privateToken as any).gaslessForwarder.getAddress());
+  }
   console.log("redeemManyToUnderlying selector present:", hasRedeem);
   if (!hasRedeem) {
     throw new Error("Deployed implementation is missing redeemManyToUnderlying — aborting");
@@ -116,6 +120,12 @@ async function main() {
       symbol: onChainSymbol,
       underlying: onChainUnderlying,
       variant: gasless ? "PrivateERC20Contract256Gasless" : "PrivateERC20Contract256",
+      ...(gasless
+        ? {
+            oprfNotesLibrary: (privateToken as any).oprfNotesLibrary,
+            gaslessForwarder: await (privateToken as any).gaslessForwarder.getAddress(),
+          }
+        : {}),
       blockNumber,
       hasRedeemManyToUnderlying: true,
     },

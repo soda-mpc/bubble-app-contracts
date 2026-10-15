@@ -18,6 +18,7 @@
     "balance:proxy": "hardhat run scripts/decrypt-balance-via-proxy.ts --network kurtosis",
     "get-signing-key": "hardhat run scripts/get-signing-key.ts --network kurtosis",
     "deploy:private-erc20:arbitrum-sepolia": "hardhat run scripts/deploy-private-erc20-for-underlying.ts --network sepolia-arbitrum",
+    "deploy:gasless-factory:arbitrum-sepolia": "hardhat run scripts/deploy-private-erc20-gasless-factory.ts --network sepolia-arbitrum",
     "deploy:upgradable:base-sepolia": "hardhat run scripts/deploy-upgradable-private-erc20.ts --network sepolia-base",
     "transfer-ownership:base-sepolia": "hardhat run scripts/transfer-ownership-to-safe.ts --network sepolia-base",
     "prepare-upgrade:base-sepolia": "hardhat run scripts/prepare-upgrade.ts --network sepolia-base",

@@ -164,7 +164,25 @@ async function main(): Promise<number> {
     address: string;
     implementation?: string;
     variant?: string;
+    oprfNotesLibrary?: string;
+    gaslessForwarder?: string;
   };
+  if (privateTokenAny.oprfNotesLibrary) {
+    targets.push({
+      name: "PrivateOPRFNotes (Library)",
+      address: privateTokenAny.oprfNotesLibrary,
+      constructorArguments: [],
+      contract: "contracts/libraries/PrivateOPRFNotes.sol:PrivateOPRFNotes",
+    });
+  }
+  if (privateTokenAny.gaslessForwarder) {
+    targets.push({
+      name: "PrivateERC20GaslessForwarder",
+      address: privateTokenAny.gaslessForwarder,
+      constructorArguments: [privateTokenAny.address],
+      contract: "contracts/PrivateERC20GaslessForwarder.sol:PrivateERC20GaslessForwarder",
+    });
+  }
   if (privateTokenAny.implementation) {
     const variant = privateTokenAny.variant || "PrivateERC20Contract256";
     const fqn =
