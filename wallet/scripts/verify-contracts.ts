@@ -79,14 +79,14 @@ async function verify(
   address: string,
   constructorArguments: unknown[] = [],
   contract?: string,
-  libraries?: Record<string, Record<string, string>>
+  libraries?: Record<string, string>
 ): Promise<boolean> {
   try {
     const params: {
       address: string;
       constructorArguments: unknown[];
       contract?: string;
-      libraries?: Record<string, Record<string, string>>;
+      libraries?: Record<string, string>;
     } = {
       address,
       constructorArguments,
@@ -143,7 +143,7 @@ async function main(): Promise<number> {
     address: string;
     constructorArguments?: unknown[];
     contract?: string;
-    libraries?: Record<string, Record<string, string>>;
+    libraries?: Record<string, string>;
   }> = [
     {
       name: "TUSDC (Test Token)",
@@ -198,9 +198,7 @@ async function main(): Promise<number> {
         constructorArguments: [],
         contract: "contracts/PrivateERC20Contract256Gasless.sol:PrivateERC20Contract256Gasless",
         libraries: {
-          "contracts/libraries/PrivateOPRFNotes.sol": {
-            PrivateOPRFNotes: gasless.gaslessFactory.library,
-          },
+          "contracts/libraries/PrivateOPRFNotes.sol:PrivateOPRFNotes": gasless.gaslessFactory.library,
         },
       },
       {

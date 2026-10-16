@@ -64,9 +64,7 @@ function dummyIt128(user: string) {
 function shouldSkip(): boolean {
   return (
     !process.env.MNEMONIC ||
-    (!process.env.QUICKNODE_ARBITRUM_SEPOLIA_URL &&
-      !process.env.ALCHEMY_API_KEY &&
-      !process.env.KURTOSIS)
+    (!process.env.SEPOLIA_ARBITRUM_RPC_URL && !process.env.ALCHEMY_API_KEY)
   );
 }
 
@@ -297,7 +295,7 @@ describe("PrivateERC20Contract256Gasless", function () {
       const other = Wallet.createRandom().address;
       await expect(
         privateToken.splitToken(dummyIt128(owner.address), dummyIt256(other), 0, dummyIt256(owner.address))
-      ).to.be.reverted;
+      ).to.be.revertedWith("OPRF IT user mismatch");
     });
 
     it("reverts redeemMany when amount IT userAddress differs from token ITs", async function () {
@@ -308,7 +306,7 @@ describe("PrivateERC20Contract256Gasless", function () {
           dummyIt256(other),
           owner.address
         )
-      ).to.be.reverted;
+      ).to.be.revertedWith("OPRF IT user mismatch");
     });
   });
 
@@ -323,7 +321,7 @@ describe("PrivateERC20Contract256Gasless", function () {
             facilitator.address,
             false
           )
-      ).to.be.reverted;
+      ).to.be.revertedWith("Relayer dest must be IT owner");
     });
 
     it("signed redeemManyToUnderlying can pay a third party", async function () {

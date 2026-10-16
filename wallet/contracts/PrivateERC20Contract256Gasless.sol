@@ -379,7 +379,8 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
     
     /// @notice Emergency recovery function to transfer unreserved underlying tokens to the owner.
     /// @dev Only the owner can call this function. Pauses the contract and resets totalSupply to zero.
-    ///      Underlying parked for `claimUnshielded` stays in the contract.
+    ///      Underlying parked for `claimUnshielded` stays in the contract. In-flight unshield callbacks
+    ///      from before this call are dropped, so they cannot be paid from a later deposit.
     /// @return The amount of tokens recovered
     function emergencyRecovery() external onlyOwner nonReentrant returns (uint256) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
@@ -399,6 +400,7 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
         }
 
         $._totalSupply = 0;
+        $.unshieldEpoch += 1;
 
         return recoverable;
     }
@@ -941,7 +943,8 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
 
         $.unshieldRequests[decryptCounter] = UnshieldRequest({
             user: recipient,
-            unwrapNative: unwrapNative
+            unwrapNative: unwrapNative,
+            epoch: $.unshieldEpoch
         });
 
         requestDecryption(handles, this.callbackUnshield.selector);
@@ -956,7 +959,14 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
         uint256 privateAmountToUnshield = abi.decode(output[0], (uint256));
         address user = request.user;
         bool unwrapNative = request.unwrapNative;
+        uint256 epoch = request.epoch;
         delete $.unshieldRequests[decryptID];
+
+        // Recovery already swept the backing for this request and zeroed supply.
+        if (epoch != $.unshieldEpoch) {
+            emit UnshieldFailed(user, privateAmountToUnshield);
+            return;
+        }
 
         if (privateAmountToUnshield == 0) {
             emit UnshieldFailed(user, privateAmountToUnshield);

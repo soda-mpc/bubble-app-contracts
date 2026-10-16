@@ -61,9 +61,7 @@ const OPRF_KEY_SLOT = PRIVATE_ERC20_STORAGE_LOCATION + 8n;
 function shouldSkip(): boolean {
   return (
     !process.env.MNEMONIC ||
-    (!process.env.QUICKNODE_ARBITRUM_SEPOLIA_URL &&
-      !process.env.ALCHEMY_API_KEY &&
-      !process.env.KURTOSIS)
+    (!process.env.SEPOLIA_ARBITRUM_RPC_URL && !process.env.ALCHEMY_API_KEY)
   );
 }
 

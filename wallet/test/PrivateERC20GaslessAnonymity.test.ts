@@ -51,7 +51,7 @@ const PAY_AMOUNT = 5n * 10n ** 18n;
 function shouldSkip(): boolean {
   return (
     !process.env.MNEMONIC ||
-    (!process.env.QUICKNODE_ARBITRUM_SEPOLIA_URL && !process.env.ALCHEMY_API_KEY && !process.env.KURTOSIS)
+    (!process.env.SEPOLIA_ARBITRUM_RPC_URL && !process.env.ALCHEMY_API_KEY)
   );
 }
 
