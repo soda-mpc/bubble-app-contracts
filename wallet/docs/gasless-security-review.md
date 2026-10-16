@@ -96,9 +96,9 @@ PrivateERC20Contract256Gasless
 
 | Contract | Size (bytes) |
 |---|---|
-| `PrivateERC20Contract256Gasless` | 20,495 |
-| `PrivateOPRFNotes` | 6,376 |
-| `PrivateERC20GaslessForwarder` | 3,494 |
+| `PrivateERC20Contract256Gasless` | 21,257 |
+| `PrivateOPRFNotes` | 6,540 |
+| `PrivateERC20GaslessForwarder` | 4,036 |
 
 ### Security rules now enforced
 
@@ -115,7 +115,7 @@ PrivateERC20Contract256Gasless
 | `contracts/PrivateERC20Contract256Gasless.sol` | ERC-2771 context, removed self-call/dispatcher/EIP-712, ciphertext ownership check, raw-handle checks, admin hardening, OPRF ops call the library |
 | `contracts/PrivateERC20GaslessForwarder.sol` | New: signature verification, nonces, cancel, insert grant, ERC-2771 call |
 | `contracts/libraries/PrivateOPRFNotes.sol` | New: OPRF split/burn/merge/transfer/redeem logic |
-| `contracts/libraries/PrivateERC20GaslessStorage.sol` | New: shared storage struct (same ERC-7201 slot and layout), `OPRFToken` |
+| `contracts/libraries/PrivateERC20GaslessStorage.sol` | New: shared storage struct (same ERC-7201 slot, extended with parked-claim fields), `OPRFToken` |
 | `test/helpers/testHelpers.ts` | Deploys and links the library, deploys the forwarder, sets it on the token |
 | `scripts/deploy-private-erc20-for-underlying.ts`, `scripts/verify-contracts.ts` | Record and verify library and forwarder addresses |
 | `test/PrivateERC20GaslessSecurity.test.ts` | New: 28 security regression tests |

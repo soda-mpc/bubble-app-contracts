@@ -24,7 +24,7 @@ cd bubble-app-contracts/wallet
 FACILITATOR_URL=http://localhost:8002 npm run test:safe:oprf-facilitator-service:arbitrum-sepolia
 ```
 
-Deploys `MockEIP3009Token` named **TestUSD** (matches facilitator `EIP3009_NAME`). Agent is funded only via `POST /v1/faucet`, then ACL permit, then signed `executeWithAuthorization` + `POST /v1/spend`.
+Deploys `MockEIP3009Token` named **TestUSD** (matches facilitator `EIP3009_NAME`). The agent signs a transient insert grant and `executeWithAuthorization` against the forwarder, then `POST /v1/spend`. The agent does not need ETH for that.
 
 ---
 
@@ -301,7 +301,8 @@ Response `202`: `{ "jobId": "…", "status": "accepted" }`.
 | Failure | Chain state | FE |
 |---------|-------------|-----|
 | Redeem reverts | Note still valid | Retry `/v1/spend` (new idempotency key if calldata changed) |
-| `UnshieldFailed` | No clear USDC | Show error; do not assume payout |
+| `UnshieldFailed` (amount 0) | Decrypt produced nothing. Nothing is parked | Show error; do not assume payout |
+| `UnshieldParked` | Underlying sits on the private token for `account` | Read `claimableUnderlying(account)`. User calls `claimUnshielded(to)` to pull the ERC20. A pause does not block the claim |
 | Unshield OK, 3009 fails / expired | **USDC sits on agent** | `failed` + “Complete payout”; resign 3009 |
 
 Escape hatch (facilitator should expose):
@@ -322,51 +323,20 @@ Optional later (ops): `POST /v1/relay/redeem` and `POST /v1/relay/eip3009`. Prod
 | Decrypt `(x, y, q)` | Issuer FE via Bubble proxy |
 | Build `redeemManyToUnderlying` calldata | Agent FE |
 | Sign EIP-712 `executeWithAuthorization` | Agent FE (agent key) |
-| Sign EIP-712 `PermitFullInsertAccess` (proposed GCACL) | Agent FE (agent key); facilitator submits |
+| Sign EIP-712 transient insert grant (`verifyingContract` = GCACL) | Agent FE (agent key); facilitator submits it with the execute |
 | Sign EIP-3009 | Agent FE (agent key) |
 | Broadcast + wait unshield + 3009 | Facilitator |
 | Store notes / agent keys | FE local (encrypted) |
 
 Facilitator should receive **encoded calldata + signatures**, not a standing copy of note plaintext. Ciphertexts will appear on-chain anyway.
 
-### Insert ACL (easy to get wrong)
+### Insert ACL
 
-`GCHandler.ValidateCiphertext` checks `isFullInsertPermitted(userAddress, msg.sender)` where `msg.sender` is **PrivateERC20**, not the facilitator. Granting insert to the facilitator EOA is a **no-op** on Arbitrum Sepolia.
+`GCHandler.ValidateCiphertext` accepts a ciphertext when `tx.origin` is the user, when a persistent `permitFullInsertAccess` exists, or when this transaction set the transient insert bit for `(it.userAddress, msg.sender)`. On a forwarded call `msg.sender` is the private token, not the facilitator. A grant to the facilitator EOA does nothing.
 
-**Today (POC):** the **agent** must call, once (long TTL is fine):
+The facilitator path uses that transient grant. The agent signs `TransientInsertPermission` (`verifyingContract` = GCACL, name `"SodaLabs MPC"`, version `"1"`, fields `nonce`, `user` = agent, `contract` = private token). The facilitator submits it inside `forwarder.executeWithAuthorization`, which calls `consumeInsertGrant` before the redeem. The transaction target and the execute-signature `verifyingContract` are the forwarder. Follow the spend steps above and `TRANSIENT-INSERT-GRANT.md`.
 
-`GCACL.permitFullInsertAccess(privateTokenAddress, expiration)`
-
-`permitter` is always `msg.sender` of that GCACL call. Relaying the agent’s raw EOA tx still charges `from` (the agent). Wrapping the call in PrivateERC20 `executeWithAuthorization` also fails: GCACL would see `permitter = token`. Faucet + agent-submitted permit is the current workaround.
-
-**Proposed GCACL change (full agent gasless):** keep the existing function; add a signed sibling that writes the **same** mapping `ValidateCiphertext` already reads (`permitter = agent`, `permittee = privateToken`). `ValidateCiphertext` does not change. Pattern is ERC-2612 / the same EIP-712 + EIP-1271 style as `executeWithAuthorization`.
-
-```solidity
-function permitFullInsertAccessWithAuthorization(
-    address permitter,      // agent
-    address permittee,      // PrivateERC20
-    uint64 expirationDate,
-    uint256 validAfter,
-    uint256 validBefore,
-    bytes32 nonce,
-    bytes calldata signature
-) external;
-```
-
-Typed data (`verifyingContract` = GCACL):
-
-```text
-PermitFullInsertAccess(address permitter,address permittee,uint64 expirationDate,uint256 validAfter,uint256 validBefore,bytes32 nonce)
-```
-
-Checks: non-zero addresses, `expirationDate > now`, time window, nonce unused for `permitter`, `SignatureChecker.isValidSignatureNow(permitter, hash, signature)`, then the same store write as `permitFullInsertAccess`.
-
-Agent signs; facilitator pays gas and submits. Do **not** set `permittee` to the facilitator. One facilitator tx can run grant then redeem:
-
-1. `GCACL.permitFullInsertAccessWithAuthorization(agent, token, …)`
-2. `token.executeWithAuthorization(…redeemManyToUnderlying…)`
-
-This lives in **bubble-core-contracts** (GCACL), not `PrivateERC20Contract256Gasless`. Until it ships, FE still faucet → agent permit → spend.
+A user who sends their own transaction can still call `GCACL.permitFullInsertAccess(privateToken, expiration)` and pay gas. The facilitator path does not.
 
 ### Dest lock (FE must set recipient = agent)
 
@@ -435,7 +405,7 @@ Underlying **must** support EIP-3009 `transferWithAuthorization` (real USDC or a
 - [ ] Issuer shield / mint / decrypt note
 - [ ] Agent EOA create + Bubble onboard
 - [ ] Local encrypted note store + assign
-- [ ] Agent IT encrypt + `permitFullInsertAccess` (faucet POC; later signed `permitFullInsertAccessWithAuthorization`)
+- [ ] Agent IT encrypt + transient insert grant, then `executeWithAuthorization` with `verifyingContract` = forwarder
 - [ ] EIP-3009 typed-data sign (USDC version / domain)
 - [ ] `POST /v1/spend` + poll + partial-failure CTA
 - [ ] Copy that does not claim issuer unlinkability beyond “no address edge on-chain”

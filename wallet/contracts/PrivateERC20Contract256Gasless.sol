@@ -74,6 +74,8 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
     event Unshield(address indexed to, uint256 amount);
     event UnshieldRequested(address indexed to, uint256 amount);
     event UnshieldFailed(address indexed to, uint256 amount);
+    /// @notice Underlying stayed in this contract after the push to `account` failed. Pull it with `claimUnshielded`.
+    event UnshieldParked(address indexed account, uint256 amount);
     event UnshieldClaimed(address indexed account, address indexed to, uint256 amount);
     event MasterUpdated(address indexed oldMaster, address indexed newMaster);
     event EmergencyRecovery(address indexed owner, uint256 amount);
@@ -99,7 +101,7 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
     event OPRFTokenInvalidated(address indexed user, gtUint128 x, gtUint256 q, uint128 y, uint8 reason);
     
     // PrivateERC20Contract256Storage, UnshieldRequest and OPRFToken live in libraries/PrivateERC20GaslessStorage.sol
-    // (same ERC-7201 slot and layout) so the linked PrivateOPRFNotes library shares them.
+    // (same ERC-7201 slot) so the linked PrivateOPRFNotes library shares them.
 
     /// @custom:storage-location erc7201:bubble.storage.PrivateERC20Contract256Gasless
     struct GaslessStorage {
@@ -375,11 +377,9 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
         _unpause();
     }
     
-    /// @notice Emergency recovery function to transfer all underlying tokens to the owner
-    /// @dev Only the owner can call this function
-    /// @dev This function pauses the contract, transfers all underlying ERC20 tokens held by the contract
-    ///      to the owner, and resets totalSupply to zero.
-    /// @dev Use this function only in emergency situations
+    /// @notice Emergency recovery function to transfer unreserved underlying tokens to the owner.
+    /// @dev Only the owner can call this function. Pauses the contract and resets totalSupply to zero.
+    ///      Underlying parked for `claimUnshielded` stays in the contract.
     /// @return The amount of tokens recovered
     function emergencyRecovery() external onlyOwner nonReentrant returns (uint256) {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
@@ -389,15 +389,18 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
 
         address ownerAddress = owner();
         uint256 balance = $.underlying.balanceOf(address(this));
-        
-        if (balance > 0) {
-            require($.underlying.transfer(ownerAddress, balance), "Transfer failed");
-            emit EmergencyRecovery(ownerAddress, balance);
+        uint256 reserved = $.claimableUnderlyingTotal;
+        require(balance >= reserved, "Recovery would take claims");
+        uint256 recoverable = balance - reserved;
+
+        if (recoverable > 0) {
+            require($.underlying.transfer(ownerAddress, recoverable), "Transfer failed");
+            emit EmergencyRecovery(ownerAddress, recoverable);
         }
 
         $._totalSupply = 0;
-        
-        return balance;
+
+        return recoverable;
     }
 
     /// @notice Recovers accidental native-token dust sent to the contract.
@@ -979,6 +982,11 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
         emit Unshield(user, privateAmountToUnshield);
     }
 
+    /// @notice Clear underlying parked for `account` after a failed unshield push.
+    function claimableUnderlying(address account) external view returns (uint256) {
+        return _getPrivateERC20Contract256Storage().claimableUnderlying[account];
+    }
+
     /// @notice Pulls underlying parked by a failed unshield push. `to` receives the ERC20.
     function claimUnshielded(address to) external nonReentrant {
         require(to != address(0), "Recipient cannot be zero address");
@@ -987,6 +995,7 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
         uint256 amount = $.claimableUnderlying[account];
         require(amount > 0, "Nothing to claim");
         $.claimableUnderlying[account] = 0;
+        $.claimableUnderlyingTotal -= amount;
         require($.underlying.transfer(to, amount), "Transfer failed");
         emit UnshieldClaimed(account, to, amount);
     }
@@ -996,8 +1005,9 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
     function _parkFailedUnshield(address user, uint256 amount) private {
         PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
         $.claimableUnderlying[user] += amount;
+        $.claimableUnderlyingTotal += amount;
         $._totalSupply -= amount;
-        emit UnshieldFailed(user, amount);
+        emit UnshieldParked(user, amount);
     }
 
     function _tryTransferUnderlying(address to, uint256 amount) private returns (bool) {

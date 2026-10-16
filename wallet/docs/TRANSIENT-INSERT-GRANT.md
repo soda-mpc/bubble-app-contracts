@@ -57,11 +57,11 @@ PrivateERC20 does not check the signature. On the relayed redeem, burn, or split
 
 `permitFullInsertAccess` stays for a user who submits it directly. This grant is separate from `MpcCore.permitTransient`, which permits a handle after validation.
 
-The signature does not name the note or the calldata. Whoever broadcasts it may attach any of that user’s ciphertexts, once, in one transaction, and only through the signed contract. Possession of the note remains the spend authority. `transientInsertPermission` and the `verifyCiphertextTransient` calls happen in the same token call. A grant in an earlier transaction is already gone.
+The signature does not name the note or the calldata. Whoever broadcasts it may attach any of that user’s ciphertexts, once, in one transaction, and only through the signed contract. Possession of the note remains the spend authority. `transientInsertPermission` and the `validateCiphertext` calls happen in the same token call. A grant in an earlier transaction is already gone.
 
 ## Implementation
 
-1. Confirm that the handler reads GCACL by a call during the transaction. The transient flag is visible to `verifyCiphertextTransient` only that way. If the handler reads state from before the transaction, the flag is invisible and this design does not work.
+1. Confirm that the handler reads GCACL by a call during the transaction. The transient flag is visible to `validateCiphertext` only that way. If the handler reads state from before the transaction, the flag is invisible and this design does not work.
 2. Add a Soda-controlled nonce contract. It stores the next nonce per user, accepts only that nonce, and increments it when the grant is consumed. The increment happens inside the token call, so a reverted redeem rolls the nonce back too.
 3. Add `GCACL.transientInsertPermission(user, nonce, signature)`, which PrivateERC20 calls:
    - rebuilds the EIP-712 digest for `(nonce, user, contract)`
@@ -73,6 +73,6 @@ The signature does not name the note or the calldata. Whoever broadcasts it may 
    - does not write `isFullInsertPermitted`
 4. Teach `GCHandler.ValidateCiphertext` to accept `GCACL.isTransientInsertPermitted(it.userAddress, msg.sender)`. Leave the bit set so one redeem can validate `x`, `q`, and any splits. Do not add a second entry point.
 5. The forwarder takes the insert signature beside `executeWithAuthorization` and calls `consumeInsertGrant` once before the user operation. Direct user calls, where `tx.origin` is the user, keep working without a grant.
-6. Pass the authorization inside the relayed token call (`executeWithAuthorization` → redeem / burn / split). Do not catch a failure and continue. The grant would already be live for whatever runs next in that transaction. A grant for the token does not cover a compliance module or vault that calls the precompile itself; that caller would need its own signature and its own `verifyCiphertextTransient` calls.
-7. Test the facilitator path on Arbitrum Sepolia: signature from the agent, gas from the facilitator, several `verifyCiphertextTransient` calls succeeding in that token call, the same ciphertexts failing through `validateCiphertext` without `permitFullInsertAccess`, a second transaction with the same signature failing, and a ciphertext whose `userAddress` is not the signer failing.
+6. Pass the authorization inside the relayed token call (`executeWithAuthorization` → redeem / burn / split). Do not catch a failure and continue. The grant would already be live for whatever runs next in that transaction. A grant for the token does not cover a compliance module or vault that calls the precompile itself; that caller would need its own signature and its own `validateCiphertext` calls after its own `transientInsertPermission`.
+7. Test the facilitator path on Arbitrum Sepolia: signature from the agent, gas from the facilitator, several `validateCiphertext` calls succeeding in that token call, the same ciphertexts failing through `validateCiphertext` without the transient grant or `permitFullInsertAccess`, a second transaction with the same signature failing, and a ciphertext whose `userAddress` is not the signer failing.
 

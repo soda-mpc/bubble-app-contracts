@@ -202,8 +202,10 @@ library PrivateOPRFNotes {
         (gtUint256 totalBurned, gtUint256 recipientAmount, gtUint256 senderRemainder) =
             _spendAmounts(tokens, amount, creditTo);
 
-        _transferFromContract(recipient, recipientAmount);
-        amountToUnshield = _debitBalanceForUnshield(recipient, recipientAmount);
+        // A failed pool transfer credits nothing. Debit that credited amount, not the requested one,
+        // or the recipient's existing private balance is burned and unshielded.
+        gtUint256 transferred = _transferFromContract(recipient, recipientAmount);
+        amountToUnshield = _debitBalanceForUnshield(recipient, transferred);
 
         (x, y, q) = _mintRemainder(creditTo, recipient, totalBurned, recipientAmount, senderRemainder);
     }
@@ -385,7 +387,7 @@ library PrivateOPRFNotes {
     /// @notice Moves `amount` from the token's pooled balance to `recipient`.
     /// @dev Only the recipient (and the token) may decrypt the credited amount. The caller is deliberately not
     ///      permitted: on relayed calls it is not the note owner, who is permitted separately by the entry point.
-    function _transferFromContract(address recipient, gtUint256 amount) private {
+    function _transferFromContract(address recipient, gtUint256 amount) private returns (gtUint256 transferredAmount) {
         PrivateERC20Contract256Storage storage $ = privateERC20Storage();
         (gtUint256 newFromBalance, gtUint256 newToBalance, gtBool result) =
             MpcCore.transfer(privateBalanceOf(address(this)), privateBalanceOf(recipient), amount);
@@ -398,7 +400,7 @@ library PrivateOPRFNotes {
         MpcCore.permit(newToBalance, recipient);
 
         // `amount` is masked to zero when the transfer did not credit it.
-        gtUint256 transferredAmount = MpcCore.mux(MpcCore.not(result), amount, $.zero);
+        transferredAmount = MpcCore.mux(MpcCore.not(result), amount, $.zero);
         MpcCore.permit(transferredAmount, recipient);
         MpcCore.permit(transferredAmount, address(this));
         emit PrivateTransfer(address(this), recipient, transferredAmount);

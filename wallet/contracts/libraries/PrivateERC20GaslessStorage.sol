@@ -13,7 +13,8 @@ interface IGaslessForwarder {
 }
 
 /// @notice Shared storage and types for PrivateERC20Contract256Gasless and its linked PrivateOPRFNotes library.
-/// @dev Layout and ERC-7201 slot are identical to the struct previously nested in the token contract.
+/// @dev The ERC-7201 slot matches `bubble.storage.PrivateERC20Contract256`. `claimableUnderlying` and
+///      `claimableUnderlyingTotal` extend that layout at the end.
 
 /// @notice Storage for unshield requests
 struct UnshieldRequest {
@@ -50,6 +51,8 @@ struct PrivateERC20Contract256Storage {
     bool underlyingIsWrappedNative;
     /// @notice Clear underlying owed after an unshield push failed. Pull via `claimUnshielded`.
     mapping(address => uint256) claimableUnderlying;
+    /// @notice Sum of `claimableUnderlying`. Emergency recovery leaves at least this much underlying in the contract.
+    uint256 claimableUnderlyingTotal;
 }
 
 /// @notice OPRF note parameters as supplied by the note owner

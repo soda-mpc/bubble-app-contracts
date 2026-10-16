@@ -603,7 +603,8 @@ export function getOprfMintedHandlesFromReceipt(
 export async function waitForUnshieldOutcome(
   privateToken: {
     queryFilter: (filter: any, from: number, to: number) => Promise<any[]>;
-    filters: { Unshield: any; UnshieldFailed: any };
+    filters: { Unshield: any; UnshieldFailed: any; UnshieldParked?: any };
+    interface?: { getEvent: (name: string) => unknown };
   },
   hre: HardhatRuntime,
   startBlock: number,
@@ -612,26 +613,38 @@ export async function waitForUnshieldOutcome(
     timeoutMs?: number;
     pollIntervalMs?: number;
   } = {}
-): Promise<{ successEvents: any[]; failedEvents: any[] }> {
+): Promise<{ successEvents: any[]; failedEvents: any[]; parkedEvents: any[] }> {
   const { maxBlockRange = 1000, timeoutMs = 60000, pollIntervalMs = 2000 } = options;
   let successEvents: any[] = [];
   let failedEvents: any[] = [];
+  let parkedEvents: any[] = [];
   const startTime = Date.now();
+  let parkedFilter: any;
+  try {
+    if (privateToken.interface?.getEvent("UnshieldParked")) {
+      parkedFilter = privateToken.filters.UnshieldParked;
+    }
+  } catch {
+    parkedFilter = undefined;
+  }
 
   while (Date.now() - startTime < timeoutMs) {
     const currentBlock = await hre.ethers.provider.getBlockNumber();
     const endBlock = Math.min(startBlock + maxBlockRange, currentBlock);
     successEvents = await privateToken.queryFilter(privateToken.filters.Unshield, startBlock, endBlock);
     failedEvents = await privateToken.queryFilter(privateToken.filters.UnshieldFailed, startBlock, endBlock);
+    parkedEvents = parkedFilter
+      ? await privateToken.queryFilter(parkedFilter, startBlock, endBlock)
+      : [];
 
-    if (successEvents.length > 0 || failedEvents.length > 0) {
+    if (successEvents.length > 0 || failedEvents.length > 0 || parkedEvents.length > 0) {
       break;
     }
 
     await delay(pollIntervalMs);
   }
 
-  return { successEvents, failedEvents };
+  return { successEvents, failedEvents, parkedEvents };
 }
 
 export async function ensurePrivateBalanceClearedFor(params: {
