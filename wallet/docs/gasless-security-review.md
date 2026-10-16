@@ -28,7 +28,7 @@ In an authorized call, `_requireOprfRelayerDest` returned early without checking
 
 `transfer(it)`, `transferFrom(it)`, `approve(it)` and `mintOPRFToken(it)` never checked that `it.userAddress` is the caller. While a user's insert grant to the token is active (routine in the relay and Safe facilitator flows, which use 365-day grants), anyone could replay that user's public ciphertext via `approve(attacker, it)` and decrypt it through their own allowance.
 
-**Reproduced** on the refactored contract during the second review: the attacker decrypted the owner's secret value. `PrivateERC20Contract256` now has the same check (`msg.sender` or `tx.origin`). The wrapper and ERC-3643 token still copy the old entry points.
+**Reproduced** on the gasless contract during the second review: the attacker decrypted the owner's secret value. The gasless token now checks `it.userAddress` against the signer on a forwarded call, or against `msg.sender` / `tx.origin` on a direct call. `PrivateERC20Contract256` on this branch does **not** have that check. A long-lived insert grant to the original token still allows the same replay.
 
 ### Medium and low findings
 
@@ -38,8 +38,8 @@ In an authorized call, `_requireOprfRelayerDest` returned early without checking
 | M2 | Anyone holding a user's note ciphertexts (with insert access) can force-spend the notes; value still returns to the owner | Inherent to unsigned relay; documented |
 | H (old) | Owner/admin functions could be executed from a signature over opaque `bytes data`, which invites phishing | Admin functions now ignore the forwarder |
 | L | Self-transfers emitted an inverted amount (zero on success) | Fixed |
-| L | No way to cancel a signed authorization | `cancelAuthorization(nonce)` added (EIP-3009 style) |
-| L | `setTrustedForwarder` accepted the token's own address | Rejected |
+| L | No way to cancel a signed authorization | `cancelAuthorization(nonce)` for the signer, and `cancelAuthorizationWithSig` so a relayer can submit the signer's revocation |
+| L | `setTrustedForwarder` accepted the token's own address | Rejected. The forwarder must also be a contract whose `token()` is this token |
 | L | `tx.origin` as authorizer on direct calls (Safe support) is a phishing class | Accepted. Same arm on value ITs. Closed for facilitator relays |
 | Info | OPRF double-spend protection is off-chain (sequencer nullifiers), not in the contract | Noted as trust assumption |
 

@@ -71,10 +71,10 @@ Packages that affect **compiled bytecode**, **storage layout**, **compiler outpu
 | `@openzeppelin/contracts` | 5.4.0 | Imported Solidity libraries; bytecode and proxy helpers |
 | `@openzeppelin/contracts-upgradeable` | 5.4.0 | Upgradeable bases (`UUPSUpgradeable`, `Ownable2Step`, …) |
 | `@openzeppelin/hardhat-upgrades` | 3.9.1 | `deployProxy`, `prepareUpgrade`, storage validation |
-| `solc` | 0.8.26 | Must match `hardhat.config.ts` `solidity.version` and contract `pragma solidity ^0.8.26` |
+| `solc` | 0.8.26 | Must match `hardhat.config.ts` `solidity.compilers[].version` and the gasless override, and contract `pragma solidity ^0.8.26` |
 | `hardhat` | 2.27.1 | Compile/deploy/test runner |
 | `soda-bubble-sdk` | 0.0.11 | MPC/crypto integration used in scripts and tests |
-| `@sodalabs/bubble-core-contracts` | git ref `transient-insert-grant` | Shared on-chain primitives, including the transient insert grant (commit resolved in lockfile) |
+| `@sodalabs/bubble-core-contracts` | git commit `c2adb88` | Shared on-chain primitives, including the transient insert grant |
 
 When bumping any pinned package, re-run `npm install`, `npm run compile`, and the full test suite. For OpenZeppelin contract bumps, run `prepare-upgrade` / storage checks against live proxy addresses before mainnet Safe transactions.
 

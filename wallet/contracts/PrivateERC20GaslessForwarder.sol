@@ -19,6 +19,9 @@ contract PrivateERC20GaslessForwarder is EIP712 {
     bytes32 public constant EXECUTE_WITH_AUTHORIZATION_TYPEHASH = keccak256(
         "ExecuteWithAuthorization(address from,bytes data,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
     );
+    bytes32 public constant CANCEL_AUTHORIZATION_TYPEHASH = keccak256(
+        "CancelAuthorization(address authorizer,bytes32 nonce)"
+    );
 
     /// @notice The token this forwarder relays to.
     address public immutable token;
@@ -80,9 +83,25 @@ contract PrivateERC20GaslessForwarder is EIP712 {
     /// @notice Invalidates an unused authorization of the caller (EIP-3009 style), e.g. one sent to a facilitator
     ///         that should no longer run.
     function cancelAuthorization(bytes32 nonce) external {
-        require(!authorizationUsed[msg.sender][nonce], "Auth used");
-        authorizationUsed[msg.sender][nonce] = true;
-        emit AuthorizationCanceled(msg.sender, nonce);
+        _cancel(msg.sender, nonce);
+    }
+
+    /// @notice Invalidates an unused authorization. A relayer can submit the signer's EIP-712 signature,
+    ///         so an account with no ETH can revoke a leaked authorization.
+    function cancelAuthorizationWithSig(address authorizer, bytes32 nonce, bytes calldata signature) external {
+        require(authorizer != address(0), "authorizer cannot be zero");
+        bytes32 structHash = keccak256(abi.encode(CANCEL_AUTHORIZATION_TYPEHASH, authorizer, nonce));
+        require(
+            SignatureChecker.isValidSignatureNow(authorizer, _hashTypedDataV4(structHash), signature),
+            "Invalid signature"
+        );
+        _cancel(authorizer, nonce);
+    }
+
+    function _cancel(address authorizer, bytes32 nonce) private {
+        require(!authorizationUsed[authorizer][nonce], "Auth used");
+        authorizationUsed[authorizer][nonce] = true;
+        emit AuthorizationCanceled(authorizer, nonce);
     }
 
     /// @notice EIP-712 domain separator for clients building signatures.

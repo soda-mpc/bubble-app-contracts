@@ -78,14 +78,21 @@ async function verify(
   name: string,
   address: string,
   constructorArguments: unknown[] = [],
-  contract?: string
+  contract?: string,
+  libraries?: Record<string, Record<string, string>>
 ): Promise<boolean> {
   try {
-    const params: { address: string; constructorArguments: unknown[]; contract?: string } = {
+    const params: {
+      address: string;
+      constructorArguments: unknown[];
+      contract?: string;
+      libraries?: Record<string, Record<string, string>>;
+    } = {
       address,
       constructorArguments,
     };
     if (contract) params.contract = contract;
+    if (libraries) params.libraries = libraries;
     await retryWithBackoff(() => run("verify:verify", params));
     console.log(`   ${name} verified: ${address}`);
     return true;
@@ -131,7 +138,13 @@ async function main(): Promise<number> {
   }
   console.log("");
 
-  const targets: Array<{ name: string; address: string; constructorArguments?: unknown[]; contract?: string }> = [
+  const targets: Array<{
+    name: string;
+    address: string;
+    constructorArguments?: unknown[];
+    contract?: string;
+    libraries?: Record<string, Record<string, string>>;
+  }> = [
     {
       name: "TUSDC (Test Token)",
       address: deployment.testToken.address,
@@ -180,6 +193,17 @@ async function main(): Promise<number> {
         contract: "contracts/libraries/PrivateOPRFNotes.sol:PrivateOPRFNotes",
       },
       {
+        name: "PrivateERC20Contract256Gasless (Implementation)",
+        address: gasless.gaslessFactory.implementation,
+        constructorArguments: [],
+        contract: "contracts/PrivateERC20Contract256Gasless.sol:PrivateERC20Contract256Gasless",
+        libraries: {
+          "contracts/libraries/PrivateOPRFNotes.sol": {
+            PrivateOPRFNotes: gasless.gaslessFactory.library,
+          },
+        },
+      },
+      {
         name: "PrivateERC20GaslessFactory",
         address: gasless.gaslessFactory.factory,
         constructorArguments: [gasless.gaslessFactory.implementation],
@@ -191,7 +215,13 @@ async function main(): Promise<number> {
   let ok = 0;
   let fail = 0;
   for (const target of targets) {
-    const result = await verify(target.name, target.address, target.constructorArguments ?? [], target.contract);
+    const result = await verify(
+      target.name,
+      target.address,
+      target.constructorArguments ?? [],
+      target.contract,
+      target.libraries
+    );
     result ? ok++ : fail++;
   }
 

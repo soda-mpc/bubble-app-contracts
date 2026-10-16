@@ -45,7 +45,7 @@ export async function signEip3009TransferWithAuthorization(params: {
 
   const domain = {
     name: params.tokenName,
-    version: params.tokenVersion ?? "2",
+    version: params.tokenVersion ?? "1",
     chainId: params.chainId,
     verifyingContract: params.token,
   };

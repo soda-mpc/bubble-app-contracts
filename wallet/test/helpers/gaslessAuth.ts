@@ -96,3 +96,31 @@ export async function signExecuteWithAuthorization(params: {
     signature,
   };
 }
+
+export const CANCEL_AUTHORIZATION_TYPES = {
+  CancelAuthorization: [
+    { name: "authorizer", type: "address" },
+    { name: "nonce", type: "bytes32" },
+  ],
+} as const;
+
+/** EIP-712 cancel for PrivateERC20GaslessForwarder. `verifyingContract` is the forwarder. */
+export async function signCancelAuthorization(params: {
+  signer: Signer;
+  forwarder: string;
+  tokenName: string;
+  chainId: number;
+  authorizer: string;
+  nonce: string;
+}): Promise<string> {
+  return params.signer.signTypedData(
+    {
+      name: params.tokenName,
+      version: "1",
+      chainId: params.chainId,
+      verifyingContract: params.forwarder,
+    },
+    CANCEL_AUTHORIZATION_TYPES,
+    { authorizer: params.authorizer, nonce: params.nonce }
+  );
+}

@@ -10,6 +10,7 @@ import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@sodalabs/bubble-core-contracts/contracts/bubble/DecryptionCaller.sol";
 import {
     IWrappedNative,
+    IGaslessForwarder,
     PrivateERC20Contract256Storage,
     UnshieldRequest,
     OPRFToken,
@@ -73,6 +74,7 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
     event Unshield(address indexed to, uint256 amount);
     event UnshieldRequested(address indexed to, uint256 amount);
     event UnshieldFailed(address indexed to, uint256 amount);
+    event UnshieldClaimed(address indexed account, address indexed to, uint256 amount);
     event MasterUpdated(address indexed oldMaster, address indexed newMaster);
     event EmergencyRecovery(address indexed owner, uint256 amount);
     event NativeRecovered(address indexed to, uint256 amount);
@@ -105,7 +107,7 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
     }
 
     /// keccak256(abi.encode(uint256(keccak256("bubble.storage.PrivateERC20Contract256Gasless")) - 1)) & ~bytes32(uint256(0xff))
-    bytes32 private constant GaslessStorageLocation = 0x38e7adbcbe191d7f1929993d33efe57b08508e3833304253c54c257eaf22b600;
+    bytes32 private constant GaslessStorageLocation = 0xc7ab5e02d56b2a4f826ef45f0679debe562e8c5776ceb3df82f8fdf79e204d00;
 
     function _getGaslessStorage() private pure returns (GaslessStorage storage $) {
         assembly {
@@ -132,8 +134,14 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
     }
 
     /// @notice Sets the gasless forwarder. Zero disables gasless calls.
+    /// @dev The forwarder must be a contract bound to this token. An EOA would be trusted as
+    ///      `_msgSender` and could append any signer to its calldata.
     function setTrustedForwarder(address forwarder) external onlyOwner {
         require(forwarder != address(this), "Forwarder cannot be token");
+        if (forwarder != address(0)) {
+            require(forwarder.code.length > 0, "Forwarder must be a contract");
+            require(IGaslessForwarder(forwarder).token() == address(this), "Forwarder token mismatch");
+        }
         GaslessStorage storage $g = _getGaslessStorage();
         emit TrustedForwarderUpdated($g.trustedForwarder, forwarder);
         $g.trustedForwarder = forwarder;
@@ -788,7 +796,7 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
 
         // user balance = 10, want to unshield 3. checkedSubWithOverflowBit(10, 3) = 7, amount to unshield = bal before 10 sub new balance 7 = 3
         // user balance = 5, want to unshield 7. checkedSubWithOverflowBit(5, 7) = 5, amount to unshield = bal before 5 sub new balance 5 = 0
-        gtUint256 amountToUnshieldGt = _debitBalanceForUnshield(sender, amountGt);
+        gtUint256 amountToUnshieldGt = PrivateOPRFNotes.debitBalanceForUnshield(sender, amountGt);
 
         _requestUnshieldFromHandle(amountToUnshieldGt, recipient, false);
 
@@ -918,22 +926,6 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
         return $.underlyingDecimals;
     }
 
-    function _debitBalanceForUnshield(
-        address account,
-        gtUint256 amount
-    ) private returns (gtUint256 amountToUnshieldGt) {
-        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
-
-        gtUint256 balanceBefore = _balanceOf(account);
-        (, gtUint256 balanceAfter) = MpcCore.checkedSubWithOverflowBit(balanceBefore, amount);
-        (, amountToUnshieldGt) = MpcCore.checkedSubWithOverflowBit(balanceBefore, balanceAfter);
-
-        MpcCore.permitThis(amountToUnshieldGt);
-        MpcCore.permitThis(balanceAfter);
-        MpcCore.permit(balanceAfter, account);
-        $.balances[account] = balanceAfter;
-    }
-
     /// @notice Requests unshielding for an encrypted private-token amount handle.
     /// @param amountToUnshieldGt The encrypted private-token amount to decrypt and unshield.
     /// @param recipient Recipient of the underlying token transfer in callback.
@@ -959,22 +951,59 @@ contract PrivateERC20Contract256Gasless is DecryptionCaller, UUPSUpgradeable, Ow
 
         // output[0] contains the private amount to unshield, denominated like the underlying token.
         uint256 privateAmountToUnshield = abi.decode(output[0], (uint256));
-        if (privateAmountToUnshield > 0) {
-            $._totalSupply -= privateAmountToUnshield;
-            if (request.unwrapNative) {
-                require($.underlyingIsWrappedNative, "Underlying unwrap not configured");
-                IWrappedNative(address($.underlying)).withdraw(privateAmountToUnshield);
-                (bool sent, ) = payable(request.user).call{value: privateAmountToUnshield}("");
-                require(sent, "Native transfer failed");
-            } else {
-                require($.underlying.transfer(request.user, privateAmountToUnshield), "Transfer failed");
-            }
-            emit Unshield(request.user, privateAmountToUnshield);
-        } else {
-            emit UnshieldFailed(request.user, privateAmountToUnshield);
+        address user = request.user;
+        bool unwrapNative = request.unwrapNative;
+        delete $.unshieldRequests[decryptID];
+
+        if (privateAmountToUnshield == 0) {
+            emit UnshieldFailed(user, privateAmountToUnshield);
+            return;
         }
 
-        // Clean up the request
-        delete $.unshieldRequests[decryptID];
+        if (unwrapNative) {
+            require($.underlyingIsWrappedNative, "Underlying unwrap not configured");
+            IWrappedNative wrapped = IWrappedNative(address($.underlying));
+            wrapped.withdraw(privateAmountToUnshield);
+            (bool sent, ) = payable(user).call{value: privateAmountToUnshield}("");
+            if (!sent) {
+                wrapped.deposit{value: privateAmountToUnshield}();
+                _parkFailedUnshield(user, privateAmountToUnshield);
+                return;
+            }
+        } else if (!_tryTransferUnderlying(user, privateAmountToUnshield)) {
+            _parkFailedUnshield(user, privateAmountToUnshield);
+            return;
+        }
+
+        $._totalSupply -= privateAmountToUnshield;
+        emit Unshield(user, privateAmountToUnshield);
+    }
+
+    /// @notice Pulls underlying parked by a failed unshield push. `to` receives the ERC20.
+    function claimUnshielded(address to) external nonReentrant {
+        require(to != address(0), "Recipient cannot be zero address");
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        address account = _msgSender();
+        uint256 amount = $.claimableUnderlying[account];
+        require(amount > 0, "Nothing to claim");
+        $.claimableUnderlying[account] = 0;
+        require($.underlying.transfer(to, amount), "Transfer failed");
+        emit UnshieldClaimed(account, to, amount);
+    }
+
+    /// @dev The private balance was already debited. Keep the underlying in this contract and let the user pull it,
+    ///      instead of reverting the callback and leaving the request stuck.
+    function _parkFailedUnshield(address user, uint256 amount) private {
+        PrivateERC20Contract256Storage storage $ = _getPrivateERC20Contract256Storage();
+        $.claimableUnderlying[user] += amount;
+        $._totalSupply -= amount;
+        emit UnshieldFailed(user, amount);
+    }
+
+    function _tryTransferUnderlying(address to, uint256 amount) private returns (bool) {
+        (bool ok, bytes memory ret) = address(_getPrivateERC20Contract256Storage().underlying).call(
+            abi.encodeCall(IERC20.transfer, (to, amount))
+        );
+        return ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool))));
     }
 }

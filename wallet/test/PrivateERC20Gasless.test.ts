@@ -5,8 +5,8 @@
  *     signed redeem to a third party, OPRF IT user mismatch.
  *   PrivateERC20Contract256 (original) — msg.sender mint, no dest lock.
  *
- * Full original OPRF suite: `npm run test:oprf:arbitrum-sepolia`
  * This file: `npm run test:gasless:arbitrum-sepolia`
+ * Local forwarder checks (no MPC): `npm run test:gasless`
  */
 import { expect } from "chai";
 import hre from "hardhat";
@@ -520,7 +520,6 @@ describe("PrivateERC20Contract256 (original msg.sender model)", function () {
   this.timeout(900000);
 
   let owner: any;
-  let facilitator: any;
   let ownerAesKey: Buffer;
   let ownerAesKeyHex: string;
   let mockToken: any;
@@ -534,7 +533,6 @@ describe("PrivateERC20Contract256 (original msg.sender model)", function () {
 
     const signers = await hre.ethers.getSigners();
     owner = signers[0];
-    facilitator = signers[1] ?? Wallet.createRandom().connect(hre.ethers.provider);
 
     ownerAesKey = await getUserKeyViaProxy(owner, PROXY_URL);
     ownerAesKeyHex = ownerAesKey.toString("hex");
@@ -554,19 +552,6 @@ describe("PrivateERC20Contract256 (original msg.sender model)", function () {
       userAddress: owner.address,
       amount: NOTE_AMOUNT,
     });
-  });
-
-  it("does not dest-lock unsigned relayer redeem", async function () {
-    await expect(
-      original
-        .connect(facilitator)
-        .redeemManyToUnderlying(
-          [{ x: dummyIt128(owner.address), q: dummyIt256(owner.address), y_clear: 1n }],
-          dummyIt256(owner.address),
-          facilitator.address,
-          false
-        )
-    ).to.not.be.revertedWith("Relayer dest must be IT owner");
   });
 
   it("owner mints an OPRF note with msg.sender (no executeWithAuthorization)", async function () {

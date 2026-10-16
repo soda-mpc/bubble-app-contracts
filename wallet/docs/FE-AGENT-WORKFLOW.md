@@ -172,15 +172,18 @@ v1 can be same-browser: issuer and agents share local persistence. v2: clipboard
 
 ```text
 Select note + amount + destination
-  → Insert grant once per agent:
-       POC: faucet → agent calls GCACL.permitFullInsertAccess(privateToken)
-       later: sign EIP-712 PermitFullInsertAccess; facilitator submits
-              permitFullInsertAccessWithAuthorization (see Insert ACL)
+  → Sign one transient insert grant for this token (see TRANSIENT-INSERT-GRANT.md)
+       domain verifyingContract = GCACL, name = "SodaLabs MPC", version = "1"
+       fields: nonce, user = agent, contract = privateToken
   → Build redeemManyToUnderlying calldata
        ITs: userAddress = agent
        recipient = agent
   → Sign EIP-712 executeWithAuthorization over that calldata
-       from = agent, verifyingContract = privateToken, name = token.name(), version = "1"
+       from = agent
+       verifyingContract = forwarder (not the token)
+       name = token.name(), version = "1"
+       tx target = forwarder
+       pass the insert signature in executeWithAuthorization so the forwarder calls consumeInsertGrant
   → Sign EIP-3009 transferWithAuthorization
        from = agent, to = destination, value = amount
        validBefore = now + MPC slack (see below)
@@ -191,7 +194,7 @@ Select note + amount + destination
 
 **UI states:** `preparing` → `submitted` → `waiting for unshield` → `paying destination` → `done` | `needs attention`.
 
-ACL bootstrap is the one extra on-chain step the agent may need **once**. Today that is `GCACL.permitFullInsertAccess` paid by the agent (after faucet). Intended GCACL change: signed `permitFullInsertAccessWithAuthorization` so the facilitator submits it (see Insert ACL below).
+The insert grant is per transaction, not a long-lived `permitFullInsertAccess`. The agent signs it; the facilitator submits it inside `executeWithAuthorization`. The agent does not need ETH for that step.
 
 ### 6. Activity
 
@@ -367,7 +370,7 @@ This lives in **bubble-core-contracts** (GCACL), not `PrivateERC20Contract256Gas
 
 ### Dest lock (FE must set recipient = agent)
 
-Inner `redeemManyToUnderlying.recipient` **must** still be the agent so unshield credits the agent and EIP-3009 can pay the merchant. On `PrivateERC20Contract256Gasless`, an unsigned relay is dest-locked on-chain; a signed `executeWithAuthorization` skips that lock — the facilitator still rejects a non-agent inner recipient so the 3009 pipeline holds.
+Inner `redeemManyToUnderlying.recipient` **must** still be the agent so unshield credits the agent and EIP-3009 can pay the merchant. On `PrivateERC20Contract256Gasless`, a signer who is not the note owner is dest-locked: `recipient` must be the IT owner. A signed `executeWithAuthorization` does not skip that lock. Only the note owner may choose another recipient. The transaction target and the EIP-712 `verifyingContract` are the forwarder.
 
 ---
 
@@ -392,6 +395,7 @@ Inner `redeemManyToUnderlying.recipient` **must** still be the agent so unshield
 | `CHAIN_ID` | e.g. `421614` Arbitrum Sepolia |
 | `RPC_URL` | Read + issuer txs |
 | `PRIVATE_ERC20` | Proxy address |
+| `FORWARDER` | Per-token forwarder. Transaction target and EIP-712 `verifyingContract` |
 | `UNDERLYING` | USDC or EIP-3009 mock |
 | `GCACL` | Permit insert |
 | `BUBBLE_PROXY_URL` | Key onboard + decrypt |

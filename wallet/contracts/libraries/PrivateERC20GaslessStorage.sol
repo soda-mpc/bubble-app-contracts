@@ -5,6 +5,11 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface IWrappedNative is IERC20 {
     function withdraw(uint256 wad) external;
+    function deposit() external payable;
+}
+
+interface IGaslessForwarder {
+    function token() external view returns (address);
 }
 
 /// @notice Shared storage and types for PrivateERC20Contract256Gasless and its linked PrivateOPRFNotes library.
@@ -41,10 +46,10 @@ struct PrivateERC20Contract256Storage {
     mapping(uint256 => UnshieldRequest) unshieldRequests;
     /// @notice Decimals used by the underlying token for shield/unshield conversion
     uint8 underlyingDecimals;
-    /// @notice Whether underlying decimals were initialized in storage
-    bool underlyingDecimalsInitialized;
     /// @notice Whether underlying token supports unwrap to native token (WETH/WPOL style)
     bool underlyingIsWrappedNative;
+    /// @notice Clear underlying owed after an unshield push failed. Pull via `claimUnshielded`.
+    mapping(address => uint256) claimableUnderlying;
 }
 
 /// @notice OPRF note parameters as supplied by the note owner

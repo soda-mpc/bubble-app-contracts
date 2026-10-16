@@ -84,8 +84,8 @@ contract PrivateERC20GaslessFactory {
         require(bytes(symbol).length > 0, "Symbol cannot be empty");
         require(underlying != address(0), "Underlying cannot be zero address");
 
-        IERC20 underlyingToken = IERC20(underlying);
-        require(underlyingToken.totalSupply() >= 0, "Invalid ERC20 contract");
+        (bool ok, bytes memory ret) = underlying.staticcall(abi.encodeCall(IERC20.totalSupply, ()));
+        require(ok && ret.length >= 32, "Invalid ERC20 contract");
 
         // Factory is the initial owner so it can set the forwarder. Creator is master, and pending owner.
         bytes memory initData = abi.encodeWithSelector(

@@ -196,4 +196,17 @@ describe("TUSDC gasless authorization", function () {
         .mintWithAuthorization(recipient.address, value, 0, deadline, foreignNonce, foreignSig.v, foreignSig.r, foreignSig.s)
     ).to.be.revertedWith("Invalid signature");
   });
+
+  it("burns only the caller's own tokens", async function () {
+    const [holder, attacker] = await hre.ethers.getSigners();
+    const token = await hre.ethers.deployContract("TUSDC", [NAME, SYMBOL], holder);
+    await token.waitForDeployment();
+    const amount = 10n * 10n ** 18n;
+    await token.connect(holder).transfer(attacker.address, amount);
+    const holderBefore = await token.balanceOf(holder.address);
+
+    await token.connect(attacker).burn(amount);
+    expect(await token.balanceOf(attacker.address)).to.equal(0);
+    expect(await token.balanceOf(holder.address)).to.equal(holderBefore);
+  });
 });

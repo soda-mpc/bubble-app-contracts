@@ -69,6 +69,7 @@ library PrivateOPRFNotes {
         address recipient
     ) external {
         address owner = _noteOwner(x, q, qSplit);
+        _rejectBadRecipient(recipient);
         _requireDest(owner, authorizer, recipient);
         address creditTo = _creditTo(owner, sender, authorizer);
 
@@ -97,6 +98,7 @@ library PrivateOPRFNotes {
         address recipient
     ) external {
         address owner = _noteOwner(x, q);
+        _rejectBadRecipient(recipient);
         _requireDest(owner, authorizer, recipient);
         address creditTo = _creditTo(owner, sender, authorizer);
 
@@ -212,6 +214,13 @@ library PrivateOPRFNotes {
 
     /// @dev Only the IT owner may choose where a note's value goes. Anyone else (a relayer, or a signer who is not
     ///      the owner) may only credit the owner.
+    /// @dev Zero strands the value. The token address makes `_transferFromContract` credit the pool twice,
+    ///      because the pool is both the sender and the recipient of that transfer.
+    function _rejectBadRecipient(address recipient) private view {
+        require(recipient != address(0), "Recipient cannot be zero address");
+        require(recipient != address(this), "Recipient cannot be token");
+    }
+
     function _requireDest(address owner, address authorizer, address recipient) private pure {
         if (authorizer != owner) {
             require(recipient == owner, "Relayer dest must be IT owner");
@@ -232,8 +241,8 @@ library PrivateOPRFNotes {
         address recipient,
         address sender,
         address authorizer
-    ) private pure returns (address) {
-        require(recipient != address(0), "Recipient cannot be zero address");
+    ) private view returns (address) {
+        _rejectBadRecipient(recipient);
         address owner = _tokensOwner(tokens);
         require(amount.userAddress == owner, "OPRF IT user mismatch");
         _requireDest(owner, authorizer, recipient);
@@ -396,6 +405,10 @@ library PrivateOPRFNotes {
     }
 
     /// @notice Debits up to `amount` from `account`; returns the handle of what was actually debited.
+    function debitBalanceForUnshield(address account, gtUint256 amount) external returns (gtUint256) {
+        return _debitBalanceForUnshield(account, amount);
+    }
+
     function _debitBalanceForUnshield(address account, gtUint256 amount) private returns (gtUint256 amountToUnshieldGt) {
         gtUint256 balanceBefore = privateBalanceOf(account);
         (, gtUint256 balanceAfter) = MpcCore.checkedSubWithOverflowBit(balanceBefore, amount);

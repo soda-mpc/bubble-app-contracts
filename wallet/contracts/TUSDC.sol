@@ -32,6 +32,7 @@ contract TUSDC is ERC20, ERC20Permit {
         _mint(msg.sender, 1000000 * 10 ** _decimals);
     }
 
+    /// @notice Open faucet for the test stand. `mintWithAuthorization` is separate: only `to` can sign a mint to itself.
     function mint(address account, uint256 amount) external {
         _mint(account, amount);
     }
@@ -62,8 +63,9 @@ contract TUSDC is ERC20, ERC20Permit {
         _mint(to, value);
     }
 
-    function burn(address account, uint256 amount) external {
-        _burn(account, amount);
+    /// @notice Burns the caller's own tokens. A third party must not be able to burn the private token's escrow.
+    function burn(uint256 amount) external {
+        _burn(msg.sender, amount);
     }
 
     function setDecimals(uint8 decimals_) external {
