@@ -4,9 +4,9 @@ async function main() {
   // Get deployment parameters from command line arguments or use defaults
   const args = process.argv.slice(2);
   
-  let tokenName = "Test USDC";
-  let tokenSymbol = "USDC";
-  let decimals = 18;
+  let tokenName = process.env.TUSDC_NAME || "Test USDC";
+  let tokenSymbol = process.env.TUSDC_SYMBOL || "TUSDC";
+  let decimals = process.env.TUSDC_DECIMALS ? parseInt(process.env.TUSDC_DECIMALS, 10) : 18;
 
   // Parse command line arguments
   for (let i = 0; i < args.length; i++) {

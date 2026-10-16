@@ -1,0 +1,665 @@
+/**
+ * Security regressions for PrivateERC20Contract256Gasless on a Bubble network (not Hardhat 31337).
+ *
+ * Each test asserts the SECURE behaviour. Against the old self-call implementation they failed with the reported
+ * leak; when an attack succeeds, the failure message reports what the attacker obtained.
+ *
+ *   C1  The old executeWithAuthorization ran `data` via `address(this).call`, so `msg.sender == address(this)` and
+ *       `isSenderPermitted` checked the CONTRACT's permissions, which cover every stored handle. `contractApprove`
+ *       then permitted the handle to `from`: any account could decrypt other balances and the OPRF key.
+ *       Now: a separate ERC-2771 forwarder (no MPC permissions) relays calls, and raw-handle ops require
+ *       `isPermitted(handle, _msgSender())`.
+ *
+ *   C2  The old `_requireOprfRelayerDest` skipped the dest lock in auth context without checking that the IT owner
+ *       signed. Unsigned relay requires the owner to grant full insert access to the token contract, so anyone holding
+ *       the owner's note ITs could self-sign an authorization and burn the note to itself.
+ *       Now: only an authorizer equal to the IT owner may choose a recipient other than the owner.
+ *
+ * Run: npx hardhat test test/PrivateERC20GaslessSecurity.test.ts --network sepolia-arbitrum
+ */
+import { expect } from "chai";
+import hre from "hardhat";
+import { Wallet } from "ethers";
+import dotenv from "dotenv";
+
+import {
+  decryptMultipleValuesViaProxy,
+  decryptValueViaProxy,
+  getUserKeyViaProxy,
+} from "./helpers/bubbleCryptoTransport";
+import { signExecuteWithAuthorization } from "./helpers/gaslessAuth";
+import {
+  buildUnsignedItUint128,
+  buildUnsignedItUint256,
+  DELAY_BALANCE_SYNC_MS,
+  DELAY_MPC_EXTENDED_MS,
+  delay,
+  deployMockToken,
+  deployPrivateTokenGasless,
+  GCACL_ABI,
+  getGcAclAddress,
+  getOprfMintedHandlesFromReceipt,
+  getPrivateTokenBalance,
+  getPrivateTransferAmountHandle,
+  mintAndApprove,
+  PRIVATE_ERC20_256_GASLESS_FQN,
+  PRIVATE_OPRF_NOTES_FQN,
+} from "./helpers/testHelpers";
+
+dotenv.config();
+
+const PROXY_URL = process.env.PROXY_URL || "https://proxy.bubble.sodalabs.net";
+const TOKEN_NAME = "Gasless Security Token";
+// Random wei offset per run: identical computations can yield identical handles, and GCACL permits are keyed
+// by handle, so a fixed amount would inherit permits granted to the attacker by a previous (vulnerable) run.
+const NOTE_AMOUNT = 50n * 10n ** 18n + BigInt(Math.floor(Math.random() * 1_000_000));
+
+/** ERC-7201 base of PrivateERC20Contract256Storage; `_oprfKey` is the 9th field (offset 8). */
+const PRIVATE_ERC20_STORAGE_LOCATION = 0x9deef7192d493ef71cbd7c46c5b8e4088a630550d613be0294e8c5db63409100n;
+const OPRF_KEY_SLOT = PRIVATE_ERC20_STORAGE_LOCATION + 8n;
+
+function shouldSkip(): boolean {
+  return (
+    !process.env.MNEMONIC ||
+    (!process.env.SEPOLIA_ARBITRUM_RPC_URL && !process.env.ALCHEMY_API_KEY)
+  );
+}
+
+describe("PrivateERC20Contract256Gasless security", function () {
+  this.timeout(900000);
+
+  let owner: any;
+  let attacker: any;
+  let ownerAesKey: Buffer;
+  let ownerAesKeyHex: string;
+  let attackerAesKey: Buffer;
+  let mockToken: any;
+  let privateToken: any;
+  let gcAclAsOwner: any;
+  let chainId: number;
+  let tokenAddress: string;
+  let forwarder: any;
+  let forwarderAddress: string;
+
+  before(async function () {
+    const network = await hre.ethers.provider.getNetwork();
+    chainId = Number(network.chainId);
+    if (network.chainId === 31337n || shouldSkip()) {
+      this.skip();
+    }
+
+    const signers = await hre.ethers.getSigners();
+    owner = signers[0];
+    attacker = signers[1] ?? Wallet.createRandom().connect(hre.ethers.provider);
+
+    if ((await hre.ethers.provider.getBalance(attacker.address)) < hre.ethers.parseEther("0.0002")) {
+      await (await owner.sendTransaction({
+        to: attacker.address,
+        value: hre.ethers.parseEther("0.002"),
+      })).wait();
+    }
+
+    ownerAesKey = await getUserKeyViaProxy(owner, PROXY_URL);
+    ownerAesKeyHex = ownerAesKey.toString("hex");
+    attackerAesKey = await getUserKeyViaProxy(attacker, PROXY_URL);
+
+    gcAclAsOwner = await hre.ethers.getContractAt(
+      [...GCACL_ABI, "function revokeFullInsertPermission(address permittee)"],
+      getGcAclAddress(chainId),
+      owner
+    );
+
+    mockToken = await deployMockToken(hre, owner, "Gasless Security USD", "GSUSD");
+    privateToken = await deployPrivateTokenGasless(hre, owner, {
+      underlyingAddress: await mockToken.getAddress(),
+      ownerAddress: owner.address,
+      masterAddress: owner.address,
+      name: TOKEN_NAME,
+      symbol: "gSEC",
+    });
+    tokenAddress = await privateToken.getAddress();
+    forwarder = privateToken.gaslessForwarder;
+    forwarderAddress = await forwarder.getAddress();
+
+    await mintAndApprove({
+      mockToken,
+      privateToken,
+      userAddress: owner.address,
+      amount: NOTE_AMOUNT * 2n,
+    });
+    // Victim's private balance, shielded directly (no gasless involvement).
+    await (await privateToken.connect(owner).shield(NOTE_AMOUNT)).wait();
+    await delay(DELAY_BALANCE_SYNC_MS);
+  });
+
+  /** Attacker authorizes its own call (`from = attacker`) and submits it. No insert grant. */
+  async function executeAsAttacker(data: string): Promise<{ ok: boolean; error?: unknown }> {
+    const auth = await signExecuteWithAuthorization({
+      signer: attacker,
+      token: forwarderAddress,
+      tokenName: TOKEN_NAME,
+      chainId,
+      from: attacker.address,
+      data,
+      validBefore: BigInt(Math.floor(Date.now() / 1000) + 3600),
+    });
+    try {
+      const tx = await forwarder
+        .connect(attacker)
+        .executeWithAuthorization(
+          auth.from,
+          auth.data,
+          auth.validAfter,
+          auth.validBefore,
+          auth.nonce,
+          auth.signature,
+          0,
+          "0x"
+        );
+      await tx.wait();
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  /** Signs `data` as `signer` (EIP-712 domain of the forwarder unless overridden) and submits it from `submitter`. */
+  async function signAndForward(
+    signer: any,
+    data: string,
+    opts: { submitter?: any; from?: string; verifyingContract?: string; validBefore?: bigint } = {}
+  ) {
+    const auth = await signExecuteWithAuthorization({
+      signer,
+      token: opts.verifyingContract ?? forwarderAddress,
+      tokenName: TOKEN_NAME,
+      chainId,
+      from: opts.from ?? (await signer.getAddress()),
+      data,
+      validBefore: opts.validBefore ?? BigInt(Math.floor(Date.now() / 1000) + 3600),
+    });
+    const tx = await forwarder
+      .connect(opts.submitter ?? attacker)
+      .executeWithAuthorization(auth.from, auth.data, auth.validAfter, auth.validBefore, auth.nonce, auth.signature, 0, "0x");
+    return { tx, auth };
+  }
+
+  function ownerIt256(value: bigint) {
+    return buildUnsignedItUint256({ value, userAddress: owner.address, userAesKeyHex: ownerAesKeyHex, contractAddress: tokenAddress });
+  }
+
+  function ownerIt128(value: bigint) {
+    return buildUnsignedItUint128({ value, userAddress: owner.address, userAesKeyHex: ownerAesKeyHex, contractAddress: tokenAddress });
+  }
+
+  async function tryDecrypt(handle: bigint, signer: any, aesKey: Buffer): Promise<string> {
+    await delay(DELAY_BALANCE_SYNC_MS);
+    try {
+      return (await decryptValueViaProxy(handle, signer, aesKey, PROXY_URL)).toString();
+    } catch (error) {
+      return `<decrypt failed: ${(error as Error).message}>`;
+    }
+  }
+
+  describe("C1: authorized self-call bypasses isSenderPermitted", function () {
+    it("direct contractApprove with a foreign balance handle reverts (baseline)", async function () {
+      const victimHandle: bigint = await privateToken["balanceOf(address)"](owner.address);
+      console.log(`      victim balance handle: ${hre.ethers.toBeHex(victimHandle)}`);
+      expect(victimHandle).to.not.equal(0n);
+      await expect(
+        privateToken.connect(attacker).contractApprove(attacker.address, victimHandle)
+      ).to.be.reverted;
+    });
+
+    it("authorized contractApprove must not grant the attacker a permit on the victim's balance handle", async function () {
+      const gcAcl = gcAclAsOwner.connect(attacker);
+      const victimHandle: bigint = await privateToken["balanceOf(address)"](owner.address);
+      expect(await gcAcl.isPermitted(victimHandle, attacker.address)).to.equal(false);
+
+      const result = await executeAsAttacker(
+        privateToken.interface.encodeFunctionData("contractApprove", [attacker.address, victimHandle])
+      );
+      const permitted: boolean = await gcAcl.isPermitted(victimHandle, attacker.address);
+
+      if (result.ok && permitted) {
+        const leaked = await tryDecrypt(victimHandle, attacker, attackerAesKey);
+        expect.fail(
+          `VULNERABLE: attacker obtained a persistent permit on the owner's balance handle; ` +
+            `decrypted owner balance = ${leaked} (expected ${NOTE_AMOUNT})`
+        );
+      }
+      expect(result.ok, "authorized contractApprove on a foreign handle should revert").to.equal(false);
+      expect(permitted).to.equal(false);
+    });
+
+    it("authorized contractApprove must not grant the attacker a permit on the OPRF key handle", async function () {
+      const gcAcl = gcAclAsOwner.connect(attacker);
+      const keyHandle = BigInt(await hre.ethers.provider.getStorage(tokenAddress, OPRF_KEY_SLOT));
+      console.log(`      OPRF key handle: ${hre.ethers.toBeHex(keyHandle)}`);
+      expect(keyHandle, "OPRF key handle should be readable from proxy storage").to.not.equal(0n);
+      expect(await gcAcl.isPermitted(keyHandle, attacker.address)).to.equal(false);
+
+      const result = await executeAsAttacker(
+        privateToken.interface.encodeFunctionData("contractApprove", [attacker.address, keyHandle])
+      );
+      const permitted: boolean = await gcAcl.isPermitted(keyHandle, attacker.address);
+
+      if (result.ok && permitted) {
+        const leaked = await tryDecrypt(keyHandle, attacker, attackerAesKey);
+        expect.fail(
+          `VULNERABLE: attacker obtained a persistent permit on the OPRF key handle ` +
+            `(slot ${hre.ethers.toBeHex(OPRF_KEY_SLOT)}); decrypt attempt = ${leaked}`
+        );
+      }
+      expect(result.ok, "authorized contractApprove on the OPRF key handle should revert").to.equal(false);
+      expect(permitted).to.equal(false);
+    });
+  });
+
+  describe("C1: other raw-handle entrypoints via forwarder", function () {
+    it("contractTransfer with a foreign handle reverts", async function () {
+      const victimHandle: bigint = await privateToken["balanceOf(address)"](owner.address);
+      await expect(
+        signAndForward(attacker, privateToken.interface.encodeFunctionData("contractTransfer", [attacker.address, victimHandle]))
+      ).to.be.reverted;
+    });
+
+    it("contractTransferFrom with a foreign handle reverts", async function () {
+      const victimHandle: bigint = await privateToken["balanceOf(address)"](owner.address);
+      await expect(
+        signAndForward(
+          attacker,
+          privateToken.interface.encodeFunctionData("contractTransferFrom", [owner.address, attacker.address, victimHandle])
+        )
+      ).to.be.reverted;
+    });
+  });
+
+  describe("PrivateTransfer amount on self-transfers", function () {
+    it("emits the transferred amount when the balance suffices", async function () {
+      const value = 1000n;
+      const receipt = await (
+        await privateToken.connect(owner)["transfer(address,(address,(uint256,uint256)))"](owner.address, ownerIt256(value))
+      ).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+      const handle = getPrivateTransferAmountHandle(receipt, privateToken);
+      expect(await decryptValueViaProxy(handle, owner, ownerAesKey, PROXY_URL)).to.equal(value);
+    });
+
+    it("emits zero when the balance does not suffice", async function () {
+      const receipt = await (
+        await privateToken
+          .connect(owner)
+          ["transfer(address,(address,(uint256,uint256)))"](owner.address, ownerIt256(NOTE_AMOUNT * 10n))
+      ).wait();
+      await delay(DELAY_BALANCE_SYNC_MS);
+      const handle = getPrivateTransferAmountHandle(receipt, privateToken);
+      expect(await decryptValueViaProxy(handle, owner, ownerAesKey, PROXY_URL)).to.equal(0n);
+    });
+  });
+
+  describe("C1 positive control", function () {
+    it("signed contractApprove with the signer's own balance handle still works", async function () {
+      const ownHandle: bigint = await privateToken["balanceOf(address)"](owner.address);
+      const auth = await signExecuteWithAuthorization({
+        signer: owner,
+        token: forwarderAddress,
+        tokenName: TOKEN_NAME,
+        chainId,
+        from: owner.address,
+        data: privateToken.interface.encodeFunctionData("contractApprove", [attacker.address, ownHandle]),
+        validBefore: BigInt(Math.floor(Date.now() / 1000) + 3600),
+      });
+      await expect(
+        forwarder
+          .connect(attacker)
+          .executeWithAuthorization(
+            auth.from,
+            auth.data,
+            auth.validAfter,
+            auth.validBefore,
+            auth.nonce,
+            auth.signature,
+            0,
+            "0x"
+          )
+      ).to.emit(forwarder, "AuthorizationExecuted");
+    });
+  });
+
+  describe("C2: relayer bypasses the OPRF dest lock via a self-signed authorization", function () {
+    let tokenInput: any[];
+
+    before(async function () {
+      // Victim mints a note directly (tx.origin == owner, no insert grant needed).
+      const quantityIt = buildUnsignedItUint256({
+        value: NOTE_AMOUNT,
+        userAddress: owner.address,
+        userAesKeyHex: ownerAesKeyHex,
+        contractAddress: tokenAddress,
+      });
+      const mintReceipt = await (await privateToken.connect(owner).mintOPRFToken(quantityIt)).wait();
+      await delay(DELAY_MPC_EXTENDED_MS);
+
+      const mintHandles = getOprfMintedHandlesFromReceipt(mintReceipt, privateToken);
+      expect(mintHandles).to.not.be.undefined;
+      const [x, y, q] = await decryptMultipleValuesViaProxy(
+        [mintHandles!.xHandle, mintHandles!.yHandle, mintHandles!.qHandle],
+        owner,
+        ownerAesKey,
+        PROXY_URL
+      );
+      expect(q).to.equal(NOTE_AMOUNT);
+
+      // Unsigned-relay setup: the victim hands its note ITs to a relayer and grants the token contract
+      // full insert access (same as test/integration/safe-oprf-facilitator*.test.ts).
+      tokenInput = [
+        {
+          x: buildUnsignedItUint128({
+            value: x,
+            userAddress: owner.address,
+            userAesKeyHex: ownerAesKeyHex,
+            contractAddress: tokenAddress,
+          }),
+          q: buildUnsignedItUint256({
+            value: q,
+            userAddress: owner.address,
+            userAesKeyHex: ownerAesKeyHex,
+            contractAddress: tokenAddress,
+          }),
+          y_clear: y,
+        },
+      ];
+      // GCACL rejects expirations less than one hour after block.timestamp (ExpirationDateBeforeOneHour).
+      const expiry = BigInt(Math.floor(Date.now() / 1000) + 86400);
+      await (await gcAclAsOwner.permitFullInsertAccess(tokenAddress, expiry)).wait();
+      expect(await gcAclAsOwner.isFullInsertPermitted(owner.address, tokenAddress)).to.equal(true);
+    });
+
+    after(async function () {
+      try {
+        await (await gcAclAsOwner.revokeFullInsertPermission(tokenAddress)).wait();
+      } catch (error) {
+        console.warn(`[cleanup] revokeFullInsertPermission(token) failed: ${(error as Error).message}`);
+      }
+    });
+
+    it("unsigned relayer burn to itself reverts (baseline dest lock)", async function () {
+      const { x, q, y_clear } = tokenInput[0];
+      await expect(
+        privateToken.connect(attacker).burnToken(x, q, y_clear, attacker.address)
+      ).to.be.reverted;
+    });
+
+    it("self-signed authorized burnToken must not pay the relayer from the owner's note", async function () {
+      const attackerBalanceBefore = await getPrivateTokenBalance({
+        privateToken,
+        address: attacker.address,
+        signer: attacker,
+        aesKey: attackerAesKey,
+        proxyUrl: PROXY_URL,
+      });
+
+      const { x, q, y_clear } = tokenInput[0];
+      const result = await executeAsAttacker(
+        privateToken.interface.encodeFunctionData("burnToken", [x, q, y_clear, attacker.address])
+      );
+
+      if (result.ok) {
+        await delay(DELAY_MPC_EXTENDED_MS);
+        const attackerBalanceAfter = await getPrivateTokenBalance({
+          privateToken,
+          address: attacker.address,
+          signer: attacker,
+          aesKey: attackerAesKey,
+          proxyUrl: PROXY_URL,
+        });
+        expect.fail(
+          `VULNERABLE: relayer burned the owner's note to itself; attacker private balance ` +
+            `${attackerBalanceBefore} -> ${attackerBalanceAfter} (note amount ${NOTE_AMOUNT})`
+        );
+      }
+      expect(result.ok, "authorized burn of a foreign note to the relayer should revert").to.equal(false);
+    });
+
+    it("C3: a stranger must not decrypt the owner's amount IT via approve(spender, it)", async function () {
+      // Owner has granted the token full insert access (needed for unsigned relay). The IT is any amount the owner
+      // submitted before (calldata is public), here a fresh one for a secret value.
+      const secret = 123456789n;
+      const ownerIt = buildUnsignedItUint256({
+        value: secret,
+        userAddress: owner.address,
+        userAesKeyHex: ownerAesKeyHex,
+        contractAddress: tokenAddress,
+      });
+      let approved = true;
+      try {
+        await (await privateToken.connect(attacker)["approve(address,(address,(uint256,uint256)))"](attacker.address, ownerIt)).wait();
+      } catch {
+        approved = false;
+      }
+      if (approved) {
+        const handle: bigint = await privateToken.connect(attacker).allowance(attacker.address, attacker.address);
+        const leaked = await tryDecrypt(handle, attacker, attackerAesKey);
+        expect.fail(`VULNERABLE: attacker decrypted the owner's IT through its own allowance: ${leaked} (secret ${secret})`);
+      }
+    });
+
+    it("C2: self-signed splitTokenForRecipient / transferOPRF / redeemMany / redeemManyToUnderlying hit the dest lock", async function () {
+      const note = [{ x: ownerIt128(1n), q: ownerIt256(1n), y_clear: 1n }];
+      const calls = [
+        privateToken.interface.encodeFunctionData("splitTokenForRecipient", [ownerIt128(1n), ownerIt256(1n), 1n, ownerIt256(1n), attacker.address]),
+        privateToken.interface.encodeFunctionData("transferOPRF", [note, ownerIt256(1n), attacker.address]),
+        privateToken.interface.encodeFunctionData("redeemMany", [note, ownerIt256(1n), attacker.address]),
+        privateToken.interface.encodeFunctionData("redeemManyToUnderlying", [note, ownerIt256(1n), attacker.address, false]),
+      ];
+      for (const data of calls) {
+        await expect(signAndForward(attacker, data)).to.be.revertedWith("Relayer dest must be IT owner");
+      }
+    });
+
+    it("C2: the self-signed burnToken revert is the dest lock", async function () {
+      const { x, q, y_clear } = tokenInput[0];
+      await expect(
+        signAndForward(attacker, privateToken.interface.encodeFunctionData("burnToken", [x, q, y_clear, attacker.address]))
+      ).to.be.revertedWith("Relayer dest must be IT owner");
+    });
+
+    it("C3: transfer / transferFrom / mintOPRFToken reject the owner's IT from a stranger (direct)", async function () {
+      const it = ownerIt256(1n);
+      await expect(privateToken.connect(attacker)["transfer(address,(address,(uint256,uint256)))"](attacker.address, it)).to.be.reverted;
+      await expect(
+        privateToken.connect(attacker)["transferFrom(address,address,(address,(uint256,uint256)))"](attacker.address, attacker.address, it)
+      ).to.be.reverted;
+      await expect(privateToken.connect(attacker).mintOPRFToken(it)).to.be.reverted;
+    });
+
+    it("C3: approve / transfer / mintOPRFToken reject the owner's IT when the stranger signs (forwarded)", async function () {
+      const it = ownerIt256(1n);
+      const calls = [
+        privateToken.interface.encodeFunctionData("approve(address,(address,(uint256,uint256)))", [attacker.address, it]),
+        privateToken.interface.encodeFunctionData("transfer(address,(address,(uint256,uint256)))", [attacker.address, it]),
+        privateToken.interface.encodeFunctionData("mintOPRFToken", [it]),
+      ];
+      for (const data of calls) {
+        await expect(signAndForward(attacker, data)).to.be.reverted;
+      }
+    });
+
+    it("M1: a relayer that burns the owner's note to the owner cannot decrypt the amount", async function () {
+      const amount = 1000n + BigInt(Math.floor(Math.random() * 1000));
+      const mintReceipt = await (await privateToken.connect(owner)["shieldAndMint(uint256)"](amount)).wait();
+      await delay(DELAY_MPC_EXTENDED_MS);
+      const handles = getOprfMintedHandlesFromReceipt(mintReceipt, privateToken)!;
+      const [x, y, q] = await decryptMultipleValuesViaProxy(
+        [handles.xHandle, handles.yHandle, handles.qHandle],
+        owner,
+        ownerAesKey,
+        PROXY_URL
+      );
+
+      const burnReceipt = await (
+        await privateToken.connect(attacker).burnToken(ownerIt128(x), ownerIt256(q), y, owner.address)
+      ).wait();
+      await delay(DELAY_MPC_EXTENDED_MS);
+      const amountHandle = getPrivateTransferAmountHandle(burnReceipt, privateToken);
+
+      const gcAcl = gcAclAsOwner.connect(attacker);
+      expect(await gcAcl.isPermitted(amountHandle, attacker.address), "relayer must not be permitted").to.equal(false);
+      expect(await decryptValueViaProxy(amountHandle, owner, ownerAesKey, PROXY_URL)).to.equal(amount);
+    });
+
+    it("owner-signed burnToken can pay a third party (library path via forwarder)", async function () {
+      const before = await getPrivateTokenBalance({
+        privateToken,
+        address: attacker.address,
+        signer: attacker,
+        aesKey: attackerAesKey,
+        proxyUrl: PROXY_URL,
+      });
+      const { x, q, y_clear } = tokenInput[0];
+      const auth = await signExecuteWithAuthorization({
+        signer: owner,
+        token: forwarderAddress,
+        tokenName: TOKEN_NAME,
+        chainId,
+        from: owner.address,
+        data: privateToken.interface.encodeFunctionData("burnToken", [x, q, y_clear, attacker.address]),
+        validBefore: BigInt(Math.floor(Date.now() / 1000) + 3600),
+      });
+      await (
+        await forwarder
+          .connect(attacker)
+          .executeWithAuthorization(auth.from, auth.data, auth.validAfter, auth.validBefore, auth.nonce, auth.signature, 0, "0x")
+      ).wait();
+      await delay(DELAY_MPC_EXTENDED_MS);
+
+      const after = await getPrivateTokenBalance({
+        privateToken,
+        address: attacker.address,
+        signer: attacker,
+        aesKey: attackerAesKey,
+        proxyUrl: PROXY_URL,
+      });
+      expect(after - before).to.equal(NOTE_AMOUNT);
+    });
+  });
+
+  describe("Forwarder authorization rules", function () {
+    const approveData = () => privateToken.interface.encodeFunctionData("approve(address,uint256)", [attacker.address, 1n]);
+
+    it("rejects replaying a used authorization", async function () {
+      const { tx, auth } = await signAndForward(owner, approveData());
+      await tx.wait();
+      await expect(
+        forwarder
+          .connect(attacker)
+          .executeWithAuthorization(auth.from, auth.data, auth.validAfter, auth.validBefore, auth.nonce, auth.signature, 0, "0x")
+      ).to.be.revertedWith("Auth used");
+    });
+
+    it("rejects an expired authorization", async function () {
+      const now = BigInt((await hre.ethers.provider.getBlock("latest"))!.timestamp);
+      await expect(signAndForward(owner, approveData(), { validBefore: now - 1n })).to.be.revertedWith("Auth expired");
+    });
+
+    it("rejects a signature made for the token's EIP-712 domain (old verifyingContract)", async function () {
+      await expect(signAndForward(owner, approveData(), { verifyingContract: tokenAddress })).to.be.revertedWith(
+        "Invalid signature"
+      );
+    });
+
+    it("rejects `from` = token or forwarder (no EIP-1271 on either)", async function () {
+      await expect(signAndForward(attacker, approveData(), { from: tokenAddress })).to.be.revertedWith("Invalid signature");
+      await expect(signAndForward(attacker, approveData(), { from: forwarderAddress })).to.be.revertedWith(
+        "Invalid signature"
+      );
+    });
+
+    it("ignores an address appended to a direct call (only the trusted forwarder can set the sender)", async function () {
+      const data =
+        privateToken.interface.encodeFunctionData("approve(address,uint256)", [attacker.address, 7n]) +
+        owner.address.slice(2).toLowerCase();
+      const receipt = await (await attacker.sendTransaction({ to: tokenAddress, data })).wait();
+      const approval = receipt.logs
+        .map((log: any) => {
+          try {
+            return privateToken.interface.parseLog(log);
+          } catch {
+            return null;
+          }
+        })
+        .find((e: any) => e?.name === "Approval");
+      expect(approval.args[0].toLowerCase()).to.equal(attacker.address.toLowerCase());
+    });
+
+    it("rejects consumeInsertGrant unless called by the forwarder", async function () {
+      await expect(privateToken.connect(attacker).consumeInsertGrant(0, "0x")).to.be.reverted;
+    });
+
+    it("rejects forwarded user operations while the token is paused", async function () {
+      await (await privateToken.connect(owner).pause()).wait();
+      try {
+        await expect(signAndForward(owner, approveData())).to.be.reverted;
+      } finally {
+        await (await privateToken.connect(owner).unpause()).wait();
+      }
+    });
+  });
+
+  describe("Admin functions and upgrade", function () {
+    it("setTrustedForwarder rejects the token address and non-owners", async function () {
+      await expect(privateToken.connect(owner).setTrustedForwarder(tokenAddress)).to.be.reverted;
+      await expect(privateToken.connect(attacker).setTrustedForwarder(attacker.address)).to.be.reverted;
+      expect(await privateToken.trustedForwarder()).to.equal(forwarderAddress);
+    });
+
+    it("owner-signed setTrustedForwarder / upgradeToAndCall via the forwarder revert", async function () {
+      await expect(
+        signAndForward(owner, privateToken.interface.encodeFunctionData("setTrustedForwarder", [attacker.address]))
+      ).to.be.reverted;
+      await expect(
+        signAndForward(owner, privateToken.interface.encodeFunctionData("upgradeToAndCall", [attacker.address, "0x"]))
+      ).to.be.reverted;
+      expect(await privateToken.trustedForwarder()).to.equal(forwarderAddress);
+    });
+
+    it("acceptOwnership via the forwarder reverts", async function () {
+      await (await privateToken.connect(owner).transferOwnership(attacker.address)).wait();
+      try {
+        await expect(signAndForward(attacker, privateToken.interface.encodeFunctionData("acceptOwnership", []))).to.be
+          .reverted;
+        expect(await privateToken.owner()).to.equal(owner.address);
+      } finally {
+        await (await privateToken.connect(owner).transferOwnership(hre.ethers.ZeroAddress)).wait();
+      }
+    });
+
+    it("owner upgrade to a new linked implementation keeps state and the forwarder", async function () {
+      const balanceBefore: bigint = await privateToken["balanceOf(address)"](owner.address);
+      const supplyBefore: bigint = await privateToken.totalSupply();
+      const factory = await hre.ethers.getContractFactory(PRIVATE_ERC20_256_GASLESS_FQN, {
+        signer: owner,
+        libraries: { [PRIVATE_OPRF_NOTES_FQN]: privateToken.oprfNotesLibrary },
+      });
+      const impl = await factory.deploy();
+      await impl.waitForDeployment();
+
+      await expect(privateToken.connect(attacker).upgradeToAndCall(await impl.getAddress(), "0x")).to.be.reverted;
+      await (await privateToken.connect(owner).upgradeToAndCall(await impl.getAddress(), "0x")).wait();
+
+      const implSlot = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+      const implRaw = await hre.ethers.provider.getStorage(tokenAddress, implSlot);
+      expect(hre.ethers.getAddress("0x" + implRaw.slice(-40))).to.equal(await impl.getAddress());
+      expect(await privateToken.trustedForwarder()).to.equal(forwarderAddress);
+      expect(await privateToken.name()).to.equal(TOKEN_NAME);
+      expect(await privateToken["balanceOf(address)"](owner.address)).to.equal(balanceBefore);
+      expect(await privateToken.totalSupply()).to.equal(supplyBefore);
+
+      // Gasless still works after the upgrade.
+      const { tx } = await signAndForward(owner, privateToken.interface.encodeFunctionData("approve(address,uint256)", [attacker.address, 2n]));
+      await expect(tx).to.emit(forwarder, "AuthorizationExecuted");
+    });
+  });
+
+});

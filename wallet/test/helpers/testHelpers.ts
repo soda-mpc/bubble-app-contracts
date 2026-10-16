@@ -4,6 +4,7 @@
  */
 import hre from "hardhat";
 import fs from "fs";
+import { expect } from "chai";
 import type { HDNodeWallet, Wallet } from "ethers";
 import {
   decryptBalanceViaProxy,
@@ -55,7 +56,51 @@ export type HardhatRuntime = {
   };
 };
 
+/** GCACL addresses from @sodalabs/bubble-core-contracts BubbleAddresses.sol */
+const GC_ACL_ADDRESSES: Record<number, string> = {
+  1: "0xDaA920259d039410b537959c7E920f58AF8877AD",
+  137: "0xDaA920259d039410b537959c7E920f58AF8877AD",
+  42161: "0xDaA920259d039410b537959c7E920f58AF8877AD",
+  11155111: "0xec8176d47bF788d71215ed4C33fD26Dc89B9121A",
+  50505070: "0xDaA920259d039410b537959c7E920f58AF8877AD",
+  421614: "0x78F7Aa55A2c86D90dd9FDf8F9affE786672a23b6",
+};
+
+export const GCACL_ABI = [
+  "function permit(uint256 handle, address account)",
+  "function permitContractViewAccess(address permittee, address contractAddress, uint64 expirationDate)",
+  "function permitFullInsertAccess(address permittee, uint64 expirationDate)",
+  "function permitContractInsertAccess(address permittee, address contractAddress, uint64 expirationDate)",
+  "function isFullInsertPermitted(address permitter, address permittee) view returns (bool)",
+  "function isPermitted(uint256 handle, address account) view returns (bool)",
+  "function isContractViewPermitted(address permitter, address permittee, address contractAddress) view returns (bool)",
+  "function isPermittedToView(address permitter, address permittee, uint256 handle) view returns (bool)",
+  "function isContractInsertPermitted(address permitter, address permittee, address contractAddress) view returns (bool)",
+  "function transientInsertNonce(address user) view returns (uint256)",
+  "function transientInsertPermission(address user, uint256 nonce, bytes signature)",
+  "function isTransientInsertPermitted(address user, address contractAddress) view returns (bool)",
+] as const;
+
+export function getGcAclAddress(chainId: number): string {
+  const address = GC_ACL_ADDRESSES[chainId];
+  if (!address) {
+    throw new Error(`No GCACL address configured for chain ${chainId}`);
+  }
+  return address;
+}
+
+export async function getGcAclContract(hre: { ethers: { provider: { getNetwork: () => Promise<{ chainId: bigint }> }; getContractAt: (...args: any[]) => Promise<any> } }, signer: Wallet | HDNodeWallet) {
+  const network = await hre.ethers.provider.getNetwork();
+  const address = getGcAclAddress(Number(network.chainId));
+  return hre.ethers.getContractAt([...GCACL_ABI], address, signer);
+}
+
 export const PRIVATE_ERC20_256_FQN = "contracts/PrivateERC20Contract256.sol:PrivateERC20Contract256";
+export const PRIVATE_ERC20_256_GASLESS_FQN =
+  "contracts/PrivateERC20Contract256Gasless.sol:PrivateERC20Contract256Gasless";
+export const PRIVATE_OPRF_NOTES_FQN = "contracts/libraries/PrivateOPRFNotes.sol:PrivateOPRFNotes";
+export const PRIVATE_ERC20_GASLESS_FORWARDER_FQN =
+  "contracts/PrivateERC20GaslessForwarder.sol:PrivateERC20GaslessForwarder";
 export const ERC1967_PROXY_FQN = "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy";
 
 export const DELAY_SHORT_MS = 2000;
@@ -113,11 +158,15 @@ async function deployProxyBackedContract(params: {
   hre: HardhatRuntime;
   signer: any;
   contractFqn: string;
+  libraries?: Record<string, string>;
   initData?: (factory: any) => string;
   postDeploy?: (contract: any, factory: any) => Promise<void>;
 }): Promise<any> {
-  const { hre, signer, contractFqn, initData, postDeploy } = params;
-  const ContractFactory = await hre.ethers.getContractFactory(contractFqn, signer);
+  const { hre, signer, contractFqn, libraries, initData, postDeploy } = params;
+  const ContractFactory = await hre.ethers.getContractFactory(
+    contractFqn,
+    libraries ? { signer, libraries } : signer
+  );
   const implementation = await ContractFactory.deploy();
   await implementation.waitForDeployment();
   await waitForDeploymentConfirmation(implementation, hre);
@@ -161,6 +210,70 @@ export async function deployPrivateToken(
       masterAddress,
     ]),
   });
+}
+
+export async function deployPrivateTokenGasless(
+  hre: HardhatRuntime,
+  defaultSigner: any,
+  params: {
+    underlyingAddress: string;
+    ownerAddress: string;
+    masterAddress: string;
+    name?: string;
+    symbol?: string;
+    underlyingIsWrappedNative?: boolean;
+    /** Reuse an already deployed PrivateOPRFNotes library instead of deploying a new one. */
+    oprfNotesLibrary?: string;
+  }
+): Promise<any> {
+  const {
+    underlyingAddress,
+    ownerAddress,
+    masterAddress,
+    name = "BubbleToken",
+    symbol = "BUB",
+    underlyingIsWrappedNative = false,
+  } = params;
+  const oprfNotesLibrary = params.oprfNotesLibrary ?? (await deployPrivateOPRFNotesLibrary(hre, defaultSigner));
+  const token = await deployProxyBackedContract({
+    hre,
+    signer: defaultSigner,
+    contractFqn: PRIVATE_ERC20_256_GASLESS_FQN,
+    libraries: { [PRIVATE_OPRF_NOTES_FQN]: oprfNotesLibrary },
+    initData: (factory) => factory.interface.encodeFunctionData("initializeWithWrappedNative", [
+      name,
+      symbol,
+      underlyingAddress,
+      ownerAddress,
+      masterAddress,
+      underlyingIsWrappedNative,
+    ]),
+  });
+  token.oprfNotesLibrary = oprfNotesLibrary;
+
+  const forwarderFactory = await hre.ethers.getContractFactory(PRIVATE_ERC20_GASLESS_FORWARDER_FQN, defaultSigner);
+  const forwarder = await forwarderFactory.deploy(await token.getAddress());
+  await forwarder.waitForDeployment();
+  await waitForDeploymentConfirmation(forwarder, hre);
+  token.gaslessForwarder = forwarder;
+
+  if ((await defaultSigner.getAddress()).toLowerCase() === ownerAddress.toLowerCase()) {
+    await (await token.setTrustedForwarder(await forwarder.getAddress())).wait();
+  } else {
+    console.warn(
+      `[deployPrivateTokenGasless] owner ${ownerAddress} must call setTrustedForwarder(${await forwarder.getAddress()})`
+    );
+  }
+  return token;
+}
+
+/** Deploys the PrivateOPRFNotes library linked by PrivateERC20Contract256Gasless. Returns its address. */
+export async function deployPrivateOPRFNotesLibrary(hre: HardhatRuntime, signer: any): Promise<string> {
+  const factory = await hre.ethers.getContractFactory(PRIVATE_OPRF_NOTES_FQN, signer);
+  const library = await factory.deploy();
+  await library.waitForDeployment();
+  await waitForDeploymentConfirmation(library, hre);
+  return library.getAddress();
 }
 
 export async function deployPrivateTokenImplementation(
@@ -424,6 +537,19 @@ export function findParsedLogInReceipt(
   return parseReceiptLogs(receipt, contract).find((entry) => entry.name === eventName)?.log;
 }
 
+/** `PrivateTransfer` amount handle (`args[2]`) from a transfer receipt. */
+export function getPrivateTransferAmountHandle(
+  receipt: Parameters<typeof findParsedLogInReceipt>[0],
+  privateToken: { interface: { parseLog: (log: any) => { args?: readonly unknown[] } } }
+): bigint {
+  const privateTransferLog = findParsedLogInReceipt(receipt, privateToken, "PrivateTransfer");
+  expect(privateTransferLog, "Expected PrivateTransfer event").to.not.be.undefined;
+  const privateTransferEvent = privateToken.interface.parseLog(privateTransferLog!);
+  const amountHandle = privateTransferEvent?.args?.[2] as bigint;
+  expect(amountHandle).to.not.be.undefined;
+  return amountHandle;
+}
+
 /** All receipt logs that parse to `eventName` (same parsing rules as `findParsedLogInReceipt`). */
 export function findParsedLogsInReceipt(
   receipt: Parameters<typeof findParsedLogInReceipt>[0],
@@ -477,7 +603,8 @@ export function getOprfMintedHandlesFromReceipt(
 export async function waitForUnshieldOutcome(
   privateToken: {
     queryFilter: (filter: any, from: number, to: number) => Promise<any[]>;
-    filters: { Unshield: any; UnshieldFailed: any };
+    filters: { Unshield: any; UnshieldFailed: any; UnshieldParked?: any };
+    interface?: { getEvent: (name: string) => unknown };
   },
   hre: HardhatRuntime,
   startBlock: number,
@@ -486,26 +613,38 @@ export async function waitForUnshieldOutcome(
     timeoutMs?: number;
     pollIntervalMs?: number;
   } = {}
-): Promise<{ successEvents: any[]; failedEvents: any[] }> {
+): Promise<{ successEvents: any[]; failedEvents: any[]; parkedEvents: any[] }> {
   const { maxBlockRange = 1000, timeoutMs = 60000, pollIntervalMs = 2000 } = options;
   let successEvents: any[] = [];
   let failedEvents: any[] = [];
+  let parkedEvents: any[] = [];
   const startTime = Date.now();
+  let parkedFilter: any;
+  try {
+    if (privateToken.interface?.getEvent("UnshieldParked")) {
+      parkedFilter = privateToken.filters.UnshieldParked;
+    }
+  } catch {
+    parkedFilter = undefined;
+  }
 
   while (Date.now() - startTime < timeoutMs) {
     const currentBlock = await hre.ethers.provider.getBlockNumber();
     const endBlock = Math.min(startBlock + maxBlockRange, currentBlock);
     successEvents = await privateToken.queryFilter(privateToken.filters.Unshield, startBlock, endBlock);
     failedEvents = await privateToken.queryFilter(privateToken.filters.UnshieldFailed, startBlock, endBlock);
+    parkedEvents = parkedFilter
+      ? await privateToken.queryFilter(parkedFilter, startBlock, endBlock)
+      : [];
 
-    if (successEvents.length > 0 || failedEvents.length > 0) {
+    if (successEvents.length > 0 || failedEvents.length > 0 || parkedEvents.length > 0) {
       break;
     }
 
     await delay(pollIntervalMs);
   }
 
-  return { successEvents, failedEvents };
+  return { successEvents, failedEvents, parkedEvents };
 }
 
 export async function ensurePrivateBalanceClearedFor(params: {

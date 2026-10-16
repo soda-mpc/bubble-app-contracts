@@ -25,5 +25,22 @@
     "symbol": "pTUSDC",
     "underlying": "0x15DF3e9761cEc63234c53b8aa576479219d6f789",
     "blockNumber": 283047812
+  },
+  "gaslessTestToken": {
+    "address": "0x3bf988D8242f0F915aa012E317f0498f6F03E513",
+    "name": "Test USDC",
+    "symbol": "TUSDC",
+    "decimals": 18,
+    "blockNumber": 319422439,
+    "eip2612": true,
+    "eip3009": true,
+    "mintWithAuthorization": true
+  },
+  "gaslessFactory": {
+    "library": "0x47aE28dCf35189B473051523657Ddd694119FAE8",
+    "implementation": "0x388cFf16f6DE968472B72C6eB6Ac91f527C47D66",
+    "factory": "0x85338C3a772a622bAc8608F885fFE0A4E39fFB03",
+    "blockNumber": 319369909,
+    "deployedAt": "2026-10-15T08:54:25.485Z"
   }
 }

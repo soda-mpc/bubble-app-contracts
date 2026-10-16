@@ -19,15 +19,33 @@ const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
 
 const config: HardhatUserConfig = {
     solidity: {
-        version: "0.8.26",
-        settings: {
-            optimizer: {
-                enabled: true,
-                runs: 8
+        compilers: [
+            {
+                version: "0.8.26",
+                settings: {
+                    optimizer: {
+                        enabled: true,
+                        runs: 8
+                    },
+                    evmVersion: "cancun",
+                    viaIR: true
+                },
             },
-            evmVersion: "cancun",
-            viaIR: true
-        }
+        ],
+        // This contract is past the 24576-byte deploy limit once revert strings and
+        // CBOR metadata are included. Arbitrum Sepolia enforces that limit.
+        overrides: {
+            "contracts/PrivateERC20Contract256Gasless.sol": {
+                version: "0.8.26",
+                settings: {
+                    optimizer: { enabled: true, runs: 8 },
+                    evmVersion: "cancun",
+                    viaIR: true,
+                    metadata: { bytecodeHash: "none", appendCBOR: false },
+                    debug: { revertStrings: "strip" },
+                },
+            },
+        },
     },
     networks: {
         hardhat: {
