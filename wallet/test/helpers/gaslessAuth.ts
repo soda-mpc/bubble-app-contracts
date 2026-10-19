@@ -49,7 +49,8 @@ export const EXECUTE_WITH_AUTHORIZATION_TYPES = {
 
 export async function signExecuteWithAuthorization(params: {
   signer: Signer;
-  token: string;
+  /** EIP-712 verifyingContract: the forwarder, not the token. */
+  forwarder: string;
   tokenName: string;
   tokenVersion?: string;
   chainId: number;
@@ -73,7 +74,7 @@ export async function signExecuteWithAuthorization(params: {
     name: params.tokenName,
     version: params.tokenVersion ?? "1",
     chainId: params.chainId,
-    verifyingContract: params.token,
+    verifyingContract: params.forwarder,
   };
   const message = {
     from,

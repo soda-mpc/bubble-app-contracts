@@ -14,9 +14,8 @@ interface IInsertGrantConsumer {
 /// @notice ERC-2771 forwarder for one PrivateERC20Contract256Gasless token. A facilitator submits a user's EIP-712
 ///         authorization; the forwarder verifies it and calls the token with `data` plus the signer appended, so the
 ///         token runs the call as the signer.
-/// @dev The token must list this contract as its trusted forwarder. The token decides what a forwarded call may do:
-///      admin functions ignore the forwarder, and OPRF destination rules treat the signer as the authorizer.
-///      This contract holds no token balances or MPC permissions.
+/// @dev The token must list this contract as its trusted forwarder; the forwarder refuses to call it otherwise.
+///      The token decides what a forwarded call may do. This contract holds no token balances or MPC permissions.
 contract PrivateERC20GaslessForwarder is EIP712, IPrivateERC20GaslessForwarder {
     bytes32 public constant EXECUTE_WITH_AUTHORIZATION_TYPEHASH = keccak256(
         "ExecuteWithAuthorization(address from,bytes data,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
@@ -30,13 +29,17 @@ contract PrivateERC20GaslessForwarder is EIP712, IPrivateERC20GaslessForwarder {
 
     mapping(address => mapping(bytes32 => bool)) public authorizationUsed;
 
-
     /// @dev EIP-712 domain: name = token name, version "1", verifyingContract = this forwarder.
     ///      The name is fixed here, so the token proxy must already be initialized.
-    constructor(address token_) EIP712(IERC20Metadata(token_).name(), "1") {
-        require(token_ != address(0), "Token cannot be zero address");
-        require(bytes(IERC20Metadata(token_).name()).length != 0, "Token name empty");
+    constructor(address token_) EIP712(_tokenName(token_), "1") {
         token = token_;
+    }
+
+    /// @dev Runs before the EIP712 base constructor, so the checks surface before any call into the token.
+    function _tokenName(address token_) private view returns (string memory name) {
+        require(token_ != address(0), "Token cannot be zero address");
+        name = IERC20Metadata(token_).name();
+        require(bytes(name).length != 0, "Token name empty");
     }
 
     /// @notice Runs `data` (calldata for a token entrypoint) on the token as `from`.
@@ -54,6 +57,9 @@ contract PrivateERC20GaslessForwarder is EIP712, IPrivateERC20GaslessForwarder {
         bytes calldata insertSignature
     ) external returns (bytes memory) {
         require(from != address(0), "from cannot be zero");
+        // Neither contract signs today. Reject them anyway so a later EIP-1271 implementation cannot
+        // authorize a call as the token or as this forwarder.
+        require(from != token && from != address(this), "from cannot be token or forwarder");
         require(data.length >= 4, "empty data");
         require(block.timestamp > validAfter, "Auth not yet valid");
         require(block.timestamp < validBefore, "Auth expired");
@@ -66,9 +72,7 @@ contract PrivateERC20GaslessForwarder is EIP712, IPrivateERC20GaslessForwarder {
             SignatureChecker.isValidSignatureNow(from, _hashTypedDataV4(structHash), signature),
             "Invalid signature"
         );
-        // Neither contract signs today. Reject them anyway so a later EIP-1271 implementation cannot
-        // authorize a call as the token or as this forwarder.
-        require(from != token && from != address(this), "from cannot be token or forwarder");
+        _requireTrustedByToken();
         authorizationUsed[from][nonce] = true;
 
         if (insertSignature.length != 0) {
@@ -107,6 +111,14 @@ contract PrivateERC20GaslessForwarder is EIP712, IPrivateERC20GaslessForwarder {
     /// @notice EIP-712 domain separator for clients building signatures.
     function domainSeparator() external view returns (bytes32) {
         return _domainSeparatorV4();
+    }
+
+    /// @dev Like OpenZeppelin's ERC2771Forwarder: never call a token that does not read the appended signer. On such a
+    ///      target `msg.sender` is this forwarder, so a signature from anyone would act with the forwarder's rights
+    ///      there (for example, spend approvals given to it).
+    function _requireTrustedByToken() private view {
+        (bool ok, bytes memory ret) = token.staticcall(abi.encodeWithSignature("isTrustedForwarder(address)", address(this)));
+        require(ok && ret.length >= 32 && abi.decode(ret, (bool)), "Token does not trust forwarder");
     }
 
     /// @dev ERC-2771 call: `from` is appended to the calldata and bubbled reverts keep the token's error.
