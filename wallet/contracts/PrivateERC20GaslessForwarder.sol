@@ -75,6 +75,8 @@ contract PrivateERC20GaslessForwarder is EIP712, IPrivateERC20GaslessForwarder {
         _requireTrustedByToken();
         authorizationUsed[from][nonce] = true;
 
+        // The insert grant is not covered by the user's signature. It works only for `from` and only on this token,
+        // so a relayer that swaps or strips it can at most make this call revert or burn that grant's nonce.
         if (insertSignature.length != 0) {
             _call(from, abi.encodeCall(IInsertGrantConsumer.consumeInsertGrant, (insertNonce, insertSignature)));
         }

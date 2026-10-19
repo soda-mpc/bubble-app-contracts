@@ -1,42 +1,6 @@
 import { randomBytes } from "crypto";
 import type { Signer } from "ethers";
 
-export const TRANSIENT_INSERT_DOMAIN_NAME = "SodaLabs MPC";
-export const TRANSIENT_INSERT_DOMAIN_VERSION = "1";
-
-export const TRANSIENT_INSERT_PERMISSION_TYPES = {
-  TransientInsertPermission: [
-    { name: "nonce", type: "uint256" },
-    { name: "user", type: "address" },
-    { name: "contract", type: "address" },
-  ],
-};
-
-export async function signTransientInsertPermission(params: {
-  signer: Signer;
-  user: string;
-  token: string;
-  chainId: number;
-  gcAcl: string;
-  nonce: bigint;
-}): Promise<{ nonce: bigint; signature: string }> {
-  const signature = await params.signer.signTypedData(
-    {
-      name: TRANSIENT_INSERT_DOMAIN_NAME,
-      version: TRANSIENT_INSERT_DOMAIN_VERSION,
-      chainId: params.chainId,
-      verifyingContract: params.gcAcl,
-    },
-    TRANSIENT_INSERT_PERMISSION_TYPES,
-    {
-      nonce: params.nonce,
-      user: params.user,
-      contract: params.token,
-    }
-  );
-  return { nonce: params.nonce, signature };
-}
-
 export const EXECUTE_WITH_AUTHORIZATION_TYPES = {
   ExecuteWithAuthorization: [
     { name: "from", type: "address" },
