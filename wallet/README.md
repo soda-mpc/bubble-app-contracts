@@ -86,5 +86,6 @@ When bumping any pinned package, re-run `npm install`, `npm run compile`, and th
 | --- | --- |
 | `npm run compile` | Compile contracts |
 | `npm test` | Run Hardhat tests |
+| `npm run test:layout` | Check the gasless token's storage layout against its snapshot |
 
 See `package.json` for network-specific deploy, verify, and balance scripts.
