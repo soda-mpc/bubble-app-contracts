@@ -4,6 +4,7 @@
  */
 import hre from "hardhat";
 import fs from "fs";
+import { expect } from "chai";
 import type { HDNodeWallet, Wallet } from "ethers";
 import {
   decryptBalanceViaProxy,
@@ -56,6 +57,8 @@ export type HardhatRuntime = {
 };
 
 export const PRIVATE_ERC20_256_FQN = "contracts/PrivateERC20Contract256.sol:PrivateERC20Contract256";
+export const PRIVATE_ERC20_256_GASLESS_FQN =
+  "contracts/PrivateERC20Contract256Gasless.sol:PrivateERC20Contract256Gasless";
 export const ERC1967_PROXY_FQN = "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy";
 
 export const DELAY_SHORT_MS = 2000;
@@ -159,6 +162,41 @@ export async function deployPrivateToken(
       underlyingAddress,
       ownerAddress,
       masterAddress,
+    ]),
+  });
+}
+
+export async function deployPrivateTokenGasless(
+  hre: HardhatRuntime,
+  defaultSigner: any,
+  params: {
+    underlyingAddress: string;
+    ownerAddress: string;
+    masterAddress: string;
+    name?: string;
+    symbol?: string;
+    underlyingIsWrappedNative?: boolean;
+  }
+): Promise<any> {
+  const {
+    underlyingAddress,
+    ownerAddress,
+    masterAddress,
+    name = "BubbleToken",
+    symbol = "BUB",
+    underlyingIsWrappedNative = false,
+  } = params;
+  return deployProxyBackedContract({
+    hre,
+    signer: defaultSigner,
+    contractFqn: PRIVATE_ERC20_256_GASLESS_FQN,
+    initData: (factory) => factory.interface.encodeFunctionData("initializeWithWrappedNative", [
+      name,
+      symbol,
+      underlyingAddress,
+      ownerAddress,
+      masterAddress,
+      underlyingIsWrappedNative,
     ]),
   });
 }
@@ -424,6 +462,19 @@ export function findParsedLogInReceipt(
   return parseReceiptLogs(receipt, contract).find((entry) => entry.name === eventName)?.log;
 }
 
+/** `PrivateTransfer` amount handle (`args[2]`) from a transfer receipt. */
+export function getPrivateTransferAmountHandle(
+  receipt: Parameters<typeof findParsedLogInReceipt>[0],
+  privateToken: { interface: { parseLog: (log: any) => { name?: string; args?: readonly unknown[] } } }
+): bigint {
+  const privateTransferLog = findParsedLogInReceipt(receipt, privateToken, "PrivateTransfer");
+  expect(privateTransferLog, "Expected PrivateTransfer event").to.not.be.undefined;
+  const privateTransferEvent = privateToken.interface.parseLog(privateTransferLog!);
+  const amountHandle = privateTransferEvent?.args?.[2] as bigint;
+  expect(amountHandle).to.not.be.undefined;
+  return amountHandle;
+}
+
 /** All receipt logs that parse to `eventName` (same parsing rules as `findParsedLogInReceipt`). */
 export function findParsedLogsInReceipt(
   receipt: Parameters<typeof findParsedLogInReceipt>[0],
@@ -477,7 +528,8 @@ export function getOprfMintedHandlesFromReceipt(
 export async function waitForUnshieldOutcome(
   privateToken: {
     queryFilter: (filter: any, from: number, to: number) => Promise<any[]>;
-    filters: { Unshield: any; UnshieldFailed: any };
+    filters: { Unshield: any; UnshieldFailed: any; UnshieldParked?: any };
+    interface?: { getEvent: (name: string) => unknown };
   },
   hre: HardhatRuntime,
   startBlock: number,
@@ -486,26 +538,38 @@ export async function waitForUnshieldOutcome(
     timeoutMs?: number;
     pollIntervalMs?: number;
   } = {}
-): Promise<{ successEvents: any[]; failedEvents: any[] }> {
+): Promise<{ successEvents: any[]; failedEvents: any[]; parkedEvents: any[] }> {
   const { maxBlockRange = 1000, timeoutMs = 60000, pollIntervalMs = 2000 } = options;
   let successEvents: any[] = [];
   let failedEvents: any[] = [];
+  let parkedEvents: any[] = [];
   const startTime = Date.now();
+  let parkedFilter: any;
+  try {
+    if (privateToken.interface?.getEvent("UnshieldParked")) {
+      parkedFilter = privateToken.filters.UnshieldParked;
+    }
+  } catch {
+    parkedFilter = undefined;
+  }
 
   while (Date.now() - startTime < timeoutMs) {
     const currentBlock = await hre.ethers.provider.getBlockNumber();
     const endBlock = Math.min(startBlock + maxBlockRange, currentBlock);
     successEvents = await privateToken.queryFilter(privateToken.filters.Unshield, startBlock, endBlock);
     failedEvents = await privateToken.queryFilter(privateToken.filters.UnshieldFailed, startBlock, endBlock);
+    parkedEvents = parkedFilter
+      ? await privateToken.queryFilter(parkedFilter, startBlock, endBlock)
+      : [];
 
-    if (successEvents.length > 0 || failedEvents.length > 0) {
+    if (successEvents.length > 0 || failedEvents.length > 0 || parkedEvents.length > 0) {
       break;
     }
 
     await delay(pollIntervalMs);
   }
 
-  return { successEvents, failedEvents };
+  return { successEvents, failedEvents, parkedEvents };
 }
 
 export async function ensurePrivateBalanceClearedFor(params: {

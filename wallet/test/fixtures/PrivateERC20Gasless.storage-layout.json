@@ -1,0 +1,481 @@
+{
+  "solcVersion": "0.8.26",
+  "storage": [
+    {
+      "label": "decryptCounter",
+      "offset": 0,
+      "slot": "0",
+      "type": "t_uint256",
+      "contract": "DecryptionCaller",
+      "src": "@sodalabs/bubble-core-contracts/contracts/bubble/DecryptionCaller.sol:32"
+    },
+    {
+      "label": "decryptHandles",
+      "offset": 0,
+      "slot": "1",
+      "type": "t_mapping(t_uint256,t_array(t_uint256)dyn_storage)",
+      "contract": "DecryptionCaller",
+      "src": "@sodalabs/bubble-core-contracts/contracts/bubble/DecryptionCaller.sol:35"
+    }
+  ],
+  "types": {
+    "t_address": {
+      "label": "address",
+      "numberOfBytes": "20"
+    },
+    "t_bool": {
+      "label": "bool",
+      "numberOfBytes": "1"
+    },
+    "t_contract(IERC20)718": {
+      "label": "contract IERC20",
+      "numberOfBytes": "20"
+    },
+    "t_mapping(t_address,t_mapping(t_address,t_userDefinedValueType(gtUint256)3069))": {
+      "label": "mapping(address => mapping(address => gtUint256))",
+      "numberOfBytes": "32"
+    },
+    "t_mapping(t_address,t_uint256)": {
+      "label": "mapping(address => uint256)",
+      "numberOfBytes": "32"
+    },
+    "t_mapping(t_address,t_userDefinedValueType(gtUint256)3069)": {
+      "label": "mapping(address => gtUint256)",
+      "numberOfBytes": "32"
+    },
+    "t_mapping(t_uint256,t_struct(UnshieldRequest)44453_storage)": {
+      "label": "mapping(uint256 => struct UnshieldRequest)",
+      "numberOfBytes": "32"
+    },
+    "t_string_storage": {
+      "label": "string",
+      "numberOfBytes": "32"
+    },
+    "t_struct(InitializableStorage)128_storage": {
+      "label": "struct Initializable.InitializableStorage",
+      "members": [
+        {
+          "label": "_initialized",
+          "type": "t_uint64",
+          "offset": 0,
+          "slot": "0"
+        },
+        {
+          "label": "_initializing",
+          "type": "t_bool",
+          "offset": 8,
+          "slot": "0"
+        }
+      ],
+      "numberOfBytes": "32"
+    },
+    "t_struct(Layout)44505_storage": {
+      "label": "struct PrivateERC20GaslessStorage.Layout",
+      "members": [
+        {
+          "label": "_name",
+          "type": "t_string_storage",
+          "offset": 0,
+          "slot": "0"
+        },
+        {
+          "label": "_symbol",
+          "type": "t_string_storage",
+          "offset": 0,
+          "slot": "1"
+        },
+        {
+          "label": "_totalSupply",
+          "type": "t_uint256",
+          "offset": 0,
+          "slot": "2"
+        },
+        {
+          "label": "zero",
+          "type": "t_userDefinedValueType(gtUint256)3069",
+          "offset": 0,
+          "slot": "3"
+        },
+        {
+          "label": "balances",
+          "type": "t_mapping(t_address,t_userDefinedValueType(gtUint256)3069)",
+          "offset": 0,
+          "slot": "4"
+        },
+        {
+          "label": "allowances",
+          "type": "t_mapping(t_address,t_mapping(t_address,t_userDefinedValueType(gtUint256)3069))",
+          "offset": 0,
+          "slot": "5"
+        },
+        {
+          "label": "master",
+          "type": "t_address",
+          "offset": 0,
+          "slot": "6"
+        },
+        {
+          "label": "underlying",
+          "type": "t_contract(IERC20)718",
+          "offset": 0,
+          "slot": "7"
+        },
+        {
+          "label": "_oprfKey",
+          "type": "t_userDefinedValueType(gtUint128)3067",
+          "offset": 0,
+          "slot": "8"
+        },
+        {
+          "label": "unshieldRequests",
+          "type": "t_mapping(t_uint256,t_struct(UnshieldRequest)44453_storage)",
+          "offset": 0,
+          "slot": "9"
+        },
+        {
+          "label": "underlyingDecimals",
+          "type": "t_uint8",
+          "offset": 0,
+          "slot": "10"
+        },
+        {
+          "label": "underlyingIsWrappedNative",
+          "type": "t_bool",
+          "offset": 1,
+          "slot": "10"
+        },
+        {
+          "label": "claimableUnderlying",
+          "type": "t_mapping(t_address,t_uint256)",
+          "offset": 0,
+          "slot": "11"
+        },
+        {
+          "label": "claimableUnderlyingTotal",
+          "type": "t_uint256",
+          "offset": 0,
+          "slot": "12"
+        },
+        {
+          "label": "unshieldEpoch",
+          "type": "t_uint256",
+          "offset": 0,
+          "slot": "13"
+        },
+        {
+          "label": "trustedForwarder",
+          "type": "t_address",
+          "offset": 0,
+          "slot": "14"
+        },
+        {
+          "label": "retired",
+          "type": "t_bool",
+          "offset": 20,
+          "slot": "14"
+        }
+      ],
+      "numberOfBytes": "480"
+    },
+    "t_struct(Ownable2StepStorage)13_storage": {
+      "label": "struct Ownable2StepUpgradeable.Ownable2StepStorage",
+      "members": [
+        {
+          "label": "_pendingOwner",
+          "type": "t_address",
+          "offset": 0,
+          "slot": "0"
+        }
+      ],
+      "numberOfBytes": "32"
+    },
+    "t_struct(OwnableStorage)68_storage": {
+      "label": "struct OwnableUpgradeable.OwnableStorage",
+      "members": [
+        {
+          "label": "_owner",
+          "type": "t_address",
+          "offset": 0,
+          "slot": "0"
+        }
+      ],
+      "numberOfBytes": "32"
+    },
+    "t_struct(PausableStorage)279_storage": {
+      "label": "struct PausableUpgradeable.PausableStorage",
+      "members": [
+        {
+          "label": "_paused",
+          "type": "t_bool",
+          "offset": 0,
+          "slot": "0"
+        }
+      ],
+      "numberOfBytes": "32"
+    },
+    "t_struct(ReentrancyGuardStorage)343_storage": {
+      "label": "struct ReentrancyGuardUpgradeable.ReentrancyGuardStorage",
+      "members": [
+        {
+          "label": "_status",
+          "type": "t_uint256",
+          "offset": 0,
+          "slot": "0"
+        }
+      ],
+      "numberOfBytes": "32"
+    },
+    "t_struct(UnshieldRequest)44453_storage": {
+      "label": "struct UnshieldRequest",
+      "members": [
+        {
+          "label": "user",
+          "type": "t_address",
+          "offset": 0,
+          "slot": "0"
+        },
+        {
+          "label": "unwrapNative",
+          "type": "t_bool",
+          "offset": 20,
+          "slot": "0"
+        },
+        {
+          "label": "epoch",
+          "type": "t_uint256",
+          "offset": 0,
+          "slot": "1"
+        }
+      ],
+      "numberOfBytes": "64"
+    },
+    "t_uint256": {
+      "label": "uint256",
+      "numberOfBytes": "32"
+    },
+    "t_uint64": {
+      "label": "uint64",
+      "numberOfBytes": "8"
+    },
+    "t_uint8": {
+      "label": "uint8",
+      "numberOfBytes": "1"
+    },
+    "t_userDefinedValueType(gtUint128)3067": {
+      "label": "gtUint128",
+      "numberOfBytes": "32",
+      "underlying": "t_uint256"
+    },
+    "t_userDefinedValueType(gtUint256)3069": {
+      "label": "gtUint256",
+      "numberOfBytes": "32",
+      "underlying": "t_uint256"
+    },
+    "t_array(t_uint256)dyn_storage": {
+      "label": "uint256[]",
+      "numberOfBytes": "32"
+    },
+    "t_mapping(t_uint256,t_array(t_uint256)dyn_storage)": {
+      "label": "mapping(uint256 => uint256[])",
+      "numberOfBytes": "32"
+    }
+  },
+  "namespaces": {
+    "erc7201:openzeppelin.storage.Pausable": [
+      {
+        "contract": "PausableUpgradeable",
+        "label": "_paused",
+        "type": "t_bool",
+        "src": "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol:21",
+        "offset": 0,
+        "slot": "0"
+      }
+    ],
+    "erc7201:openzeppelin.storage.ReentrancyGuard": [
+      {
+        "contract": "ReentrancyGuardUpgradeable",
+        "label": "_status",
+        "type": "t_uint256",
+        "src": "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol:43",
+        "offset": 0,
+        "slot": "0"
+      }
+    ],
+    "erc7201:openzeppelin.storage.Ownable2Step": [
+      {
+        "contract": "Ownable2StepUpgradeable",
+        "label": "_pendingOwner",
+        "type": "t_address",
+        "src": "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol:29",
+        "offset": 0,
+        "slot": "0"
+      }
+    ],
+    "erc7201:openzeppelin.storage.Ownable": [
+      {
+        "contract": "OwnableUpgradeable",
+        "label": "_owner",
+        "type": "t_address",
+        "src": "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol:24",
+        "offset": 0,
+        "slot": "0"
+      }
+    ],
+    "erc7201:openzeppelin.storage.Initializable": [
+      {
+        "contract": "Initializable",
+        "label": "_initialized",
+        "type": "t_uint64",
+        "src": "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol:69",
+        "offset": 0,
+        "slot": "0"
+      },
+      {
+        "contract": "Initializable",
+        "label": "_initializing",
+        "type": "t_bool",
+        "src": "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol:73",
+        "offset": 8,
+        "slot": "0"
+      }
+    ],
+    "erc7201:bubble.storage.PrivateERC20Gasless": [
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "_name",
+        "type": "t_string_storage",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:22",
+        "offset": 0,
+        "slot": "0"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "_symbol",
+        "type": "t_string_storage",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:24",
+        "offset": 0,
+        "slot": "1"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "_totalSupply",
+        "type": "t_uint256",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:26",
+        "offset": 0,
+        "slot": "2"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "zero",
+        "type": "t_userDefinedValueType(gtUint256)3069",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:28",
+        "offset": 0,
+        "slot": "3"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "balances",
+        "type": "t_mapping(t_address,t_userDefinedValueType(gtUint256)3069)",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:30",
+        "offset": 0,
+        "slot": "4"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "allowances",
+        "type": "t_mapping(t_address,t_mapping(t_address,t_userDefinedValueType(gtUint256)3069))",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:32",
+        "offset": 0,
+        "slot": "5"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "master",
+        "type": "t_address",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:34",
+        "offset": 0,
+        "slot": "6"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "underlying",
+        "type": "t_contract(IERC20)718",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:36",
+        "offset": 0,
+        "slot": "7"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "_oprfKey",
+        "type": "t_userDefinedValueType(gtUint128)3067",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:38",
+        "offset": 0,
+        "slot": "8"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "unshieldRequests",
+        "type": "t_mapping(t_uint256,t_struct(UnshieldRequest)44453_storage)",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:40",
+        "offset": 0,
+        "slot": "9"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "underlyingDecimals",
+        "type": "t_uint8",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:42",
+        "offset": 0,
+        "slot": "10"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "underlyingIsWrappedNative",
+        "type": "t_bool",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:44",
+        "offset": 1,
+        "slot": "10"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "claimableUnderlying",
+        "type": "t_mapping(t_address,t_uint256)",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:46",
+        "offset": 0,
+        "slot": "11"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "claimableUnderlyingTotal",
+        "type": "t_uint256",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:48",
+        "offset": 0,
+        "slot": "12"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "unshieldEpoch",
+        "type": "t_uint256",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:50",
+        "offset": 0,
+        "slot": "13"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "trustedForwarder",
+        "type": "t_address",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:52",
+        "offset": 0,
+        "slot": "14"
+      },
+      {
+        "contract": "PrivateERC20GaslessStorage",
+        "label": "retired",
+        "type": "t_bool",
+        "src": "contracts/libraries/PrivateERC20GaslessStorage.sol:54",
+        "offset": 20,
+        "slot": "14"
+      }
+    ]
+  }
+}
