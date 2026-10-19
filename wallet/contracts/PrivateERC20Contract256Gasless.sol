@@ -10,7 +10,6 @@ import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@sodalabs/bubble-core-contracts/contracts/bubble/DecryptionCaller.sol";
 import {IPrivateERC20Gasless} from "./interfaces/IPrivateERC20Gasless.sol";
-import {IWrappedNative} from "./interfaces/IWrappedNative.sol";
 import {PrivateERC20GaslessStorage, UnshieldRequest, gaslessStorage} from "./libraries/PrivateERC20GaslessStorage.sol";
 import {PrivateLedger} from "./libraries/PrivateLedger.sol";
 
@@ -118,11 +117,6 @@ contract PrivateERC20Contract256Gasless is
         // Initialize OPRF key using MPC's secure random generation
         $._oprfKey = MpcCore.rand128();
         MpcCore.permitThis($._oprfKey);
-    }
-
-    receive() external payable {
-        PrivateERC20GaslessStorage.Layout storage $ = gaslessStorage();
-        require($.underlyingIsWrappedNative && msg.sender == address($.underlying), "Unexpected native sender");
     }
     
     /**
@@ -432,7 +426,7 @@ contract PrivateERC20Contract256Gasless is
 
         gtUint256 amountToUnshieldGt = PrivateLedger.debitIfSufficient(sender, amountGt);
 
-        uint256 decryptId = _requestUnshieldFromHandle(amountToUnshieldGt, recipient, false);
+        uint256 decryptId = _requestUnshieldFromHandle(amountToUnshieldGt, recipient);
 
         emit UnshieldRequested(recipient, privateAmount, decryptId);
         return true;
@@ -456,9 +450,8 @@ contract PrivateERC20Contract256Gasless is
     /// @notice Requests unshielding for an encrypted private-token amount handle.
     /// @param amountToUnshieldGt The encrypted private-token amount to decrypt and unshield.
     /// @param recipient Recipient of the underlying token transfer in callback.
-    /// @param unwrapNative If true, unwrap wrapped-native token and send native token.
     /// @return decryptId The decryption request ID; `callbackUnshield` receives it.
-    function _requestUnshieldFromHandle(gtUint256 amountToUnshieldGt, address recipient, bool unwrapNative)
+    function _requestUnshieldFromHandle(gtUint256 amountToUnshieldGt, address recipient)
         internal
         returns (uint256 decryptId)
     {
@@ -471,7 +464,7 @@ contract PrivateERC20Contract256Gasless is
         decryptId = requestDecryption(handles, this.callbackUnshield.selector);
         $.unshieldRequests[decryptId] = UnshieldRequest({
             user: recipient,
-            unwrapNative: unwrapNative,
+            unwrapNative: false, // native unwrap is not supported by the core token
             epoch: $.unshieldEpoch
         });
     }
@@ -484,7 +477,6 @@ contract PrivateERC20Contract256Gasless is
         // output[0] contains the private amount to unshield, denominated like the underlying token.
         uint256 privateAmountToUnshield = abi.decode(output[0], (uint256));
         address user = request.user;
-        bool unwrapNative = request.unwrapNative;
         uint256 epoch = request.epoch;
         delete $.unshieldRequests[decryptID];
 
@@ -494,17 +486,7 @@ contract PrivateERC20Contract256Gasless is
             return;
         }
 
-        // `unwrapNative` was only stored when the underlying is wrapped-native (checked at request time).
-        if (unwrapNative) {
-            IWrappedNative wrapped = IWrappedNative(address($.underlying));
-            wrapped.withdraw(privateAmountToUnshield);
-            (bool sent, ) = payable(user).call{value: privateAmountToUnshield}("");
-            if (!sent) {
-                wrapped.deposit{value: privateAmountToUnshield}();
-                _parkFailedUnshield(user, privateAmountToUnshield);
-                return;
-            }
-        } else if (!$.underlying.trySafeTransfer(user, privateAmountToUnshield)) {
+        if (!$.underlying.trySafeTransfer(user, privateAmountToUnshield)) {
             _parkFailedUnshield(user, privateAmountToUnshield);
             return;
         }

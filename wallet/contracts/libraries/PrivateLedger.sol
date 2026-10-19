@@ -95,12 +95,14 @@ library PrivateLedger {
     }
 
     /// @notice Debits `amount` from `account` if the balance covers it, otherwise nothing. Returns what was debited.
-    /// @dev balance = 10, amount = 3: new balance 7, debited 10 - 7 = 3.
+    /// @dev balance = 10, amount = 3: new balance 7, debited 3.
     ///      balance = 5, amount = 7: the subtraction overflows, so the balance stays 5 and debited is 0.
     function debitIfSufficient(address account, gtUint256 amount) internal returns (gtUint256 debited) {
         gtUint256 balanceBefore = balanceOf(account);
-        (, gtUint256 balanceAfter) = MpcCore.checkedSubWithOverflowBit(balanceBefore, amount);
-        (, debited) = MpcCore.checkedSubWithOverflowBit(balanceBefore, balanceAfter);
+        (gtBool overflow, gtUint256 difference) = MpcCore.checkedSubWithOverflowBit(balanceBefore, amount);
+        // mux(bit, a, b) returns b when bit is true: on overflow keep the balance and debit nothing.
+        gtUint256 balanceAfter = MpcCore.mux(overflow, difference, balanceBefore);
+        debited = MpcCore.mux(overflow, amount, gaslessStorage().zero);
         MpcCore.permitThis(debited);
         setBalance(account, balanceAfter);
     }

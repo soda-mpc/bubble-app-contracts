@@ -179,6 +179,37 @@ describe("PrivateERC20Contract256Gasless core", function () {
     });
   });
 
+  describe("Ownership checks", function () {
+    it("rejects a ciphertext that belongs to someone else", async function () {
+      const it = ownerIt256(1n);
+      await expect(
+        privateToken.connect(attacker)["transfer(address,(address,(uint256,uint256)))"](attacker.address, it)
+      ).to.be.revertedWith("IT not owned by caller");
+      await expect(
+        privateToken.connect(attacker)["approve(address,(address,(uint256,uint256)))"](attacker.address, it)
+      ).to.be.revertedWith("IT not owned by caller");
+      await expect(
+        privateToken
+          .connect(attacker)
+          ["transferFrom(address,address,(address,(uint256,uint256)))"](owner.address, attacker.address, it)
+      ).to.be.revertedWith("IT not owned by caller");
+    });
+
+    it("rejects a handle the caller is not permitted on", async function () {
+      const handle: bigint = await privateToken["balanceOf(address)"](owner.address);
+      expect(handle).to.not.equal(0n);
+      await expect(privateToken.connect(attacker).contractTransfer(attacker.address, handle)).to.be.revertedWith(
+        "Handle not permitted"
+      );
+      await expect(privateToken.connect(attacker).contractApprove(attacker.address, handle)).to.be.revertedWith(
+        "Handle not permitted"
+      );
+      await expect(
+        privateToken.connect(attacker).contractTransferFrom(owner.address, attacker.address, handle)
+      ).to.be.revertedWith("Handle not permitted");
+    });
+  });
+
   describe("Underlying", function () {
     it("shield rejects a fee-on-transfer underlying", async function () {
       const feeToken: any = await hre.ethers.deployContract("FeeOnTransferERC20", ["Fee USD", "FUSD"], owner);
@@ -220,8 +251,9 @@ describe("PrivateERC20Contract256Gasless core", function () {
       // Unshield, then recover right away so recovery lands before the decryption callback.
       const ownerBefore: bigint = await underlying.balanceOf(owner.address);
       const startBlock = await hre.ethers.provider.getBlockNumber();
-      const unshieldTx = await retiring.connect(owner).unshield(amount);
-      const recoveryTx = await retiring.connect(owner).emergencyRecovery();
+      const nonce = await hre.ethers.provider.getTransactionCount(owner.address, "pending");
+      const unshieldTx = await retiring.connect(owner).unshield(amount, { nonce });
+      const recoveryTx = await retiring.connect(owner).emergencyRecovery({ nonce: nonce + 1 });
       await unshieldTx.wait();
       // Recovery takes all backing, including the amount the pending unshield would have paid.
       await expect(recoveryTx).to.emit(retiring, "EmergencyRecovery").withArgs(owner.address, 2n * amount);
