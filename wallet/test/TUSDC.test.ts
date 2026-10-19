@@ -90,19 +90,23 @@ describe("TUSDC gasless authorization", function () {
       value,
       validBefore: deadline,
     });
-    await token
-      .connect(facilitator)
-      .transferWithAuthorization(
-        auth.from,
-        auth.to,
-        auth.value,
-        auth.validAfter,
-        auth.validBefore,
-        auth.nonce,
-        auth.v,
-        auth.r,
-        auth.s
-      );
+    await expect(
+      token
+        .connect(facilitator)
+        .transferWithAuthorization(
+          auth.from,
+          auth.to,
+          auth.value,
+          auth.validAfter,
+          auth.validBefore,
+          auth.nonce,
+          auth.v,
+          auth.r,
+          auth.s
+        )
+    )
+      .to.emit(token, "AuthorizationUsed")
+      .withArgs(holder.address, auth.nonce);
     expect(await token.balanceOf(facilitator.address)).to.equal(value);
     expect(await token.balanceOf(holder.address)).to.equal(holderBefore - value);
 
@@ -118,19 +122,23 @@ describe("TUSDC gasless authorization", function () {
         nonce: receiveNonce,
       })
     );
-    await token
-      .connect(spender)
-      .receiveWithAuthorization(
-        holder.address,
-        spender.address,
-        receiveValue,
-        0,
-        deadline,
-        receiveNonce,
-        receiveSig.v,
-        receiveSig.r,
-        receiveSig.s
-      );
+    await expect(
+      token
+        .connect(spender)
+        .receiveWithAuthorization(
+          holder.address,
+          spender.address,
+          receiveValue,
+          0,
+          deadline,
+          receiveNonce,
+          receiveSig.v,
+          receiveSig.r,
+          receiveSig.s
+        )
+    )
+      .to.emit(token, "AuthorizationUsed")
+      .withArgs(holder.address, receiveNonce);
     expect(await token.balanceOf(spender.address)).to.equal(receiveValue);
 
     const cancelNonce = "0x" + randomBytes(32).toString("hex");
@@ -140,7 +148,11 @@ describe("TUSDC gasless authorization", function () {
         nonce: cancelNonce,
       })
     );
-    await token.connect(facilitator).cancelAuthorization(holder.address, cancelNonce, cancelSig.v, cancelSig.r, cancelSig.s);
+    await expect(
+      token.connect(facilitator).cancelAuthorization(holder.address, cancelNonce, cancelSig.v, cancelSig.r, cancelSig.s)
+    )
+      .to.emit(token, "AuthorizationCanceled")
+      .withArgs(holder.address, cancelNonce);
     expect(await token.authorizationState(holder.address, cancelNonce)).to.equal(true);
   });
 
@@ -169,6 +181,9 @@ describe("TUSDC gasless authorization", function () {
     const tx = await token
       .connect(facilitator)
       .mintWithAuthorization(recipient.address, value, 0, deadline, nonce, mintSig.v, mintSig.r, mintSig.s);
+    await expect(tx)
+      .to.emit(token, "AuthorizationUsed")
+      .withArgs(recipient.address, nonce);
     const receipt = await tx.wait();
     expect(receipt.from.toLowerCase()).to.equal(facilitator.address.toLowerCase());
     expect(await token.balanceOf(recipient.address)).to.equal(before + value);

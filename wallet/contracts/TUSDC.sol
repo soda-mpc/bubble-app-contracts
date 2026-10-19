@@ -24,6 +24,11 @@ contract TUSDC is ERC20, ERC20Permit {
         "CancelAuthorization(address authorizer,bytes32 nonce)"
     );
 
+    /// @notice EIP-3009: `authorizer`'s nonce was consumed by a transfer, receive, or signed mint.
+    event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce);
+    /// @notice EIP-3009: `authorizer` invalidated an unused nonce.
+    event AuthorizationCanceled(address indexed authorizer, bytes32 indexed nonce);
+
     mapping(address => mapping(bytes32 => bool)) public authorizationState;
 
     uint8 private _decimals = 18;
@@ -49,17 +54,16 @@ contract TUSDC is ERC20, ERC20Permit {
         bytes32 r,
         bytes32 s
     ) external {
-        require(block.timestamp > validAfter, "Auth not yet valid");
-        require(block.timestamp < validBefore, "Auth expired");
-        require(!authorizationState[to][nonce], "Auth used");
-
-        bytes32 structHash = keccak256(
-            abi.encode(MINT_WITH_AUTHORIZATION_TYPEHASH, to, value, validAfter, validBefore, nonce)
+        _useAuthorization(
+            to,
+            nonce,
+            validAfter,
+            validBefore,
+            keccak256(abi.encode(MINT_WITH_AUTHORIZATION_TYPEHASH, to, value, validAfter, validBefore, nonce)),
+            v,
+            r,
+            s
         );
-        address signer = ECDSA.recover(_hashTypedDataV4(structHash), v, r, s);
-        require(signer == to, "Invalid signature");
-
-        authorizationState[to][nonce] = true;
         _mint(to, value);
     }
 
@@ -87,7 +91,16 @@ contract TUSDC is ERC20, ERC20Permit {
         bytes32 r,
         bytes32 s
     ) external {
-        _requireValidAuthorization(from, to, value, validAfter, validBefore, nonce, TRANSFER_WITH_AUTHORIZATION_TYPEHASH, v, r, s);
+        _useAuthorization(
+            from,
+            nonce,
+            validAfter,
+            validBefore,
+            keccak256(abi.encode(TRANSFER_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce)),
+            v,
+            r,
+            s
+        );
         _transfer(from, to, value);
     }
 
@@ -104,7 +117,16 @@ contract TUSDC is ERC20, ERC20Permit {
         bytes32 s
     ) external {
         require(to == msg.sender, "Caller must be the payee");
-        _requireValidAuthorization(from, to, value, validAfter, validBefore, nonce, RECEIVE_WITH_AUTHORIZATION_TYPEHASH, v, r, s);
+        _useAuthorization(
+            from,
+            nonce,
+            validAfter,
+            validBefore,
+            keccak256(abi.encode(RECEIVE_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce)),
+            v,
+            r,
+            s
+        );
         _transfer(from, to, value);
     }
 
@@ -114,28 +136,28 @@ contract TUSDC is ERC20, ERC20Permit {
         address signer = ECDSA.recover(_hashTypedDataV4(structHash), v, r, s);
         require(signer == authorizer, "Invalid signature");
         authorizationState[authorizer][nonce] = true;
+        emit AuthorizationCanceled(authorizer, nonce);
     }
 
-    function _requireValidAuthorization(
-        address from,
-        address to,
-        uint256 value,
+    /// @dev Shared by signed mint and EIP-3009 transfer/receive. `authorizer` is `to` for a mint and `from` for a transfer.
+    function _useAuthorization(
+        address authorizer,
+        bytes32 nonce,
         uint256 validAfter,
         uint256 validBefore,
-        bytes32 nonce,
-        bytes32 typeHash,
+        bytes32 structHash,
         uint8 v,
         bytes32 r,
         bytes32 s
     ) private {
         require(block.timestamp > validAfter, "Auth not yet valid");
         require(block.timestamp < validBefore, "Auth expired");
-        require(!authorizationState[from][nonce], "Auth used");
+        require(!authorizationState[authorizer][nonce], "Auth used");
 
-        bytes32 structHash = keccak256(abi.encode(typeHash, from, to, value, validAfter, validBefore, nonce));
         address signer = ECDSA.recover(_hashTypedDataV4(structHash), v, r, s);
-        require(signer == from, "Invalid signature");
+        require(signer == authorizer, "Invalid signature");
 
-        authorizationState[from][nonce] = true;
+        authorizationState[authorizer][nonce] = true;
+        emit AuthorizationUsed(authorizer, nonce);
     }
 }

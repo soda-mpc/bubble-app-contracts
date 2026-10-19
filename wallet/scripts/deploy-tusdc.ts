@@ -6,7 +6,7 @@ async function main() {
   
   let tokenName = process.env.TUSDC_NAME || "Test USDC";
   let tokenSymbol = process.env.TUSDC_SYMBOL || "TUSDC";
-  let decimals = process.env.TUSDC_DECIMALS ? parseInt(process.env.TUSDC_DECIMALS, 10) : 18;
+  let decimals = process.env.TUSDC_DECIMALS ? parseDecimals(process.env.TUSDC_DECIMALS) : 18;
 
   // Parse command line arguments
   for (let i = 0; i < args.length; i++) {
@@ -17,7 +17,7 @@ async function main() {
       tokenSymbol = args[i + 1];
       i++;
     } else if (args[i] === "--decimals" && i + 1 < args.length) {
-      decimals = parseInt(args[i + 1]);
+      decimals = parseDecimals(args[i + 1]);
       i++;
     }
   }
@@ -75,6 +75,7 @@ async function main() {
       console.log(`✅ Decimals set to ${decimals}`);
     } catch (err) {
       console.error(`❌ Failed to set decimals:`, err);
+      throw err;
     }
   }
 
@@ -93,6 +94,14 @@ async function main() {
     symbol: tokenSymbol,
     decimals: decimals
   };
+}
+
+function parseDecimals(raw: string): number {
+  const decimals = Number(raw);
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) {
+    throw new Error(`Invalid TUSDC decimals "${raw}": expected an integer from 0 to 255`);
+  }
+  return decimals;
 }
 
 // Run the deployment
