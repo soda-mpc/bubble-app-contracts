@@ -64,6 +64,8 @@ contract PrivateERC20Contract256Gasless is
     /// @param underlying_ The address of the underlying ERC20 token
     /// @param owner_ The address that will own the token
     /// @param master_ The master address for unshield operations
+    /// @dev Same signature as `PrivateERC20Contract256.initialize`, for deploy tooling that already calls it.
+    ///      `initializeWithWrappedNative` is the same with the wrapped-native flag; the factory uses that one.
     function initialize(
         string memory name_,
         string memory symbol_,
@@ -174,6 +176,9 @@ contract PrivateERC20Contract256Gasless is
     /// @param newMaster The new master address
     /// @dev Only the owner can call this function
     /// @dev The new master address cannot be the zero address
+    /// @dev In-flight `unshieldForMaster` requests keep the master they were created with: the recipient is fixed
+    ///      when the request is made. A rotation (for example after a compromise) does not redirect them, and a payout
+    ///      parked for the old master stays claimable only by it.
     function setMaster(address newMaster) external onlyOwner {
         require(newMaster != address(0), "Master cannot be zero address");
         PrivateERC20GaslessStorage.Layout storage $ = gaslessStorage();
@@ -183,6 +188,9 @@ contract PrivateERC20Contract256Gasless is
     }
 
     /// @notice Pauses user-facing token operations.
+    /// @dev Not a full freeze of outflows: `callbackUnshield` still settles requests made before the pause, and
+    ///      `claimUnshielded` still pays parked payouts. Reverting the one-shot callback would strand the debited
+    ///      balance. Only `emergencyRecovery` stops these payouts (it drops in-flight requests).
     function pause() external onlyOwner {
         _pause();
     }
@@ -407,10 +415,14 @@ contract PrivateERC20Contract256Gasless is
     }
 
     /// @dev Pulls `amount` of underlying from `from` into this contract. The caller credits the private side.
+    ///      Only standard-balance underlyings are supported: a fee-on-transfer token is rejected here, and a token
+    ///      whose balances change without transfers (rebasing) breaks the 1:1 backing and must not be used.
     function _pullUnderlying(address from, uint256 amount) private {
         PrivateERC20GaslessStorage.Layout storage $ = gaslessStorage();
         require(amount > 0, "Amount must be greater than 0");
+        uint256 balanceBefore = $.underlying.balanceOf(address(this));
         $.underlying.safeTransferFrom(from, address(this), amount);
+        require($.underlying.balanceOf(address(this)) - balanceBefore == amount, "Fee-on-transfer not supported");
         $._totalSupply += amount;
     }
 

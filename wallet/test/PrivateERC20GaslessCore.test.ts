@@ -179,6 +179,23 @@ describe("PrivateERC20Contract256Gasless core", function () {
     });
   });
 
+  describe("Underlying", function () {
+    it("shield rejects a fee-on-transfer underlying", async function () {
+      const feeToken: any = await hre.ethers.deployContract("FeeOnTransferERC20", ["Fee USD", "FUSD"], owner);
+      await feeToken.waitForDeployment();
+      const feePrivate = await deployPrivateTokenGasless(hre, owner, {
+        underlyingAddress: await feeToken.getAddress(),
+        ownerAddress: owner.address,
+        masterAddress: owner.address,
+        name: "Fee Token",
+        symbol: "gFEE",
+      });
+      const amount = 10n ** 18n;
+      await mintAndApprove({ mockToken: feeToken, privateToken: feePrivate, userAddress: owner.address, amount });
+      await expect(feePrivate.connect(owner).shield(amount)).to.be.revertedWith("Fee-on-transfer not supported");
+    });
+  });
+
   describe("Emergency recovery", function () {
     it("emergencyRecovery retires the token, drops in-flight unshields and sweeps later deposits", async function () {
       // Own token: recovery pauses it for good.
