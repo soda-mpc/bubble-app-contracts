@@ -6,7 +6,7 @@ Standalone spec for the **FE app** (and the Python facilitator it talks to). Cop
 
 **Product (full path):** issuer turns clear USDC into an anonymous OPRF note, assigns it to a simulated **agent EOA**, and the agent spends a portion **gaslessly** to a destination. The public chain must not show an address edge from issuer (Safe/EOA) to agent.
 
-**Related contracts repo:** `bubble-app-contracts/wallet`: `PrivateERC20Contract256Gasless` (token), its `PrivateOPRFNotes` library and `PrivateERC20GaslessForwarder`, and the Arbitrum Sepolia suites `PrivateERC20Gasless*.test.ts` (`npm run test:gasless:arbitrum-sepolia`). The insert grant is described in [`TRANSIENT-INSERT-GRANT.md`](./TRANSIENT-INSERT-GRANT.md).
+**Related contracts repo:** `bubble-app-contracts/wallet`: `PrivateERC20Contract256Gasless` (token), its `PrivateOPRFNotes` library and `PrivateERC20GaslessForwarder`, and the Arbitrum Sepolia suites `PrivateERC20Gasless*.test.ts` (`npm run test:gasless:arbitrum-sepolia`). The insert grant is described in [`TRANSIENT-INSERT-GRANT.md`](https://github.com/soda-mpc/bubble-app-contracts/blob/master/wallet/docs/TRANSIENT-INSERT-GRANT.md).
 
 ---
 
@@ -52,7 +52,8 @@ OPRF notes are **bearer instruments**. Anonymity = no on-chain link issuer → a
 
 **Residual links (be honest in UI copy)**
 
-- Anyone who already knows `y` (the issuer) can find `OPRFTokenInvalidated` and then the agent.
+- Anyone who already knows `y` (the issuer) can find `OPRFTokenInvalidated` and then the agent. A spend
+  transaction carries `y` in the clear in its calldata, so a mined but reverted spend exposes it the same way.
 - Amount / timing can correlate mint ↔ cash-out.
 - Facilitator sees agent address and destination (required for payout).
 
@@ -120,7 +121,7 @@ Connect issuer wallet (Safe or EOA)
 
 ```text
 Choose portion of private balance
-  → mintOPRFToken(quantity IT, userAddress = issuer)
+  → mintOPRFToken(itUint256 quantity)          IT encrypted with userAddress = issuer
   → Decrypt (x, y, q) via Bubble proxy
   → Persist note locally (encrypted)
   → Offer Assign / Copy / QR
@@ -170,9 +171,10 @@ Select note + amount + destination
   → Sign one transient insert grant for this token (see TRANSIENT-INSERT-GRANT.md)
        domain verifyingContract = GCACL, name = "SodaLabs MPC", version = "1"
        fields: nonce, user = agent, contract = privateToken
-  → Build redeemManyToUnderlying calldata
-       ITs: userAddress = agent
-       recipient = agent
+  → Build redeemManyToUnderlying(OPRFToken[] tokens, itUint256 amount, address recipient, bool unwrap) calldata
+       tokens = [{ x, q, y_clear }] for the note, amount = spend amount
+       every IT: userAddress = agent
+       recipient = agent, unwrap = false (USDC path)
   → Sign EIP-712 executeWithAuthorization over that calldata
        from = agent
        verifyingContract = forwarder (not the token)
@@ -185,7 +187,14 @@ Select note + amount + destination
   → POST /v1/spend { redeem: { data, tokenName, authorization }, transfer }
   → Poll GET /v1/spend/{jobId}
   → Success: destination received USDC
+  → Replace the local note with the remainder (always, also on UnshieldFailed)
 ```
+
+**The remainder note is the new bearer secret.** `redeemManyToUnderlying` burns every input note and issues one
+new note to the agent for what is left (`OPRFMinted(agent, x, y, q)` in the redeem transaction). That happens
+whether or not the unshield pays. Once the redeem is mined, mark the old note spent, decrypt the agent's new
+`(x, y, q)`, and keep it. After `UnshieldFailed(agent, 0)`, it holds the note's full value; the old tuple now
+burns for 0.
 
 **UI states:** `preparing` → `submitted` → `waiting for unshield` → `paying destination` → `done` | `needs attention`.
 
@@ -295,8 +304,9 @@ Response `202`: `{ "jobId": "…", "status": "accepted" }`.
 
 | Failure | Chain state | FE |
 |---------|-------------|-----|
-| Redeem reverts | Note still valid, but its `y` and ITs are now public in the failed transaction's calldata | Retry `/v1/spend` (new idempotency key if calldata changed). Treat the published ITs as spent: re-encrypt fresh ones for the retry, and to stop anyone tracking the note by its `y`, rotate it first (`mergeMany` with just that note re-issues it to the owner) |
-| `UnshieldFailed` (amount 0) | Decrypt produced nothing: the private balance (or, for a redeem, the pool) could not cover it. Nothing is parked | Show error; do not assume payout |
+| Redeem fails in simulation (`eth_call` / gas estimate) | Nothing on-chain | Fix the cause and retry. Do not send anything on-chain to "rotate" the note: that would be the first on-chain link |
+| Redeem mined but reverted | Note still valid. Its `y` and the agent's ITs are public in the calldata, the same exposure a successful spend has. The revert rolled back the authorization's nonce and the insert grant's, so both stay usable until `validBefore` | Retry `/v1/spend` with freshly encrypted ITs (new idempotency key). If not retrying, revoke the old authorization with `forwarder.cancelAuthorizationWithSig` through the facilitator |
+| `UnshieldFailed` (amount 0) | Decrypt produced 0. For a redeem: the note was already spent or invalid, or `amount` exceeded the notes' total. For `unshield`: the private balance could not cover it. Nothing is parked | Show error; do not assume payout. After a redeem, the remainder note holds the value (see above) |
 | `UnshieldFailed` (amount > 0) | The request predates an emergency recovery, which already swept its backing. Nothing is paid or parked | Show error; the token is retired |
 | `UnshieldParked` | Underlying sits on the private token for `account` | Read `claimableUnderlying(account)`. User calls `claimUnshielded(to)` to pull the ERC20. A pause or retirement does not block the claim |
 | Token retired (`retired()` is true, `EmergencyRecovery` emitted) | Paused for good. Every user operation reverts with `EnforcedPause`; `unpause` reverts with `"Token retired"` | Show the token as retired; only parked claims can still be pulled |

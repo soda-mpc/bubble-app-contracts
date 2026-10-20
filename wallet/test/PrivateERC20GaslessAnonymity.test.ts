@@ -6,10 +6,13 @@
  *   3. T, never funded with gas, re-encrypts the note under its own key and, through the gasless forwarder,
  *      transfers part of it to any destination D and later cashes out the remainder to underlying at D2.
  *
- * Asserts that nothing on-chain in T's transactions links T, D or D2 to U:
- *   - U's address appears in no log (token, library, GC contracts, forwarder) and in no calldata,
+ * U is an ordinary user of a token someone else (the facilitator here) deployed and owns, so the token's owner and
+ * master do not point at U. Asserts that T's transactions carry no trace of U:
+ *   - U's address and the note handles of U's mint appear in no calldata and in no log (token, library, GC
+ *     contracts, forwarder) of T's transactions,
  *   - T never holds native gas; every T transaction is sent by the shared facilitator,
  *   - U is not permitted on any handle created for T, D or D2.
+ * What it cannot cover: amount and timing correlation, and the issuer, who knows `y`, finding the note's burn.
  *
  * Run: npx hardhat test test/PrivateERC20GaslessAnonymity.test.ts --network sepolia-arbitrum
  */
@@ -38,6 +41,7 @@ import {
   getOprfMintedEventsFromReceipt,
   getOprfMintedHandlesFromReceipt,
   mintAndApprove,
+  skipUnlessBubbleNetwork,
   waitForUnshieldOutcome,
 } from "./helpers/testHelpers";
 
@@ -48,12 +52,8 @@ const TOKEN_NAME = "Anonymity Test Token";
 const NOTE_AMOUNT = 20n * 10n ** 18n + BigInt(Math.floor(Math.random() * 1_000_000));
 const PAY_AMOUNT = 5n * 10n ** 18n;
 
-function shouldSkip(): boolean {
-  return (
-    !process.env.MNEMONIC ||
-    (!process.env.SEPOLIA_ARBITRUM_RPC_URL && !process.env.ALCHEMY_API_KEY)
-  );
-}
+/** The facilitator deploys the contracts and pays every T transaction. */
+const MIN_FACILITATOR_BALANCE = hre.ethers.parseEther("0.001");
 
 describe("PrivateERC20Contract256Gasless anonymous OPRF transfer", function () {
   this.timeout(1_200_000);
@@ -77,18 +77,22 @@ describe("PrivateERC20Contract256Gasless anonymous OPRF transfer", function () {
 
   /** Off-chain handoff from U to T. */
   let note: { x: bigint; y: bigint; q: bigint };
+  /** Handles of U's mint; none may show up in T's transactions. */
+  let mintHandles: bigint[];
   /** Remainder note T keeps after paying D. */
   let remainder: { x: bigint; y: bigint; q: bigint };
 
   before(async function () {
-    const network = await hre.ethers.provider.getNetwork();
-    chainId = Number(network.chainId);
-    if (network.chainId === 31337n || shouldSkip()) {
-      this.skip();
-    }
+    await skipUnlessBubbleNetwork(this);
+    chainId = Number((await hre.ethers.provider.getNetwork()).chainId);
     const signers = await hre.ethers.getSigners();
     user = signers[0];
     facilitator = signers[1];
+    // Checked up front, not topped up from U: a U → facilitator transfer would itself link them.
+    expect(
+      await hre.ethers.provider.getBalance(facilitator.address),
+      `facilitator ${facilitator.address} (mnemonic account 1) needs at least ${hre.ethers.formatEther(MIN_FACILITATOR_BALANCE)} ETH`
+    ).to.be.gte(MIN_FACILITATOR_BALANCE);
     temp = Wallet.createRandom().connect(hre.ethers.provider);
     dest = Wallet.createRandom().connect(hre.ethers.provider);
     cashOut = Wallet.createRandom();
@@ -100,11 +104,11 @@ describe("PrivateERC20Contract256Gasless anonymous OPRF transfer", function () {
     tempAesKeyHex = tempAesKey.toString("hex");
     destAesKey = await getUserKeyViaProxy(dest, PROXY_URL);
 
-    mockToken = await deployMockToken(hre, user, "Anonymity USD", "AUSD");
-    privateToken = await deployPrivateTokenGasless(hre, user, {
+    mockToken = await deployMockToken(hre, facilitator, "Anonymity USD", "AUSD");
+    privateToken = await deployPrivateTokenGasless(hre, facilitator, {
       underlyingAddress: await mockToken.getAddress(),
-      ownerAddress: user.address,
-      masterAddress: user.address,
+      ownerAddress: facilitator.address,
+      masterAddress: facilitator.address,
       name: TOKEN_NAME,
       symbol: "gANON",
     });
@@ -112,7 +116,7 @@ describe("PrivateERC20Contract256Gasless anonymous OPRF transfer", function () {
     forwarder = privateToken.gaslessForwarder;
     forwarderAddress = await forwarder.getAddress();
 
-    await mintAndApprove({ mockToken, privateToken, userAddress: user.address, amount: NOTE_AMOUNT });
+    await mintAndApprove({ mockToken: mockToken.connect(user), privateToken, userAddress: user.address, amount: NOTE_AMOUNT });
     await (await privateToken.connect(user).shield(NOTE_AMOUNT)).wait();
     await delay(DELAY_BALANCE_SYNC_MS);
   });
@@ -125,25 +129,36 @@ describe("PrivateERC20Contract256Gasless anonymous OPRF transfer", function () {
     return address.slice(2).toLowerCase();
   }
 
-  /** Fails if U's address appears anywhere in the transaction's calldata or in any log it emitted. */
-  async function expectNoUserTrace(txHash: string, label: string) {
-    const tx = await hre.ethers.provider.getTransaction(txHash);
-    const receipt = await hre.ethers.provider.getTransactionReceipt(txHash);
-    const needle = hex(user.address);
-
-    expect(tx!.data.toLowerCase().includes(needle), `${label}: U address in calldata`).to.equal(false);
-    for (const log of receipt!.logs) {
-      const blob = (log.topics.join("") + log.data).toLowerCase();
-      expect(blob.includes(needle), `${label}: U address in log of ${log.address}`).to.equal(false);
+  /** What links a transaction to U: U's address and the handles of U's mint, as they appear in calldata and logs. */
+  function userNeedles(): Array<[string, string]> {
+    const needles: Array<[string, string]> = [["U address", hex(user.address)]];
+    for (const h of mintHandles ?? []) {
+      needles.push([`mint handle ${h}`, h.toString(16).padStart(64, "0")]);
     }
-    expect(tx!.from.toLowerCase(), `${label}: sender`).to.not.equal(user.address.toLowerCase());
+    return needles;
   }
 
-  /** Positive control for the scanner: U's own mint must show U. */
-  async function countUserTraces(txHash: string): Promise<number> {
+  async function traces(txHash: string): Promise<{ calldata: string[]; logs: string[] }> {
+    const tx = await hre.ethers.provider.getTransaction(txHash);
     const receipt = await hre.ethers.provider.getTransactionReceipt(txHash);
-    const needle = hex(user.address);
-    return receipt!.logs.filter((log) => (log.topics.join("") + log.data).toLowerCase().includes(needle)).length;
+    const data = tx!.data.toLowerCase();
+    const found = { calldata: [] as string[], logs: [] as string[] };
+    for (const [label, needle] of userNeedles()) {
+      if (data.includes(needle)) found.calldata.push(label);
+      for (const log of receipt!.logs) {
+        if ((log.topics.join("") + log.data).toLowerCase().includes(needle)) found.logs.push(`${label} in ${log.address}`);
+      }
+    }
+    return found;
+  }
+
+  /** Fails if U's address or a handle of U's mint appears in the transaction's calldata or logs, or U sent it. */
+  async function expectNoUserTrace(txHash: string, label: string) {
+    const found = await traces(txHash);
+    expect(found.calldata, `${label}: in calldata`).to.deep.equal([]);
+    expect(found.logs, `${label}: in logs`).to.deep.equal([]);
+    const tx = await hre.ethers.provider.getTransaction(txHash);
+    expect(tx!.from.toLowerCase(), `${label}: sender`).to.not.equal(user.address.toLowerCase());
   }
 
   async function expectUserNotPermitted(handles: bigint[], label: string) {
@@ -219,7 +234,13 @@ describe("PrivateERC20Contract256Gasless anonymous OPRF transfer", function () {
       PROXY_URL
     );
     expect(q).to.equal(NOTE_AMOUNT);
-    expect(await countUserTraces(receipt.hash), "scanner sees U in U's own mint").to.be.greaterThan(0);
+    mintHandles = [handles.xHandle, handles.yHandle, handles.qHandle];
+    // Positive control for both halves of the scanner: U's own mint shows U in its calldata (the IT owner) and in
+    // its logs, and its handles in its logs.
+    const found = await traces(receipt.hash);
+    expect(found.calldata, "scanner sees U in the mint calldata").to.include("U address");
+    expect(found.logs.some((l) => l.startsWith("U address")), "scanner sees U in the mint logs").to.equal(true);
+    expect(found.logs.some((l) => l.startsWith("mint handle")), "scanner sees the mint handles in the mint logs").to.equal(true);
     note = { x, y, q }; // handed off-chain to T
   });
 
@@ -254,6 +275,7 @@ describe("PrivateERC20Contract256Gasless anonymous OPRF transfer", function () {
   });
 
   it("3. T cashes out the remainder to underlying at D2 gaslessly, with no on-chain trace of U", async function () {
+    // T owns the note, so the dest lock lets it pay D2 directly; an EIP-3009 hop to a merchant is a product choice.
     const startBlock = await hre.ethers.provider.getBlockNumber();
     const data = privateToken.interface.encodeFunctionData("redeemManyToUnderlying", [
       [{ x: tempIt128(remainder.x), q: tempIt256(remainder.q), y_clear: remainder.y }],
@@ -281,10 +303,8 @@ describe("PrivateERC20Contract256Gasless anonymous OPRF transfer", function () {
   });
 
   it("4. U's own view: U cannot decrypt anything created for T, D or D2", async function () {
-    const balanceHandle: bigint = await privateToken["balanceOf(address)"](cashOut.address);
-    if (balanceHandle !== 0n) {
-      await expectUserNotPermitted([balanceHandle], "D2 balance");
-    }
+    // The cash-out pays D2 in underlying from the pool; D2 never gets a private balance.
+    expect(await privateToken["balanceOf(address)"](cashOut.address), "D2 private balance handle").to.equal(0n);
     // U's own balance is unaffected by T's activity after the mint.
     const userBalance: bigint = await privateToken["balanceOf(address)"](user.address);
     expect(await decryptValueViaProxy(userBalance, user, userAesKey, PROXY_URL)).to.equal(0n);
