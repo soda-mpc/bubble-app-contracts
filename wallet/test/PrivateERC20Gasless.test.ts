@@ -1,6 +1,8 @@
 /**
  * Gasless user flows of PrivateERC20Contract256Gasless on a Bubble network (not Hardhat 31337): a facilitator
- * submits the user's signed operations through the ERC-2771 forwarder and pays gas.
+ * submits the user's signed operations through the ERC-2771 forwarder and pays gas, including OPRF notes (mint,
+ * owner consistency, destination lock, signed redeem to a third party). The original PrivateERC20Contract256 is
+ * covered for comparison (msg.sender mint, no destination lock).
  *
  * This file: `npm run test:gasless:arbitrum-sepolia`
  * Local forwarder checks (no MPC): `npm run test:gasless`
@@ -11,17 +13,22 @@ import { HDNodeWallet, Wallet } from "ethers";
 import dotenv from "dotenv";
 
 import {
+  decryptMultipleValuesViaProxy,
   decryptValueViaProxy,
   getUserKeyViaProxy,
 } from "./helpers/bubbleCryptoTransport";
 import { signExecuteWithAuthorization, signTransientInsertPermission } from "./helpers/gaslessAuth";
 import { encodeEncryptedTransfer, encodeShield } from "./helpers/gaslessCalldata";
 import {
+  buildSignedItUint256,
+  buildUnsignedItUint128,
   buildUnsignedItUint256,
   DELAY_BALANCE_SYNC_MS,
+  DELAY_MPC_EXTENDED_MS,
   DELAY_MPC_REDEEM_MS,
   delay,
   deployMockToken,
+  deployPrivateToken,
   deployPrivateTokenGasless,
   findParsedLogInReceipt,
   findParsedLogInReceiptWhere,
@@ -29,6 +36,8 @@ import {
   getGcAclContract,
   getPrivateTokenBalance,
   getPrivateTransferAmountHandle,
+  getOprfMintedEventsFromReceipt,
+  getOprfMintedHandlesFromReceipt,
   mintAndApprove,
   waitForUnshieldOutcome,
 } from "./helpers/testHelpers";
@@ -39,6 +48,21 @@ const PROXY_URL = process.env.PROXY_URL || "https://proxy.bubble.sodalabs.net";
 const TOKEN_NAME = "Gasless Bubble Token";
 const UNDERLYING_NAME = "Gasless Test USD";
 const NOTE_AMOUNT = 50n * 10n ** 18n;
+const PAY_AMOUNT = 10n ** 17n;
+
+function dummyIt256(user: string) {
+  return {
+    userAddress: user,
+    ciphertext: { ciphertextHigh: 1n, ciphertextLow: 1n },
+  };
+}
+
+function dummyIt128(user: string) {
+  return {
+    userAddress: user,
+    ciphertext: 1n,
+  };
+}
 
 function shouldSkip(): boolean {
   return (
@@ -243,6 +267,160 @@ describe("PrivateERC20Contract256Gasless", function () {
       const decrypted = await decryptValueViaProxy(handle, owner, ownerAesKey, PROXY_URL);
       expect(decrypted).to.equal(amount);
     });
+
+    it("mints an OPRF note to the signer via facilitator", async function () {
+      const quantityIt = buildUnsignedItUint256({
+        value: NOTE_AMOUNT,
+        userAddress: owner.address,
+        userAesKeyHex: ownerAesKeyHex,
+        contractAddress: tokenAddress,
+      });
+      const data = privateToken.interface.encodeFunctionData("mintOPRFToken", [quantityIt]);
+      const receipt = await execAsOwner(data, true);
+      await delay(DELAY_MPC_EXTENDED_MS);
+
+      const minted = getOprfMintedEventsFromReceipt(receipt, privateToken);
+      expect(minted[0]?.user.toLowerCase()).to.equal(owner.address.toLowerCase());
+      expect(minted.some((e) => e.user.toLowerCase() === facilitator.address.toLowerCase())).to.equal(
+        false
+      );
+    });
+
+    it("reverts a facilitator mint when the owner did not grant transient insert", async function () {
+      const quantityIt = buildUnsignedItUint256({
+        value: NOTE_AMOUNT,
+        userAddress: owner.address,
+        userAesKeyHex: ownerAesKeyHex,
+        contractAddress: tokenAddress,
+      });
+      const data = privateToken.interface.encodeFunctionData("mintOPRFToken", [quantityIt]);
+      await expect(submitAsOwner(data, false)).to.be.reverted;
+    });
+  });
+
+  describe("OPRF IT user consistency", function () {
+    it("reverts splitToken when x/q/qSplit userAddresses disagree", async function () {
+      const other = Wallet.createRandom().address;
+      await expect(
+        privateToken.splitToken(dummyIt128(owner.address), dummyIt256(other), 0, dummyIt256(owner.address))
+      ).to.be.revertedWith("OPRF IT user mismatch");
+    });
+
+    it("reverts redeemMany when amount IT userAddress differs from token ITs", async function () {
+      const other = Wallet.createRandom().address;
+      await expect(
+        privateToken.redeemMany(
+          [{ x: dummyIt128(owner.address), q: dummyIt256(owner.address), y_clear: 1n }],
+          dummyIt256(other),
+          owner.address
+        )
+      ).to.be.revertedWith("OPRF IT user mismatch");
+    });
+  });
+
+  describe("unsigned dest lock vs signed any destination", function () {
+    it("unsigned relayer cannot redeem to itself", async function () {
+      await expect(
+        privateToken
+          .connect(facilitator)
+          .redeemManyToUnderlying(
+            [{ x: dummyIt128(owner.address), q: dummyIt256(owner.address), y_clear: 1n }],
+            dummyIt256(owner.address),
+            facilitator.address,
+            false
+          )
+      ).to.be.revertedWith("Relayer dest must be IT owner");
+    });
+
+    it("signed redeemManyToUnderlying can pay a third party", async function () {
+      const quantityIt = buildUnsignedItUint256({
+        value: NOTE_AMOUNT,
+        userAddress: owner.address,
+        userAesKeyHex: ownerAesKeyHex,
+        contractAddress: tokenAddress,
+      });
+      await mintAndApprove({
+        mockToken,
+        privateToken,
+        userAddress: owner.address,
+        amount: NOTE_AMOUNT,
+      });
+      await execAsOwner(privateToken.interface.encodeFunctionData("shield", [NOTE_AMOUNT]));
+      await delay(DELAY_BALANCE_SYNC_MS);
+      const mintReceipt = await execAsOwner(
+        privateToken.interface.encodeFunctionData("mintOPRFToken", [quantityIt]),
+        true
+      );
+      await delay(DELAY_MPC_EXTENDED_MS);
+
+      const mintHandles = getOprfMintedHandlesFromReceipt(mintReceipt, privateToken);
+      expect(mintHandles).to.not.be.undefined;
+
+      const [x, y, q] = await decryptMultipleValuesViaProxy(
+        [mintHandles!.xHandle, mintHandles!.yHandle, mintHandles!.qHandle],
+        owner,
+        ownerAesKey,
+        PROXY_URL
+      );
+
+      const tokenInput = [
+        {
+          x: buildUnsignedItUint128({
+            value: x,
+            userAddress: owner.address,
+            userAesKeyHex: ownerAesKeyHex,
+            contractAddress: tokenAddress,
+          }),
+          q: buildUnsignedItUint256({
+            value: q,
+            userAddress: owner.address,
+            userAesKeyHex: ownerAesKeyHex,
+            contractAddress: tokenAddress,
+          }),
+          y_clear: y,
+        },
+      ];
+      const amountIt = buildUnsignedItUint256({
+        value: PAY_AMOUNT,
+        userAddress: owner.address,
+        userAesKeyHex: ownerAesKeyHex,
+        contractAddress: tokenAddress,
+      });
+
+      const destBefore = await mockToken.balanceOf(destination.address);
+      const startBlock = await hre.ethers.provider.getBlockNumber();
+      const redeemData = privateToken.interface.encodeFunctionData("redeemManyToUnderlying", [
+        tokenInput,
+        amountIt,
+        destination.address,
+        false,
+      ]);
+      const redeemReceipt = await execAsOwner(redeemData, true);
+      // The redeem path announces the payout too: recipient, amount 0 (encrypted), and the decrypt request.
+      const requested = redeemReceipt.logs
+        .map((log: { topics: string[]; data: string }) => {
+          try {
+            return privateToken.interface.parseLog(log);
+          } catch {
+            return null;
+          }
+        })
+        .find((parsed: { name: string } | null) => parsed?.name === "UnshieldRequested");
+      expect(requested, "UnshieldRequested").to.not.be.undefined;
+      expect(requested.args.to).to.equal(destination.address);
+      expect(requested.args.amount).to.equal(0n);
+      expect(requested.args.decryptId).to.be.a("bigint");
+
+      const { successEvents, failedEvents } = await waitForUnshieldOutcome(privateToken, hre, startBlock, {
+        timeoutMs: DELAY_MPC_REDEEM_MS * 6,
+        pollIntervalMs: 3000,
+      });
+      expect(failedEvents.length).to.equal(0);
+      expect(successEvents.length).to.be.greaterThan(0);
+      const unshieldTo = (successEvents[0].args?.to ?? successEvents[0].args?.[0]) as string;
+      expect(unshieldTo.toLowerCase()).to.equal(destination.address.toLowerCase());
+      expect(await mockToken.balanceOf(destination.address)).to.equal(destBefore + PAY_AMOUNT);
+    });
   });
 
   describe("gasless user operations", function () {
@@ -357,5 +535,64 @@ describe("PrivateERC20Contract256Gasless", function () {
     expect(await mockToken.balanceOf(owner.address)).to.equal(underlyingBefore - shieldAmount + moveAmount);
     expect(await ownerPrivateBalance(), "unshield debit").to.equal(privateBefore - 3n * moveAmount);
   });
+  });
+});
+
+describe("PrivateERC20Contract256 (original msg.sender model)", function () {
+  this.timeout(900000);
+
+  let owner: any;
+  let ownerAesKey: Buffer;
+  let ownerAesKeyHex: string;
+  let mockToken: any;
+  let original: any;
+
+  before(async function () {
+    const network = await hre.ethers.provider.getNetwork();
+    if (network.chainId === 31337n || shouldSkip()) {
+      this.skip();
+    }
+
+    const signers = await hre.ethers.getSigners();
+    owner = signers[0];
+
+    ownerAesKey = await getUserKeyViaProxy(owner, PROXY_URL);
+    ownerAesKeyHex = ownerAesKey.toString("hex");
+
+    mockToken = await deployMockToken(hre, owner, "Original Test USD", "OTUSD");
+    original = await deployPrivateToken(hre, owner, {
+      underlyingAddress: await mockToken.getAddress(),
+      ownerAddress: owner.address,
+      masterAddress: owner.address,
+      name: "Original Token",
+      symbol: "ORIG",
+    });
+
+    await mintAndApprove({
+      mockToken,
+      privateToken: original,
+      userAddress: owner.address,
+      amount: NOTE_AMOUNT,
+    });
+  });
+
+  it("owner mints an OPRF note with msg.sender (no executeWithAuthorization)", async function () {
+    await (await original.connect(owner).shield(NOTE_AMOUNT)).wait();
+    await delay(DELAY_BALANCE_SYNC_MS);
+
+    const quantityIt = await buildSignedItUint256({
+      value: NOTE_AMOUNT,
+      userAddress: owner.address,
+      userAesKeyHex: ownerAesKeyHex,
+      contractAddress: await original.getAddress(),
+      signer: owner,
+    });
+    const tx = await original.connect(owner).mintOPRFToken(quantityIt);
+    const receipt = await tx.wait();
+    await delay(DELAY_MPC_EXTENDED_MS);
+
+    const minted = getOprfMintedEventsFromReceipt(receipt, original);
+    expect(minted.length).to.be.greaterThan(0);
+    expect(minted[0]?.user.toLowerCase()).to.equal(owner.address.toLowerCase());
   });
 });

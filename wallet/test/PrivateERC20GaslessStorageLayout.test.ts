@@ -25,7 +25,7 @@ import {
 // Not a public API of @openzeppelin/hardhat-upgrades; both packages are pinned in package.json.
 import { readValidations } from "@openzeppelin/hardhat-upgrades/dist/utils/validations";
 
-import { PRIVATE_ERC20_256_GASLESS_FQN } from "./helpers/testHelpers";
+import { PRIVATE_ERC20_256_GASLESS_FQN, PRIVATE_OPRF_NOTES_FQN } from "./helpers/testHelpers";
 
 const NAMESPACE_ID = "bubble.storage.PrivateERC20Gasless";
 const NAMESPACE = `erc7201:${NAMESPACE_ID}`;
@@ -68,8 +68,12 @@ describe("PrivateERC20Contract256Gasless storage layout", function () {
   });
 
   it("passes the upgrades plugin validation", async function () {
-    const factory = await hre.ethers.getContractFactory(PRIVATE_ERC20_256_GASLESS_FQN);
-    await hre.upgrades.validateImplementation(factory, { kind: "uups" });
+    const factory = await hre.ethers.getContractFactory(PRIVATE_ERC20_256_GASLESS_FQN, {
+      libraries: { [PRIVATE_OPRF_NOTES_FQN]: "0x0000000000000000000000000000000000000001" },
+    });
+    // PrivateOPRFNotes is a linked library. The plugin cannot check it; it was reviewed by hand: no storage of its
+    // own, no selfdestruct, and it only runs through the token's DELEGATECALL (Solidity's library call guard).
+    await hre.upgrades.validateImplementation(factory, { kind: "uups", unsafeAllowLinkedLibraries: true });
   });
 
   it("uses the ERC-7201 slot of its annotated namespace", function () {
