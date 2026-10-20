@@ -25,5 +25,12 @@
     "symbol": "pTUSDC",
     "underlying": "0x15DF3e9761cEc63234c53b8aa576479219d6f789",
     "blockNumber": 283047812
+  },
+  "gaslessFactory": {
+    "library": "0x996d2d2977E0FbbAAF09DE9E4e5c5748ABc05e1C",
+    "implementation": "0xeA390B51b6Fb568939fBdDfaB75843e124619D55",
+    "factory": "0xCa2472Eaa4568B9A7d5baAD6D41A042a7B882FAC",
+    "blockNumber": 321067895,
+    "deployedAt": "2026-10-20T13:13:02.055Z"
   }
 }
