@@ -9,9 +9,12 @@ import {IPrivateERC20Gasless} from "./interfaces/IPrivateERC20Gasless.sol";
 
 /// @title PrivateERC20GaslessFactory
 /// @notice Deploys PrivateERC20Contract256Gasless proxies and a PrivateERC20GaslessForwarder for each one.
-/// @dev The factory is the token owner only for the creation transaction, so it can set the forwarder.
-///      It then transfers ownership to the creator. The creator must call `acceptOwnership()` on the token
-///      (Ownable2Step). The creator is the master address from the start.
+/// @dev The factory is the token's initial owner so it can set the forwarder, then starts an Ownable2Step handoff to
+///      the creator. The factory stays owner until the creator calls `acceptOwnership()` on the token, so the
+///      token's admin functions (pause, upgrade, forwarder, master, recovery) are unreachable until then. The
+///      factory has no way to call them or to restart the handoff. Call `createToken` from an account that can
+///      also send `acceptOwnership()` itself: it cannot go through the forwarder, so it needs gas. The creator is
+///      the master address from the start.
 contract PrivateERC20GaslessFactory {
     /// @notice Emitted when a new gasless private token and its forwarder are created.
     event TokenCreated(
@@ -75,14 +78,9 @@ contract PrivateERC20GaslessFactory {
         require(ok && ret.length >= 32, "Invalid ERC20 contract");
 
         // Factory is the initial owner so it can set the forwarder. Creator is master, and pending owner.
-        bytes memory initData = abi.encodeWithSelector(
-            IPrivateERC20Gasless.initializeWithWrappedNative.selector,
-            name,
-            symbol,
-            underlying,
-            address(this),
-            msg.sender,
-            underlyingIsWrappedNative
+        bytes memory initData = abi.encodeCall(
+            IPrivateERC20Gasless.initializeWithWrappedNative,
+            (name, symbol, underlying, address(this), msg.sender, underlyingIsWrappedNative)
         );
 
         ERC1967Proxy proxy = new ERC1967Proxy(implementation, initData);

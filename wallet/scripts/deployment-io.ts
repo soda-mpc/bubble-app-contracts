@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { DeploymentResult } from "./deployment-types";
+import { DeploymentRecord, DeploymentResult } from "./deployment-types";
 
 const DEPLOYMENTS_DIR = path.join(__dirname, "deployments");
 
@@ -44,18 +44,32 @@ export function resolveDeploymentPath(explicitPath?: string, networkName?: strin
   return path.join(process.cwd(), "deployment.json");
 }
 
+/**
+ * Writes `result` into the network's deployment file. Sections other scripts recorded (for example `gaslessFactory`)
+ * are kept, so re-running one script does not drop another's entries.
+ */
 export function saveDeploymentResult(
   result: DeploymentResult,
   networkName: string,
   outputPath?: string
 ): string {
+  return saveDeploymentRecord(result, networkName, outputPath);
+}
+
+/** Merges `sections` into the network's deployment file (creating it if missing) and returns its path. */
+export function saveDeploymentRecord(
+  sections: Partial<DeploymentRecord>,
+  networkName: string,
+  outputPath?: string
+): string {
   const targetPath = outputPath ?? getDeploymentFilePath(networkName);
+  const existing = fs.existsSync(targetPath) ? loadDeploymentResult(targetPath) : {};
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  fs.writeFileSync(targetPath, `${JSON.stringify(result, null, 2)}\n`, "utf-8");
+  fs.writeFileSync(targetPath, `${JSON.stringify({ ...existing, ...sections }, null, 2)}\n`, "utf-8");
   return targetPath;
 }
 
-export function loadDeploymentResult(filePath: string): DeploymentResult {
+export function loadDeploymentResult(filePath: string): DeploymentRecord {
   const raw = fs.readFileSync(filePath, "utf-8");
-  return JSON.parse(raw) as DeploymentResult;
+  return JSON.parse(raw) as DeploymentRecord;
 }

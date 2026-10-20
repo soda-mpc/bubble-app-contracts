@@ -371,7 +371,7 @@ Inner `redeemManyToUnderlying.recipient` **must** still be the agent so unshield
 |----------|---------|
 | `CHAIN_ID` | e.g. `421614` Arbitrum Sepolia |
 | `RPC_URL` | Read + issuer txs |
-| `PRIVATE_ERC20` | Proxy address |
+| `PRIVATE_ERC20` | Proxy address, from `PrivateERC20GaslessFactory.createToken`. The creator must then call `acceptOwnership()` with its own gas; until then the token's admin functions are unreachable |
 | `FORWARDER` | Per-token forwarder. Transaction target and EIP-712 `verifyingContract` |
 | `UNDERLYING` | USDC or EIP-3009 mock |
 | `GCACL` | Permit insert |

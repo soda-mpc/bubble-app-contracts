@@ -1,5 +1,7 @@
 /**
- * Verify contracts deployed by setup-environment.ts on block explorers (Etherscan, etc.).
+ * Verify recorded contracts on block explorers (Etherscan, etc.): the setup-environment.ts sections, and the gasless
+ * sections from deploy-private-erc20-gasless-factory.ts and `RECORD_AS=gaslessTestToken` deploy-tusdc.ts. Only the
+ * sections present in the file are checked.
  *
  * Usage:
  *   npx hardhat run scripts/verify-contracts.ts --network <network> [deployment.json]
@@ -13,7 +15,7 @@
 
 import * as fs from "fs";
 import { ethers, run } from "hardhat";
-import { DeploymentResult } from "./deployment-types";
+import { DeploymentRecord } from "./deployment-types";
 import { loadDeploymentResult, resolveDeploymentPath } from "./deployment-io";
 
 function parseDeploymentPathArg(): string | undefined {
@@ -27,26 +29,38 @@ function assertAddress(value: string, field: string): void {
   }
 }
 
-function validateDeployment(json: DeploymentResult, networkName: string): void {
-  if (!json?.testToken?.address || !json?.privateERC20WithRestrictionList?.implementation) {
-    throw new Error("Invalid deployment JSON: missing testToken or privateERC20WithRestrictionList");
+function validateDeployment(json: DeploymentRecord, networkName: string): void {
+  const base = json.testToken || json.privateERC20WithRestrictionList || json.restrictionListRegistryFactory;
+  if (!base && !json.gaslessFactory && !json.gaslessTestToken) {
+    throw new Error("Invalid deployment JSON: no recorded contracts");
   }
 
-  assertAddress(json.testToken.address, "testToken.address");
-  assertAddress(json.privateERC20WithRestrictionList.implementation, "privateERC20WithRestrictionList.implementation");
-  assertAddress(json.privateERC20WithRestrictionList.factory, "privateERC20WithRestrictionList.factory");
-  assertAddress(json.restrictionListRegistryFactory.address, "restrictionListRegistryFactory.address");
-  assertAddress(json.privateToken.address, "privateToken.address");
-  assertAddress(json.privateToken.underlying, "privateToken.underlying");
-
-  if (
-    json.privateToken.address.toLowerCase() ===
-    json.privateERC20WithRestrictionList.implementation.toLowerCase()
-  ) {
-    throw new Error(
-      "Deployment JSON looks corrupted: privateToken.address equals implementation address. Re-run setup-environment.ts for this network."
-    );
+  if (json.testToken) assertAddress(json.testToken.address, "testToken.address");
+  if (json.privateERC20WithRestrictionList) {
+    assertAddress(json.privateERC20WithRestrictionList.implementation, "privateERC20WithRestrictionList.implementation");
+    assertAddress(json.privateERC20WithRestrictionList.factory, "privateERC20WithRestrictionList.factory");
   }
+  if (json.restrictionListRegistryFactory) {
+    assertAddress(json.restrictionListRegistryFactory.address, "restrictionListRegistryFactory.address");
+  }
+  if (json.privateToken) {
+    assertAddress(json.privateToken.address, "privateToken.address");
+    assertAddress(json.privateToken.underlying, "privateToken.underlying");
+    if (
+      json.privateERC20WithRestrictionList &&
+      json.privateToken.address.toLowerCase() === json.privateERC20WithRestrictionList.implementation.toLowerCase()
+    ) {
+      throw new Error(
+        "Deployment JSON looks corrupted: privateToken.address equals implementation address. Re-run setup-environment.ts for this network."
+      );
+    }
+  }
+  if (json.gaslessFactory) {
+    assertAddress(json.gaslessFactory.library, "gaslessFactory.library");
+    assertAddress(json.gaslessFactory.implementation, "gaslessFactory.implementation");
+    assertAddress(json.gaslessFactory.factory, "gaslessFactory.factory");
+  }
+  if (json.gaslessTestToken) assertAddress(json.gaslessTestToken.address, "gaslessTestToken.address");
 
   if (json.network && json.network !== networkName) {
     console.warn(
@@ -144,67 +158,70 @@ async function main(): Promise<number> {
     constructorArguments?: unknown[];
     contract?: string;
     libraries?: Record<string, string>;
-  }> = [
-    {
+  }> = [];
+  if (deployment.testToken) {
+    targets.push({
       name: "TUSDC (Test Token)",
       address: deployment.testToken.address,
       constructorArguments: [deployment.testToken.name, deployment.testToken.symbol],
       contract: "contracts/TUSDC.sol:TUSDC",
-    },
-    {
-      name: "PrivateERC20WithRestrictionList256 (Implementation)",
-      address: deployment.privateERC20WithRestrictionList.implementation,
-      constructorArguments: [],
-      contract: "contracts/with-restrictions/PrivateERC20WithRestrictionList256.sol:PrivateERC20WithRestrictionList256",
-    },
-    {
-      name: "PrivateERC20WithRestrictionListFactory256 (Factory)",
-      address: deployment.privateERC20WithRestrictionList.factory,
-      constructorArguments: [deployment.privateERC20WithRestrictionList.implementation],
-      contract:
-        "contracts/with-restrictions/PrivateERC20WithRestrictionListFactory256.sol:PrivateERC20WithRestrictionListFactory256",
-    },
-    {
+    });
+  }
+  if (deployment.privateERC20WithRestrictionList) {
+    targets.push(
+      {
+        name: "PrivateERC20WithRestrictionList256 (Implementation)",
+        address: deployment.privateERC20WithRestrictionList.implementation,
+        constructorArguments: [],
+        contract: "contracts/with-restrictions/PrivateERC20WithRestrictionList256.sol:PrivateERC20WithRestrictionList256",
+      },
+      {
+        name: "PrivateERC20WithRestrictionListFactory256 (Factory)",
+        address: deployment.privateERC20WithRestrictionList.factory,
+        constructorArguments: [deployment.privateERC20WithRestrictionList.implementation],
+        contract:
+          "contracts/with-restrictions/PrivateERC20WithRestrictionListFactory256.sol:PrivateERC20WithRestrictionListFactory256",
+      }
+    );
+  }
+  if (deployment.restrictionListRegistryFactory) {
+    targets.push({
       name: "RestrictionListRegistryFactory",
       address: deployment.restrictionListRegistryFactory.address,
       constructorArguments: [],
       contract: "contracts/with-restrictions/RestrictionListRegistryFactory.sol:RestrictionListRegistryFactory",
-    },
-  ];
+    });
+  }
 
-  const gasless = deployment as DeploymentResult & {
-    gaslessTestToken?: { address: string; name: string; symbol: string };
-    gaslessFactory?: { library: string; implementation: string; factory: string };
-  };
-  if (gasless.gaslessTestToken) {
+  if (deployment.gaslessTestToken) {
     targets.push({
       name: "TUSDC (gasless test token)",
-      address: gasless.gaslessTestToken.address,
-      constructorArguments: [gasless.gaslessTestToken.name, gasless.gaslessTestToken.symbol],
+      address: deployment.gaslessTestToken.address,
+      constructorArguments: [deployment.gaslessTestToken.name, deployment.gaslessTestToken.symbol],
       contract: "contracts/TUSDC.sol:TUSDC",
     });
   }
-  if (gasless.gaslessFactory) {
+  if (deployment.gaslessFactory) {
     targets.push(
       {
         name: "PrivateOPRFNotes (Library)",
-        address: gasless.gaslessFactory.library,
+        address: deployment.gaslessFactory.library,
         constructorArguments: [],
         contract: "contracts/libraries/PrivateOPRFNotes.sol:PrivateOPRFNotes",
       },
       {
         name: "PrivateERC20Contract256Gasless (Implementation)",
-        address: gasless.gaslessFactory.implementation,
+        address: deployment.gaslessFactory.implementation,
         constructorArguments: [],
         contract: "contracts/PrivateERC20Contract256Gasless.sol:PrivateERC20Contract256Gasless",
         libraries: {
-          "contracts/libraries/PrivateOPRFNotes.sol:PrivateOPRFNotes": gasless.gaslessFactory.library,
+          "contracts/libraries/PrivateOPRFNotes.sol:PrivateOPRFNotes": deployment.gaslessFactory.library,
         },
       },
       {
         name: "PrivateERC20GaslessFactory",
-        address: gasless.gaslessFactory.factory,
-        constructorArguments: [gasless.gaslessFactory.implementation],
+        address: deployment.gaslessFactory.factory,
+        constructorArguments: [deployment.gaslessFactory.implementation],
         contract: "contracts/PrivateERC20GaslessFactory.sol:PrivateERC20GaslessFactory",
       }
     );
@@ -226,8 +243,10 @@ async function main(): Promise<number> {
   console.log("\n--- Summary ---");
   console.log(`Verified or already verified: ${ok}`);
   if (fail > 0) console.log(`Failed: ${fail}`);
-  console.log("\nNote: The private token (proxy) at", deployment.privateToken.address, "is an ERC1967Proxy.");
-  console.log("      Verify the implementation above; the proxy can be verified separately with constructor args (implementation, initData) if needed.\n");
+  if (deployment.privateToken) {
+    console.log("\nNote: The private token (proxy) at", deployment.privateToken.address, "is an ERC1967Proxy.");
+    console.log("      Verify the implementation above; the proxy can be verified separately with constructor args (implementation, initData) if needed.\n");
+  }
 
   return fail > 0 ? 1 : 0;
 }

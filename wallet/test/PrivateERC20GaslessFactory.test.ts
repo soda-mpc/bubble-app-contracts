@@ -41,6 +41,21 @@ describe("PrivateERC20GaslessFactory", function () {
     mockToken = await deployMockToken(hre, creator, "Factory USD", "FUSD");
   });
 
+  /** The `TokenCreated` event in `receipt`; fails the test if it is missing. */
+  function tokenCreated(receipt: any) {
+    const created = receipt.logs
+      .map((log: any) => {
+        try {
+          return factory.interface.parseLog(log);
+        } catch {
+          return null;
+        }
+      })
+      .find((parsed: any) => parsed?.name === "TokenCreated");
+    expect(created, "TokenCreated").to.not.equal(undefined);
+    return created;
+  }
+
   describe("input checks", function () {
     it("rejects a zero implementation", async function () {
       const Factory = await hre.ethers.getContractFactory("PrivateERC20GaslessFactory", creator);
@@ -70,16 +85,7 @@ describe("PrivateERC20GaslessFactory", function () {
       const underlying = await mockToken.getAddress();
       const tx = await factory["createToken(string,string,address)"]("Gasless Factory Token", "gFAC", underlying);
       const receipt = await tx.wait();
-      const created = receipt.logs
-        .map((log: any) => {
-          try {
-            return factory.interface.parseLog(log);
-          } catch {
-            return null;
-          }
-        })
-        .find((parsed: any) => parsed?.name === "TokenCreated");
-      expect(created, "TokenCreated").to.not.equal(undefined);
+      const created = tokenCreated(receipt);
       const { token: tokenAddress, forwarder: forwarderAddress } = created.args;
       expect(created.args.creator).to.equal(creator.address);
       expect(created.args.underlying).to.equal(underlying);
@@ -104,6 +110,15 @@ describe("PrivateERC20GaslessFactory", function () {
       // Ownable2Step: the factory stays owner until the creator accepts.
       expect(await token.owner()).to.equal(await factory.getAddress());
       expect(await token.pendingOwner()).to.equal(creator.address);
+    });
+
+    it("until the creator accepts, admin is frozen and only the creator can accept", async function () {
+      await expect(token.pause()).to.be.revertedWithCustomError(token, "OwnableUnauthorizedAccount").withArgs(creator.address);
+      const [, stranger] = await hre.ethers.getSigners();
+      await expect(token.connect(stranger).acceptOwnership())
+        .to.be.revertedWithCustomError(token, "OwnableUnauthorizedAccount")
+        .withArgs(stranger.address);
+      expect(await token.owner()).to.equal(await factory.getAddress());
     });
 
     it("the creator accepts ownership and the forwarder relays the creator's signed calls", async function () {
@@ -142,15 +157,7 @@ describe("PrivateERC20GaslessFactory", function () {
       const receipt = await (
         await factory["createToken(string,string,address,bool)"]("Gasless Wrapped", "gWNM", wrappedAddress, true)
       ).wait();
-      const created = receipt.logs
-        .map((log: any) => {
-          try {
-            return factory.interface.parseLog(log);
-          } catch {
-            return null;
-          }
-        })
-        .find((parsed: any) => parsed?.name === "TokenCreated");
+      const created = tokenCreated(receipt);
       expect(created.args.underlyingIsWrappedNative).to.equal(true);
       const wrappedToken = await hre.ethers.getContractAt(PRIVATE_ERC20_256_GASLESS_FQN, created.args.token, creator);
       expect(await wrappedToken.underlyingIsWrappedNative()).to.equal(true);

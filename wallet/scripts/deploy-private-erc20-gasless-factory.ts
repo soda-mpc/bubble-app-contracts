@@ -2,12 +2,16 @@
  * Deploy the gasless private-token stack on the selected network:
  *   PrivateOPRFNotes library, PrivateERC20Contract256Gasless implementation, PrivateERC20GaslessFactory.
  *
+ * Records them under `gaslessFactory` in scripts/deployments/<network>.json, keeping the file's other sections.
+ *
  * Example:
  *   npx hardhat run scripts/deploy-private-erc20-gasless-factory.ts --network sepolia-arbitrum
+ *
+ * To deploy only a new factory for an implementation that is already live, set both
+ *   GASLESS_LIBRARY=<PrivateOPRFNotes> GASLESS_IMPLEMENTATION=<PrivateERC20Contract256Gasless>
+ * The script checks that the implementation links that library.
  */
 
-import * as fs from "fs";
-import * as path from "path";
 import hre from "hardhat";
 import {
   PRIVATE_ERC20_256_GASLESS_FQN,
@@ -15,7 +19,7 @@ import {
   deployPrivateOPRFNotesLibrary,
   waitForDeploymentConfirmation,
 } from "../test/helpers/testHelpers";
-import { getDeploymentFilePath, loadDeploymentResult } from "./deployment-io";
+import { saveDeploymentRecord } from "./deployment-io";
 
 async function main() {
   const [deployer] = await hre.ethers.getSigners();
@@ -27,18 +31,36 @@ async function main() {
   console.log("Deployer:", deployer.address);
   console.log("Balance:", (await hre.ethers.provider.getBalance(deployer.address)).toString());
 
-  const libraryAddress = await deployPrivateOPRFNotesLibrary(hre, deployer);
-  console.log("PrivateOPRFNotes:", libraryAddress);
+  const reuseLibrary = process.env.GASLESS_LIBRARY?.trim();
+  const reuseImplementation = process.env.GASLESS_IMPLEMENTATION?.trim();
+  let libraryAddress: string;
+  let implementationAddress: string;
+  if (reuseLibrary || reuseImplementation) {
+    if (!reuseLibrary || !reuseImplementation) {
+      throw new Error("Set both GASLESS_LIBRARY and GASLESS_IMPLEMENTATION, or neither");
+    }
+    libraryAddress = hre.ethers.getAddress(reuseLibrary);
+    implementationAddress = hre.ethers.getAddress(reuseImplementation);
+    const code = (await hre.ethers.provider.getCode(implementationAddress)).toLowerCase();
+    if (!code.includes(libraryAddress.slice(2).toLowerCase())) {
+      throw new Error(`Implementation ${implementationAddress} does not link PrivateOPRFNotes ${libraryAddress}`);
+    }
+    console.log("Reusing PrivateOPRFNotes:", libraryAddress);
+    console.log("Reusing PrivateERC20Contract256Gasless:", implementationAddress);
+  } else {
+    libraryAddress = await deployPrivateOPRFNotesLibrary(hre, deployer);
+    console.log("PrivateOPRFNotes:", libraryAddress);
 
-  const Implementation = await hre.ethers.getContractFactory(PRIVATE_ERC20_256_GASLESS_FQN, {
-    signer: deployer,
-    libraries: { [PRIVATE_OPRF_NOTES_FQN]: libraryAddress },
-  });
-  const implementation = await Implementation.deploy();
-  await implementation.waitForDeployment();
-  await waitForDeploymentConfirmation(implementation, hre);
-  const implementationAddress = await implementation.getAddress();
-  console.log("PrivateERC20Contract256Gasless:", implementationAddress);
+    const Implementation = await hre.ethers.getContractFactory(PRIVATE_ERC20_256_GASLESS_FQN, {
+      signer: deployer,
+      libraries: { [PRIVATE_OPRF_NOTES_FQN]: libraryAddress },
+    });
+    const implementation = await Implementation.deploy();
+    await implementation.waitForDeployment();
+    await waitForDeploymentConfirmation(implementation, hre);
+    implementationAddress = await implementation.getAddress();
+    console.log("PrivateERC20Contract256Gasless:", implementationAddress);
+  }
 
   const Factory = await hre.ethers.getContractFactory("PrivateERC20GaslessFactory", deployer);
   const factory = await Factory.deploy(implementationAddress);
@@ -55,26 +77,20 @@ async function main() {
     );
   }
 
-  const deploymentPath = getDeploymentFilePath(networkName);
-  const existing = fs.existsSync(deploymentPath)
-    ? (loadDeploymentResult(deploymentPath) as unknown as Record<string, unknown>)
-    : { network: networkName, chainId };
-
-  const next = {
-    ...existing,
-    network: networkName,
-    chainId,
-    gaslessFactory: {
-      library: libraryAddress,
-      implementation: implementationAddress,
-      factory: factoryAddress,
-      blockNumber,
-      deployedAt: new Date().toISOString(),
+  const deploymentPath = saveDeploymentRecord(
+    {
+      network: networkName,
+      chainId,
+      gaslessFactory: {
+        library: libraryAddress,
+        implementation: implementationAddress,
+        factory: factoryAddress,
+        blockNumber,
+        deployedAt: new Date().toISOString(),
+      },
     },
-  };
-
-  fs.mkdirSync(path.dirname(deploymentPath), { recursive: true });
-  fs.writeFileSync(deploymentPath, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
+    networkName
+  );
   console.log("\nWrote", deploymentPath);
 
   console.log("\n=== Addresses ===");
