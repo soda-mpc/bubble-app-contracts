@@ -21,14 +21,16 @@ import {
   decryptValueViaProxy,
   getUserKeyViaProxy,
 } from "./helpers/bubbleCryptoTransport";
-import { signExecuteWithAuthorization } from "./helpers/gaslessAuth";
+import { signExecuteWithAuthorization, signTransientInsertPermission } from "./helpers/gaslessAuth";
 import {
-  DELAY_BALANCE_SYNC_MS,
+  buildUnsignedItUint256,
   delay,
+  DELAY_BALANCE_SYNC_MS,
   deployMockToken,
   deployPrivateTokenGasless,
   GCACL_ABI,
   getGcAclAddress,
+  getGcAclContract,
   mintAndApprove,
 } from "./helpers/testHelpers";
 
@@ -168,6 +170,10 @@ describe("PrivateERC20Contract256Gasless security", function () {
       .connect(opts.submitter ?? attacker)
       .executeWithAuthorization(auth.from, auth.data, auth.validAfter, auth.validBefore, auth.nonce, auth.signature, 0, "0x");
     return { tx, auth };
+  }
+
+  function ownerIt256(value: bigint) {
+    return buildUnsignedItUint256({ value, userAddress: owner.address, userAesKeyHex: ownerAesKeyHex, contractAddress: tokenAddress });
   }
 
   async function tryDecrypt(handle: bigint, signer: any, aesKey: Buffer): Promise<string> {
@@ -330,7 +336,8 @@ describe("PrivateERC20Contract256Gasless security", function () {
           }
         })
         .find((e: any) => e?.name === "Approval");
-      expect(approval.args[0].toLowerCase()).to.equal(attacker.address.toLowerCase());
+      expect(approval, "no Approval event found in the direct-call receipt").to.not.equal(undefined);
+      expect(approval!.args[0].toLowerCase()).to.equal(attacker.address.toLowerCase());
     });
 
     it("rejects consumeInsertGrant unless called by the forwarder", async function () {
@@ -347,6 +354,94 @@ describe("PrivateERC20Contract256Gasless security", function () {
     });
   });
 
+  describe("Transient insert grant", function () {
+    /** Owner-signed authorization for `data`, submitted by the attacker (the facilitator here) with an optional grant. */
+    async function forwardAsOwner(data: string, grant?: { nonce: bigint; signature: string }) {
+      const auth = await signExecuteWithAuthorization({
+        signer: owner,
+        forwarder: forwarderAddress,
+        tokenName: TOKEN_NAME,
+        chainId,
+        from: owner.address,
+        data,
+        validBefore: BigInt(Math.floor(Date.now() / 1000) + 3600),
+      });
+      const tx = await forwarder
+        .connect(attacker)
+        .executeWithAuthorization(
+          auth.from,
+          auth.data,
+          auth.validAfter,
+          auth.validBefore,
+          auth.nonce,
+          auth.signature,
+          grant?.nonce ?? 0n,
+          grant?.signature ?? "0x"
+        );
+      return tx.wait();
+    }
+
+    async function ownerGrant() {
+      const gcAcl = await getGcAclContract(hre, owner);
+      return signTransientInsertPermission({
+        signer: owner,
+        user: owner.address,
+        token: tokenAddress,
+        chainId,
+        gcAcl: getGcAclAddress(chainId),
+        nonce: await gcAcl.transientInsertNonce(owner.address),
+      });
+    }
+
+    before(async function () {
+      // A standing full insert permission would let the relayed call through without a grant.
+      if (await gcAclAsOwner.isFullInsertPermitted(owner.address, tokenAddress)) {
+        await (await gcAclAsOwner.revokeFullInsertPermission(tokenAddress)).wait();
+      }
+      expect(await gcAclAsOwner.isFullInsertPermitted(owner.address, tokenAddress)).to.equal(false);
+    });
+
+    it("a relayed IT operation needs the signer's grant, and a grant works once", async function () {
+      const approveIt = () =>
+        privateToken.interface.encodeFunctionData("approve(address,(address,(uint256,uint256)))", [
+          attacker.address,
+          ownerIt256(5n),
+        ]);
+      await expect(forwardAsOwner(approveIt()), "without a grant").to.be.reverted;
+
+      const grant = await ownerGrant();
+      const receipt = await forwardAsOwner(approveIt(), grant);
+      const approval = receipt!.logs
+        .map((log: any) => {
+          try {
+            return privateToken.interface.parseLog(log);
+          } catch {
+            return null;
+          }
+        })
+        .find((e: any) => e?.name === "Approval");
+      expect(approval, "no Approval event in the relayed receipt").to.not.equal(undefined);
+      expect(approval!.args[0]).to.equal(owner.address);
+      expect(approval!.args[1]).to.equal(attacker.address);
+
+      await expect(forwardAsOwner(approveIt(), grant), "replayed grant").to.be.reverted;
+    });
+
+    it("a relayed call rejects ciphertext that is not the signer's, even the facilitator's own", async function () {
+      // tx.origin is the facilitator here, so the tx.origin arm would accept its IT on a direct call.
+      const facilitatorIt = buildUnsignedItUint256({
+        value: 1n,
+        userAddress: attacker.address,
+        userAesKeyHex: attackerAesKey.toString("hex"),
+        contractAddress: tokenAddress,
+      });
+      for (const sig of ["approve(address,(address,(uint256,uint256)))", "transfer(address,(address,(uint256,uint256)))"]) {
+        const data = privateToken.interface.encodeFunctionData(sig, [attacker.address, facilitatorIt]);
+        await expect(forwardAsOwner(data)).to.be.revertedWith("IT not owned by caller");
+      }
+    });
+  });
+
   describe("Admin functions and upgrade", function () {
     it("setTrustedForwarder rejects the token address and non-owners", async function () {
       await expect(privateToken.connect(owner).setTrustedForwarder(tokenAddress)).to.be.revertedWith(
@@ -355,6 +450,30 @@ describe("PrivateERC20Contract256Gasless security", function () {
       await expect(privateToken.connect(attacker).setTrustedForwarder(attacker.address))
         .to.be.revertedWithCustomError(privateToken, "OwnableUnauthorizedAccount")
         .withArgs(attacker.address);
+      await expect(privateToken.connect(owner).setTrustedForwarder(attacker.address)).to.be.revertedWith(
+        "Forwarder must be a contract"
+      );
+      const otherForwarder: any = await hre.ethers.deployContract(
+        "PrivateERC20GaslessForwarder",
+        [await mockToken.getAddress()],
+        owner
+      );
+      await otherForwarder.waitForDeployment();
+      await expect(privateToken.connect(owner).setTrustedForwarder(await otherForwarder.getAddress())).to.be.revertedWith(
+        "Forwarder token mismatch"
+      );
+      expect(await privateToken.trustedForwarder()).to.equal(forwarderAddress);
+    });
+
+    it("setTrustedForwarder(0) disables gasless calls", async function () {
+      await (await privateToken.connect(owner).setTrustedForwarder(hre.ethers.ZeroAddress)).wait();
+      try {
+        expect(await privateToken.trustedForwarder()).to.equal(hre.ethers.ZeroAddress);
+        const data = privateToken.interface.encodeFunctionData("approve(address,uint256)", [attacker.address, 1n]);
+        await expect(signAndForward(owner, data)).to.be.revertedWith("Token does not trust forwarder");
+      } finally {
+        await (await privateToken.connect(owner).setTrustedForwarder(forwarderAddress)).wait();
+      }
       expect(await privateToken.trustedForwarder()).to.equal(forwarderAddress);
     });
 

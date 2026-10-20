@@ -112,6 +112,9 @@ contract PrivateERC20Contract256Gasless is
     /// @notice Consumes the signer's GCACL transient insert grant so this token may validate the signer's
     ///         ciphertexts for the rest of the transaction. Only the forwarder calls this, right before the
     ///         forwarded operation.
+    /// @dev The grant stays live until the transaction ends, also for direct calls into this token after the
+    ///      forwarded one. That is safe only because every ciphertext is validated through `_validateOwnIt`, which
+    ///      ties it to `_msgSender()`. Any new entrypoint that validates a ciphertext must do the same.
     function consumeInsertGrant(uint256 insertNonce, bytes calldata insertSignature) external {
         require(_isForwarded(), "Only forwarder");
         MpcCore.transientInsertPermission(_msgSender(), insertNonce, insertSignature);

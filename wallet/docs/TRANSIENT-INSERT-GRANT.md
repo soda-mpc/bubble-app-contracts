@@ -1,5 +1,9 @@
 # Transient insert grant
 
+> Design record for the transient insert grant. The token consumes it in `consumeInsertGrant`, called by the
+> forwarder right before a relayed operation. Relayed note operations (`PrivateOPRFNotes`, redeem / burn / split) described below
+> come with the OPRF notes later in the gasless stack.
+
 ## Problem
 
 An agent spends an anonymous OPRF note through a facilitator who pays gas. Redeem, unshield, and the merchant EIP-3009 payment can all be relayed. Inserting the note cannot.
