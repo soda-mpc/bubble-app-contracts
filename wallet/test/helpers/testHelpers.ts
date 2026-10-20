@@ -496,6 +496,26 @@ export function findParsedLogInReceipt(
   return parseReceiptLogs(receipt, contract).find((entry) => entry.name === eventName)?.log;
 }
 
+/** First `eventName` event in the receipt, already parsed (`name`, `args`), or undefined. */
+export function findEventInReceipt(
+  receipt: Parameters<typeof findParsedLogInReceipt>[0],
+  contract: Parameters<typeof findParsedLogInReceipt>[1],
+  eventName: string
+): any | undefined {
+  return parseReceiptLogs(receipt, contract).find((entry) => entry.name === eventName)?.parsed;
+}
+
+/** Every `eventName` event in the receipt, already parsed. */
+export function findEventsInReceipt(
+  receipt: Parameters<typeof findParsedLogInReceipt>[0],
+  contract: Parameters<typeof findParsedLogInReceipt>[1],
+  eventName: string
+): any[] {
+  return parseReceiptLogs(receipt, contract)
+    .filter((entry) => entry.name === eventName)
+    .map((entry) => entry.parsed);
+}
+
 /** `PrivateTransfer` amount handle (`args[2]`) from a transfer receipt. */
 export function getPrivateTransferAmountHandle(
   receipt: Parameters<typeof findParsedLogInReceipt>[0],

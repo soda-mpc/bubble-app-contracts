@@ -30,9 +30,9 @@ import {
   deployMockToken,
   deployPrivateToken,
   deployPrivateTokenGasless,
-  findParsedLogInReceipt,
+  findEventInReceipt,
+  findEventsInReceipt,
   findParsedLogInReceiptWhere,
-  findParsedLogsInReceipt,
   getGcAclAddress,
   getGcAclContract,
   getPrivateTokenBalance,
@@ -398,22 +398,23 @@ describe("PrivateERC20Contract256Gasless", function () {
       ]);
       const redeemReceipt = await execAsOwner(redeemData, true);
       // The redeem path announces the payout too: recipient, amount 0 (encrypted), and the decrypt request.
-      const requestedLog = findParsedLogInReceipt(redeemReceipt, privateToken, "UnshieldRequested");
-      expect(requestedLog, "UnshieldRequested").to.not.be.undefined;
-      const requested = privateToken.interface.parseLog(requestedLog);
+      const requested = findEventInReceipt(redeemReceipt, privateToken, "UnshieldRequested");
+      expect(requested, "UnshieldRequested").to.not.be.undefined;
       expect(requested.args.to).to.equal(destination.address);
       expect(requested.args.amount).to.equal(0n);
       expect(requested.args.decryptId).to.be.a("bigint");
       // One OPRFRedeemed for the payout; the burn loop's OPRFBurned events credit the pool, not the recipient.
-      const redeemed = findParsedLogsInReceipt(redeemReceipt, privateToken, "OPRFRedeemed");
+      const redeemed = findEventsInReceipt(redeemReceipt, privateToken, "OPRFRedeemed");
       expect(redeemed.length, "OPRFRedeemed").to.equal(1);
-      const redeemedArgs = privateToken.interface.parseLog(redeemed[0]).args;
-      expect(redeemedArgs.user).to.equal(owner.address);
-      expect(redeemedArgs.recipient).to.equal(destination.address);
-      const burns = findParsedLogsInReceipt(redeemReceipt, privateToken, "OPRFBurned").map(
-        (log: any) => privateToken.interface.parseLog(log).args.recipient
-      );
+      expect(redeemed[0].args.user).to.equal(owner.address);
+      expect(redeemed[0].args.recipient).to.equal(destination.address);
+      const burns = findEventsInReceipt(redeemReceipt, privateToken, "OPRFBurned").map((e: any) => e.args.recipient);
       expect(burns, "per-note OPRFBurned go to the pool").to.deep.equal([tokenAddress]);
+      await delay(DELAY_MPC_EXTENDED_MS);
+      expect(
+        await decryptValueViaProxy(redeemed[0].args.amount, owner, ownerAesKey, PROXY_URL),
+        "OPRFRedeemed amount (debited for unshield)"
+      ).to.equal(PAY_AMOUNT);
 
       const { successEvents, failedEvents } = await waitForUnshieldOutcome(privateToken, hre, startBlock, {
         timeoutMs: DELAY_MPC_REDEEM_MS * 6,
@@ -499,6 +500,45 @@ describe("PrivateERC20Contract256Gasless", function () {
       await send("burnToken", [change.input.x, change.input.q, change.input.y_clear, owner.address]);
       expect(await ownerPrivateBalance(), "burn credit").to.equal(balanceBefore + NOTE_AMOUNT - PAY_AMOUNT);
     });
+
+    it("redeemMany credits the recipient's private balance and issues the owner the rest", async function () {
+      await mintAndApprove({ mockToken, privateToken, userAddress: owner.address, amount: NOTE_AMOUNT });
+      const note = await noteFrom(await send("shieldAndMint(uint256)", [NOTE_AMOUNT]));
+      const recipient = Wallet.createRandom().connect(hre.ethers.provider);
+      const recipientAesKey = await getUserKeyViaProxy(recipient, PROXY_URL);
+
+      const receipt = await send("redeemMany", [[note.input], ownerIt(PAY_AMOUNT), recipient.address]);
+      const redeemed = findEventsInReceipt(receipt, privateToken, "OPRFRedeemed");
+      expect(redeemed.length, "OPRFRedeemed").to.equal(1);
+      expect(redeemed[0].args.user).to.equal(owner.address);
+      expect(redeemed[0].args.recipient).to.equal(recipient.address);
+      const burns = findEventsInReceipt(receipt, privateToken, "OPRFBurned").map((e: any) => e.args.recipient);
+      expect(burns, "per-note OPRFBurned go to the pool").to.deep.equal([tokenAddress]);
+      const credit = findEventInReceipt(receipt, privateToken, "PrivateTransfer");
+      expect(credit, "PrivateTransfer from the pool").to.not.equal(undefined);
+      expect(credit.args.from).to.equal(tokenAddress);
+      expect(credit.args.to).to.equal(recipient.address);
+      // OPRFRedeemed carries the credited handle itself.
+      expect(redeemed[0].args.amount).to.equal(credit.args.amount);
+
+      // Values, not just events: the owner reads what was redeemed, keeps the rest, and the recipient is credited.
+      await delay(DELAY_MPC_EXTENDED_MS);
+      expect(await decryptValueViaProxy(redeemed[0].args.amount, owner, ownerAesKey, PROXY_URL), "redeemed").to.equal(
+        PAY_AMOUNT
+      );
+      const rest = await noteFrom(receipt, 0);
+      expect(rest.value, "remainder note").to.equal(NOTE_AMOUNT - PAY_AMOUNT);
+      expect(
+        await getPrivateTokenBalance({
+          privateToken,
+          address: recipient.address,
+          signer: recipient,
+          aesKey: recipientAesKey,
+          proxyUrl: PROXY_URL,
+        }),
+        "recipient private balance"
+      ).to.equal(PAY_AMOUNT);
+    });
   });
 
   describe("gasless user operations", function () {
@@ -567,9 +607,8 @@ describe("PrivateERC20Contract256Gasless", function () {
       contractAddress: tokenAddress,
     });
     const privateReceipt = await execAsOwner(encodeEncryptedTransfer(destination.address, amountIt), true);
-    const privateTransferLog = findParsedLogInReceipt(privateReceipt, privateToken, "PrivateTransfer");
-    expect(privateTransferLog, "Expected PrivateTransfer event").to.not.equal(undefined);
-    const privateTransfer = privateToken.interface.parseLog(privateTransferLog);
+    const privateTransfer = findEventInReceipt(privateReceipt, privateToken, "PrivateTransfer");
+    expect(privateTransfer, "Expected PrivateTransfer event").to.not.equal(undefined);
     expect(privateTransfer.args.from).to.equal(owner.address);
     expect(privateTransfer.args.to).to.equal(destination.address);
     await delay(DELAY_BALANCE_SYNC_MS);

@@ -15,6 +15,10 @@ struct OPRFToken {
 /// @dev Functions the token inherits from OpenZeppelin (ownership, pausable state, UUPS upgrade) are not repeated
 ///      here; call them through the OpenZeppelin types. Amounts and results are MPC handles, so this is an
 ///      ERC20-like interface, not ERC20.
+///
+///      Amount handles in events are for decryption by the accounts they are permitted to. The token keeps no
+///      persistent rights on them, so they are not inputs: pass a balance handle or a fresh IT to the raw-handle
+///      entrypoints (`contractTransfer`, `contractTransferFrom`, `contractApprove`) instead.
 interface IPrivateERC20Gasless {
     /// @notice Emitted when tokens are transferred in the clear
     /// @param _from The address of the sender
@@ -67,8 +71,9 @@ interface IPrivateERC20Gasless {
     /// @notice A note's value left it. From `burnToken`, `recipient` was credited `burnedAmount`. From the burn loop of
     ///         `mergeMany`, `transferOPRF` and the redeems, `recipient` is the token: the value went to the pool.
     event OPRFBurned(address indexed user, address indexed recipient, gtUint256 burnedAmount);
-    /// @notice `redeemMany` credited `amount` to `recipient`'s private balance, or `redeemManyToUnderlying` requested
-    ///         its unshield to `recipient`. One per redeem; the per-note burns are the `OPRFBurned` events before it.
+    /// @notice `redeemMany` credited `amount` to `recipient`'s private balance, or `redeemManyToUnderlying` debited it
+    ///         from the pool for unshield to `recipient`. `amount` is what actually moved. One per redeem; the per-note
+    ///         burns are the `OPRFBurned` events before it.
     event OPRFRedeemed(address indexed user, address indexed recipient, gtUint256 amount);
 
     // Token Invalidation Events (using encrypted handles instead of IDs)

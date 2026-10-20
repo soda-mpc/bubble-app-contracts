@@ -137,9 +137,9 @@ library PrivateOPRFNotes {
         (gtUint256 totalBurned, gtUint256 recipientAmount, gtUint256 senderRemainder) =
             _spendAmounts(tokens, amount, owner);
 
-        _transferFromContract(recipient, recipientAmount);
+        gtUint256 credited = _transferFromContract(recipient, recipientAmount);
 
-        return _mintRemainder(owner, recipient, totalBurned, recipientAmount, senderRemainder);
+        return _mintRemainder(owner, recipient, totalBurned, credited, senderRemainder);
     }
 
     /// @notice Burns notes and debits the redeemed amount from the pool for unshielding to `recipient`.
@@ -159,7 +159,7 @@ library PrivateOPRFNotes {
         // Debits the full amount, or nothing if the pool cannot cover it.
         amountToUnshield = PrivateLedger.debitIfSufficient(address(this), recipientAmount);
 
-        (x, y, q) = _mintRemainder(owner, recipient, totalBurned, recipientAmount, senderRemainder);
+        (x, y, q) = _mintRemainder(owner, recipient, totalBurned, amountToUnshield, senderRemainder);
     }
 
     /// @notice Issues a note for `q` to `to`. The token calls this after it has moved or shielded the backing.
@@ -304,20 +304,21 @@ library PrivateOPRFNotes {
     }
 
     /// @dev Lets the owner read what was redeemed and burned, and issues the owner a note for the rest.
+    ///      `redeemed` is what actually moved: credited to `recipient`, or debited from the pool for its unshield.
     function _mintRemainder(
         address owner,
         address recipient,
         gtUint256 totalBurned,
-        gtUint256 recipientAmount,
+        gtUint256 redeemed,
         gtUint256 qRemainder
     ) private returns (
         gtUint128 xRemainder,
         gtUint128 yRemainder,
         gtUint256
     ) {
-        MpcCore.permit(recipientAmount, owner);
+        MpcCore.permit(redeemed, owner);
         MpcCore.permit(totalBurned, owner);
-        emit IPrivateERC20Gasless.OPRFRedeemed(owner, recipient, recipientAmount);
+        emit IPrivateERC20Gasless.OPRFRedeemed(owner, recipient, redeemed);
 
         (xRemainder, yRemainder) = _issueNote(owner, qRemainder);
         return (xRemainder, yRemainder, qRemainder);
@@ -327,11 +328,12 @@ library PrivateOPRFNotes {
     // Balance helpers
     // ---------------------------------------------------------------------------------------------
 
-    /// @notice Moves `amount` from the token's pooled balance to `recipient`.
-    /// @dev Only the recipient (and the token) may decrypt the credited amount. The caller is deliberately not
-    ///      permitted: on relayed calls it is not the note owner, who is permitted separately by the entry point.
-    function _transferFromContract(address recipient, gtUint256 amount) private {
-        gtUint256 credited = PrivateLedger.movedAmount(PrivateLedger.move(address(this), recipient, amount), amount);
+    /// @notice Moves `amount` from the token's pooled balance to `recipient` and returns what was credited.
+    /// @dev Only the recipient may decrypt the credited amount. The caller is deliberately not permitted: on relayed
+    ///      calls it is not the note owner, who is permitted separately by the entry point. Like every event amount
+    ///      handle, it is for decryption only (see `IPrivateERC20Gasless`).
+    function _transferFromContract(address recipient, gtUint256 amount) private returns (gtUint256 credited) {
+        credited = PrivateLedger.movedAmount(PrivateLedger.move(address(this), recipient, amount), amount);
         MpcCore.permit(credited, recipient);
         emit IPrivateERC20Gasless.PrivateTransfer(address(this), recipient, credited);
     }
