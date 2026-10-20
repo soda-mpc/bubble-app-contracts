@@ -32,5 +32,15 @@
     "factory": "0xCa2472Eaa4568B9A7d5baAD6D41A042a7B882FAC",
     "blockNumber": 321067895,
     "deployedAt": "2026-10-20T13:13:02.055Z"
+  },
+  "gaslessTestToken": {
+    "address": "0x4Ed6d719D16C157F90331dd438F70C9119056876",
+    "name": "Test USDC",
+    "symbol": "TUSDC",
+    "decimals": 18,
+    "blockNumber": 321069007,
+    "eip2612": true,
+    "eip3009": true,
+    "mintWithAuthorization": true
   }
 }
