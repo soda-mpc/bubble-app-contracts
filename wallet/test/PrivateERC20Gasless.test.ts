@@ -423,6 +423,80 @@ describe("PrivateERC20Contract256Gasless", function () {
     });
   });
 
+  describe("note round trip (direct owner calls)", function () {
+    type NoteInput = { x: any; q: any; y_clear: bigint };
+
+    /** Decrypts the n-th OPRFMinted note in `receipt` and returns its value and owner ITs. */
+    async function noteFrom(receipt: any, index = 0): Promise<{ value: bigint; input: NoteInput }> {
+      await delay(DELAY_MPC_EXTENDED_MS);
+      const minted = getOprfMintedEventsFromReceipt(receipt, privateToken)[index];
+      expect(minted, `OPRFMinted #${index}`).to.not.equal(undefined);
+      expect(minted.user).to.equal(owner.address);
+      const [x, y, q] = await decryptMultipleValuesViaProxy([minted.x, minted.y, minted.q], owner, ownerAesKey, PROXY_URL);
+      return {
+        value: q,
+        input: {
+          x: buildUnsignedItUint128({ value: x, userAddress: owner.address, userAesKeyHex: ownerAesKeyHex, contractAddress: tokenAddress }),
+          q: ownerIt(q),
+          y_clear: y,
+        },
+      };
+    }
+
+    function ownerIt(value: bigint) {
+      return buildUnsignedItUint256({ value, userAddress: owner.address, userAesKeyHex: ownerAesKeyHex, contractAddress: tokenAddress });
+    }
+
+    async function send(method: string, args: unknown[]) {
+      return (await (await privateToken.connect(owner)[method](...args)).wait());
+    }
+
+    it("splits, merges (a repeated note counts once), transfers to a third party and burns, conserving value", async function () {
+      await mintAndApprove({ mockToken, privateToken, userAddress: owner.address, amount: NOTE_AMOUNT });
+      const note = await noteFrom(await send("shieldAndMint(uint256)", [NOTE_AMOUNT]));
+      expect(note.value).to.equal(NOTE_AMOUNT);
+
+      // Split: remainder first, then the split-off part, both to the owner.
+      const splitReceipt = await send("splitToken", [note.input.x, note.input.q, note.input.y_clear, ownerIt(PAY_AMOUNT)]);
+      const remainder = await noteFrom(splitReceipt, 0);
+      const part = await noteFrom(splitReceipt, 1);
+      expect(remainder.value).to.equal(NOTE_AMOUNT - PAY_AMOUNT);
+      expect(part.value).to.equal(PAY_AMOUNT);
+
+      const merged = await noteFrom(await send("mergeMany", [[remainder.input, part.input]]));
+      expect(merged.value).to.equal(NOTE_AMOUNT);
+
+      // The same note twice in one array: the second burn must contribute nothing.
+      const remerged = await noteFrom(await send("mergeMany", [[merged.input, merged.input]]));
+      expect(remerged.value, "a repeated note was counted twice").to.equal(NOTE_AMOUNT);
+
+      // Transfer: the recipient's note first, then the owner's change.
+      const transferReceipt = await send("transferOPRF", [[remerged.input], ownerIt(PAY_AMOUNT), destination.address]);
+      await delay(DELAY_MPC_EXTENDED_MS);
+      const [toRecipient] = getOprfMintedEventsFromReceipt(transferReceipt, privateToken);
+      expect(toRecipient.user).to.equal(destination.address);
+      expect(await decryptValueViaProxy(toRecipient.q, owner, ownerAesKey, PROXY_URL), "sent amount").to.equal(PAY_AMOUNT);
+      const change = await noteFrom(transferReceipt, 1);
+      expect(change.value).to.equal(NOTE_AMOUNT - PAY_AMOUNT);
+
+      // A contract the owner calls directly gets no authority over the owner's note (tx.origin is not trusted).
+      const relay: any = await hre.ethers.deployContract("CallRelayMock", [], owner);
+      await relay.waitForDeployment();
+      const relayAddress = await relay.getAddress();
+      const stealData = privateToken.interface.encodeFunctionData("burnToken", [
+        change.input.x,
+        change.input.q,
+        change.input.y_clear,
+        relayAddress,
+      ]);
+      await expect(relay.connect(owner).relay(tokenAddress, stealData)).to.be.revertedWith("Relayer dest must be IT owner");
+
+      const balanceBefore = await ownerPrivateBalance();
+      await send("burnToken", [change.input.x, change.input.q, change.input.y_clear, owner.address]);
+      expect(await ownerPrivateBalance(), "burn credit").to.equal(balanceBefore + NOTE_AMOUNT - PAY_AMOUNT);
+    });
+  });
+
   describe("gasless user operations", function () {
   it("shields, transfers, and unshields from signatures, including a permit for the underlying", async function () {
     const shieldAmount = 3n * 10n ** 18n;

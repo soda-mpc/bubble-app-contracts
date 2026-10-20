@@ -12,9 +12,10 @@ import {PrivateLedger} from "./PrivateLedger.sol";
 ///      MPC permissions (GC contracts see the token as caller) and emitted events all belong to the token.
 ///      Solidity's library call guard makes the state-changing functions revert when called directly.
 ///
-///      `sender` is the account credited with the operation; `authorizer` is who chose the arguments:
-///      `tx.origin` on a direct call (the owner EOA, also when executing through its Safe), or the signer on a call
-///      relayed by the trusted forwarder. Only an authorizer equal to the IT owner may route note value elsewhere.
+///      `caller` is the token's `_msgSender()`: the direct caller, or the signer of a call relayed by the trusted
+///      forwarder. Never `tx.origin`, so a contract the user calls cannot act with the user's authority. Only a
+///      caller that is the IT owner may route note value elsewhere. New notes and remainders always go to the
+///      IT owner, whoever calls.
 ///
 ///      Pool invariant: the token's own private balance (the pool) is at least the value of all live notes. Every
 ///      note is issued against value moved or shielded into the pool, and burning a note takes out at most its
@@ -27,28 +28,25 @@ library PrivateOPRFNotes {
     // Entry points (called by the token)
     // ---------------------------------------------------------------------------------------------
 
+    /// @dev Both notes go to the note owner, so anyone holding the ITs may split.
     function splitToken(
-        address sender,
-        address authorizer,
         itUint128 memory x,
         itUint256 memory q,
         uint128 y_clear,
         itUint256 memory qSplit
     ) external {
-        address creditTo = _creditTo(_noteOwner(x, q, qSplit), sender, authorizer);
+        address owner = _noteOwner(x, q, qSplit);
 
-        (gtUint256 qRemainder, gtUint256 qPay) = _split(x, q, qSplit, y_clear, creditTo);
+        (gtUint256 qRemainder, gtUint256 qPay) = _split(x, q, qSplit, y_clear, owner);
 
-        // Both notes go to the note owner (or its Safe, when the owner executes).
-        (gtUint128 xrRemainder, gtUint128 yRemainder) = _issueNote(creditTo, qRemainder);
-        (gtUint128 xrPay, gtUint128 yPay) = _issueNote(creditTo, qPay);
+        (gtUint128 xrRemainder, gtUint128 yRemainder) = _issueNote(owner, qRemainder);
+        (gtUint128 xrPay, gtUint128 yPay) = _issueNote(owner, qPay);
 
-        emit IPrivateERC20Gasless.OPRFSplit(creditTo, xrRemainder, qRemainder, yRemainder, xrPay, qPay, yPay);
+        emit IPrivateERC20Gasless.OPRFSplit(owner, xrRemainder, qRemainder, yRemainder, xrPay, qPay, yPay);
     }
 
     function splitTokenForRecipient(
-        address sender,
-        address authorizer,
+        address caller,
         itUint128 memory x,
         itUint256 memory q,
         uint128 y_clear,
@@ -57,20 +55,18 @@ library PrivateOPRFNotes {
     ) external {
         address owner = _noteOwner(x, q, qSplit);
         _rejectBadRecipient(recipient);
-        _requireDest(owner, authorizer, recipient);
-        address creditTo = _creditTo(owner, sender, authorizer);
+        _requireDest(owner, caller, recipient);
 
-        (gtUint256 qRemainder, gtUint256 qPay) = _split(x, q, qSplit, y_clear, creditTo);
+        (gtUint256 qRemainder, gtUint256 qPay) = _split(x, q, qSplit, y_clear, owner);
 
-        (gtUint128 xrRemainder, gtUint128 yRemainder) = _issueNote(creditTo, qRemainder);
+        (gtUint128 xrRemainder, gtUint128 yRemainder) = _issueNote(owner, qRemainder);
         (gtUint128 xrPay, gtUint128 yPay) = _issueNote(recipient, qPay);
 
-        emit IPrivateERC20Gasless.OPRFSplitForRecipient(creditTo, recipient, xrRemainder, qRemainder, yRemainder, xrPay, qPay, yPay);
+        emit IPrivateERC20Gasless.OPRFSplitForRecipient(owner, recipient, xrRemainder, qRemainder, yRemainder, xrPay, qPay, yPay);
     }
 
     function burnToken(
-        address sender,
-        address authorizer,
+        address caller,
         itUint128 memory x,
         itUint256 memory q,
         uint128 y_clear,
@@ -78,8 +74,7 @@ library PrivateOPRFNotes {
     ) external {
         address owner = _noteOwner(x, q);
         _rejectBadRecipient(recipient);
-        _requireDest(owner, authorizer, recipient);
-        address creditTo = _creditTo(owner, sender, authorizer);
+        _requireDest(owner, caller, recipient);
 
         gtUint128 xGT = MpcCore.validateCiphertext(x);
         gtUint256 qGT = MpcCore.validateCiphertext(q);
@@ -90,28 +85,24 @@ library PrivateOPRFNotes {
 
         _transferFromContract(recipient, burnedAmount);
 
-        MpcCore.permit(burnedAmount, creditTo);
+        MpcCore.permit(burnedAmount, owner);
 
-        emit IPrivateERC20Gasless.OPRFTokenInvalidated(creditTo, xGT, qGT, y_clear, 3); // 3=burned
-        emit IPrivateERC20Gasless.OPRFBurned(creditTo, recipient, burnedAmount);
+        emit IPrivateERC20Gasless.OPRFTokenInvalidated(owner, xGT, qGT, y_clear, 3); // 3=burned
+        emit IPrivateERC20Gasless.OPRFBurned(owner, recipient, burnedAmount);
     }
 
-    function mergeMany(
-        address sender,
-        address authorizer,
-        OPRFToken[] memory tokens
-    ) external returns (gtUint128 x, gtUint128 y, gtUint256 qMerged) {
-        address creditTo = _creditTo(_tokensOwner(tokens), sender, authorizer);
+    /// @dev The merged note goes to the note owner, so anyone holding the ITs may merge.
+    function mergeMany(OPRFToken[] memory tokens) external returns (gtUint128 x, gtUint128 y, gtUint256 qMerged) {
+        address owner = _tokensOwner(tokens);
 
-        qMerged = _burnTokensAndAccumulate(tokens, creditTo);
-        (x, y) = _issueNote(creditTo, qMerged);
+        qMerged = _burnTokensAndAccumulate(tokens, owner);
+        (x, y) = _issueNote(owner, qMerged);
 
-        emit IPrivateERC20Gasless.OPRFMerged(creditTo, x, qMerged, y);
+        emit IPrivateERC20Gasless.OPRFMerged(owner, x, qMerged, y);
     }
 
     function transferOPRF(
-        address sender,
-        address authorizer,
+        address caller,
         OPRFToken[] memory tokens,
         itUint256 memory amount,
         address recipient
@@ -123,54 +114,52 @@ library PrivateOPRFNotes {
         gtUint128 ySender,
         gtUint256 qSender
     ) {
-        address creditTo = _spendCheck(tokens, amount, recipient, sender, authorizer);
+        address owner = _spendCheck(tokens, amount, recipient, caller);
 
-        (, qRecipient, qSender) = _spendAmounts(tokens, amount, creditTo);
+        (, qRecipient, qSender) = _spendAmounts(tokens, amount, owner);
 
         // The sender also sees how much it sent.
-        MpcCore.permit(qRecipient, creditTo);
-        emit IPrivateERC20Gasless.OPRFTransferred(creditTo, recipient, qRecipient);
+        MpcCore.permit(qRecipient, owner);
+        emit IPrivateERC20Gasless.OPRFTransferred(owner, recipient, qRecipient);
 
         (xRecipient, yRecipient) = _issueNote(recipient, qRecipient);
-        (xSender, ySender) = _issueNote(creditTo, qSender);
+        (xSender, ySender) = _issueNote(owner, qSender);
     }
 
     function redeemMany(
-        address sender,
-        address authorizer,
+        address caller,
         OPRFToken[] memory tokens,
         itUint256 memory amount,
         address recipient
     ) external returns (gtUint128, gtUint128, gtUint256) {
-        address creditTo = _spendCheck(tokens, amount, recipient, sender, authorizer);
+        address owner = _spendCheck(tokens, amount, recipient, caller);
 
         (gtUint256 totalBurned, gtUint256 recipientAmount, gtUint256 senderRemainder) =
-            _spendAmounts(tokens, amount, creditTo);
+            _spendAmounts(tokens, amount, owner);
 
         _transferFromContract(recipient, recipientAmount);
 
-        return _mintRemainder(creditTo, recipient, totalBurned, recipientAmount, senderRemainder);
+        return _mintRemainder(owner, recipient, totalBurned, recipientAmount, senderRemainder);
     }
 
     /// @notice Burns notes and debits the redeemed amount from the pool for unshielding to `recipient`.
     /// @dev `amountToUnshield` is the handle the token must submit for decryption to pay `recipient` in underlying.
     ///      `recipient`'s private balance is never touched.
     function redeemManyToUnderlying(
-        address sender,
-        address authorizer,
+        address caller,
         OPRFToken[] memory tokens,
         itUint256 memory amount,
         address recipient
     ) external returns (gtUint128 x, gtUint128 y, gtUint256 q, gtUint256 amountToUnshield) {
-        address creditTo = _spendCheck(tokens, amount, recipient, sender, authorizer);
+        address owner = _spendCheck(tokens, amount, recipient, caller);
 
         (gtUint256 totalBurned, gtUint256 recipientAmount, gtUint256 senderRemainder) =
-            _spendAmounts(tokens, amount, creditTo);
+            _spendAmounts(tokens, amount, owner);
 
         // Debits the full amount, or nothing if the pool cannot cover it.
         amountToUnshield = PrivateLedger.debitIfSufficient(address(this), recipientAmount);
 
-        (x, y, q) = _mintRemainder(creditTo, recipient, totalBurned, recipientAmount, senderRemainder);
+        (x, y, q) = _mintRemainder(owner, recipient, totalBurned, recipientAmount, senderRemainder);
     }
 
     /// @notice Issues a note for `q` to `to`. The token calls this after it has moved or shielded the backing.
@@ -191,32 +180,24 @@ library PrivateOPRFNotes {
         require(recipient != address(this), "Recipient cannot be token");
     }
 
-    function _requireDest(address owner, address authorizer, address recipient) private pure {
-        if (authorizer != owner) {
+    function _requireDest(address owner, address caller, address recipient) private pure {
+        if (caller != owner) {
             require(recipient == owner, "Relayer dest must be IT owner");
         }
     }
 
-    /// @dev Remainder credit: when the owner authorized the call, credit the sender (the owner itself, or its Safe on
-    ///      a direct Safe exec). Otherwise credit the IT owner.
-    function _creditTo(address owner, address sender, address authorizer) private pure returns (address) {
-        return authorizer == owner ? sender : owner;
-    }
-
     /// @dev Shared input checks for spend-style ops. Budget owner is `it.userAddress`; all OPRF/amount ITs must
-    ///      agree so a relayer cannot mix signers. Returns the remainder credit address.
+    ///      agree so a relayer cannot mix signers. Returns the owner, who gets any remainder.
     function _spendCheck(
         OPRFToken[] memory tokens,
         itUint256 memory amount,
         address recipient,
-        address sender,
-        address authorizer
-    ) private view returns (address) {
+        address caller
+    ) private view returns (address owner) {
         _rejectBadRecipient(recipient);
-        address owner = _tokensOwner(tokens);
+        owner = _tokensOwner(tokens);
         require(amount.userAddress == owner, "OPRF IT user mismatch");
-        _requireDest(owner, authorizer, recipient);
-        return _creditTo(owner, sender, authorizer);
+        _requireDest(owner, caller, recipient);
     }
 
     function _noteOwner(itUint128 memory x, itUint256 memory q) private pure returns (address owner) {
@@ -323,7 +304,7 @@ library PrivateOPRFNotes {
     }
 
     function _mintRemainder(
-        address creditTo,
+        address owner,
         address recipient,
         gtUint256 totalBurned,
         gtUint256 recipientAmount,
@@ -333,12 +314,12 @@ library PrivateOPRFNotes {
         gtUint128 yRemainder,
         gtUint256 qRemainder
     ) {
-        MpcCore.permit(recipientAmount, creditTo);
-        MpcCore.permit(totalBurned, creditTo);
-        emit IPrivateERC20Gasless.OPRFBurned(creditTo, recipient, totalBurned);
+        MpcCore.permit(recipientAmount, owner);
+        MpcCore.permit(totalBurned, owner);
+        emit IPrivateERC20Gasless.OPRFBurned(owner, recipient, totalBurned);
 
         qRemainder = senderRemainder;
-        (xRemainder, yRemainder) = _issueNote(creditTo, qRemainder);
+        (xRemainder, yRemainder) = _issueNote(owner, qRemainder);
     }
 
     // ---------------------------------------------------------------------------------------------

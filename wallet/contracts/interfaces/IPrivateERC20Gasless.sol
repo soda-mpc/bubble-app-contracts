@@ -67,7 +67,7 @@ interface IPrivateERC20Gasless {
     event OPRFBurned(address indexed user, address indexed recipient, gtUint256 burnedAmount);
 
     // Token Invalidation Events (using encrypted handles instead of IDs)
-    // Reason codes: 1=split, 2=merged, 3=burned
+    // Reason codes: 1=split, 3=burned (also for notes merged by mergeMany). 2 is unused, kept for the original token's numbering.
     event OPRFTokenInvalidated(address indexed user, gtUint128 x, gtUint256 q, uint128 y, uint8 reason);
 
     // ---------------------------------------------------------------------------------------------

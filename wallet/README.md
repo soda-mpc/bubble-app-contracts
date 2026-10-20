@@ -78,6 +78,8 @@ Packages that affect **compiled bytecode**, **storage layout**, **compiler outpu
 
 When bumping any pinned package, re-run `npm install`, `npm run compile`, and the full test suite. For OpenZeppelin contract bumps, run `prepare-upgrade` / storage checks against live proxy addresses before mainnet Safe transactions.
 
+`PrivateERC20Contract256Gasless` is linked against the external library `PrivateOPRFNotes`, which runs by DELEGATECALL in the token's storage. The upgrades plugin accepts it only with `unsafeAllowLinkedLibraries` and does not check the library, so review library changes by hand, deploy the library from the same commit as each new implementation and link that address (never a stale one), and never add `selfdestruct` or storage outside the token's namespace to it.
+
 `@openzeppelin/hardhat-upgrades` 3.x is the OpenZeppelin Contracts **v5** upgrades plugin line; it validates upgrades against the pinned `@openzeppelin/contracts*` versions in this project, not a separate OZ peer dependency.
 
 ## Common scripts
@@ -88,6 +90,6 @@ When bumping any pinned package, re-run `npm install`, `npm run compile`, and th
 | `npm test` | Run Hardhat tests |
 | `npm run test:layout` | Check the gasless token's storage layout against its snapshot |
 | `npm run test:gasless` | Gasless forwarder and test USDC, local |
-| `npm run test:gasless:arbitrum-sepolia` | Gasless token core, gasless and security suites on Arbitrum Sepolia |
+| `npm run test:gasless:arbitrum-sepolia` | Gasless token core, gasless, security and native-unwrap suites on Arbitrum Sepolia |
 
 See `package.json` for network-specific deploy, verify, and balance scripts.

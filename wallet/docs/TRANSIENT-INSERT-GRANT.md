@@ -39,7 +39,7 @@ The user signs one authorization for one contract. The forwarder calls `consumeI
 
 The pinned `bubble-core-contracts` commit (`c2adb88`) has no `verifyCiphertextTransient`. `GCHandler.ValidateCiphertext` accepts the transient bit. For the rest of that transaction, every `validateCiphertext` sees the grant, including paths that are not the relayed note operation.
 
-The token still refuses a ciphertext whose `userAddress` is not the signer, and the note destination lock still pays the IT owner unless that owner authorized another recipient. A facilitator who holds the grant can grief (force the owner's own cash-out) and cannot redirect the value or take decrypt permission.
+The token still refuses a ciphertext whose `userAddress` is not the signer, and the note destination lock still pays the IT owner unless the caller (`_msgSender()`, never `tx.origin`) is that owner. A facilitator who holds the grant can grief (force the owner's own cash-out) and cannot redirect the value or take decrypt permission.
 
 ## Chosen option
 
