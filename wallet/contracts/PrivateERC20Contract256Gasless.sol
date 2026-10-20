@@ -10,6 +10,7 @@ import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@sodalabs/bubble-core-contracts/contracts/bubble/DecryptionCaller.sol";
 import {IPrivateERC20Gasless} from "./interfaces/IPrivateERC20Gasless.sol";
+import {IPrivateERC20GaslessForwarder} from "./interfaces/IPrivateERC20GaslessForwarder.sol";
 import {PrivateERC20GaslessStorage, UnshieldRequest, gaslessStorage} from "./libraries/PrivateERC20GaslessStorage.sol";
 import {PrivateLedger} from "./libraries/PrivateLedger.sol";
 
@@ -20,9 +21,13 @@ import {PrivateLedger} from "./libraries/PrivateLedger.sol";
 ///      Deployed behind a UUPS proxy.
 ///
 ///      Layout:
-///      - This contract: admin, entrypoints, and the underlying lifecycle
+///      - This contract: caller identity (ERC-2771), admin, entrypoints, and the underlying lifecycle
 ///        (shield, unshield requests and callbacks, parked claims, emergency recovery).
 ///      - PrivateLedger (internal): encrypted balance and allowance bookkeeping.
+///
+///      Gasless calls: a trusted PrivateERC20GaslessForwarder verifies the user's EIP-712 authorization and calls the
+///      normal entrypoints with the signer appended to calldata; `_msgSender()` returns it. Admin functions ignore
+///      the forwarder.
 contract PrivateERC20Contract256Gasless is
     IPrivateERC20Gasless,
     PrivateERC20GaslessStorage,
@@ -36,23 +41,96 @@ contract PrivateERC20Contract256Gasless is
 
     // The external API and events live in interfaces/IPrivateERC20Gasless.sol. The storage Layout and
     // UnshieldRequest live in libraries/PrivateERC20GaslessStorage.sol, shared with PrivateLedger.
-    // `trustedForwarder` and `_oprfKey` are reserved in that layout so later additions do not move slots.
+    // `_oprfKey` is reserved in that layout so later additions do not move slots.
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    /// @dev Value ciphertexts must belong to the caller: the direct caller or `tx.origin` (an owner EOA executing
-    ///      through its Safe). The `tx.origin` arm is a phishing class: a contract the user calls in that transaction
-    ///      can pass the user's public IT into `approve` or `transfer` and receive decrypt permission. A stranger
-    ///      cannot.
+    // ---------------------------------------------------------------------------------------------
+    // ERC-2771 context
+    // ---------------------------------------------------------------------------------------------
+
+    /// @notice The forwarder whose calls carry the signer as the last 20 bytes of calldata.
+    function trustedForwarder() public view returns (address) {
+        return gaslessStorage().trustedForwarder;
+    }
+
+    function isTrustedForwarder(address forwarder) public view returns (bool) {
+        return forwarder != address(0) && forwarder == trustedForwarder();
+    }
+
+    /// @notice Sets the gasless forwarder. Zero disables gasless calls.
+    /// @dev The forwarder must be a contract bound to this token. An EOA would be trusted as
+    ///      `_msgSender` and could append any signer to its calldata.
+    function setTrustedForwarder(address forwarder) external onlyOwner {
+        require(forwarder != address(this), "Forwarder cannot be token");
+        if (forwarder != address(0)) {
+            require(forwarder.code.length > 0, "Forwarder must be a contract");
+            require(IPrivateERC20GaslessForwarder(forwarder).token() == address(this), "Forwarder token mismatch");
+        }
+        PrivateERC20GaslessStorage.Layout storage $ = gaslessStorage();
+        emit TrustedForwarderUpdated($.trustedForwarder, forwarder);
+        $.trustedForwarder = forwarder;
+    }
+
+    function _isForwarded() private view returns (bool) {
+        return isTrustedForwarder(msg.sender) && msg.data.length >= 20;
+    }
+
+    function _msgSender() internal view override returns (address) {
+        if (_isForwarded()) {
+            return address(bytes20(msg.data[msg.data.length - 20:]));
+        }
+        return msg.sender;
+    }
+
+    function _msgData() internal view override returns (bytes calldata) {
+        if (_isForwarded()) {
+            return msg.data[:msg.data.length - 20];
+        }
+        return msg.data;
+    }
+
+    function _contextSuffixLength() internal view override returns (uint256) {
+        return _isForwarded() ? 20 : 0;
+    }
+
+    /// @dev Admin functions are never authorized by a forwarded signature.
+    function _checkOwner() internal view override {
+        if (owner() != msg.sender) {
+            revert OwnableUnauthorizedAccount(msg.sender);
+        }
+    }
+
+    function acceptOwnership() public override {
+        require(!_isForwarded(), "Not via forwarder");
+        super.acceptOwnership();
+    }
+
+    /// @notice Consumes the signer's GCACL transient insert grant so this token may validate the signer's
+    ///         ciphertexts for the rest of the transaction. Only the forwarder calls this, right before the
+    ///         forwarded operation.
+    function consumeInsertGrant(uint256 insertNonce, bytes calldata insertSignature) external {
+        require(_isForwarded(), "Only forwarder");
+        MpcCore.transientInsertPermission(_msgSender(), insertNonce, insertSignature);
+    }
+
+    /// @dev Value ciphertexts must belong to the caller: the signer on a forwarded call, or the direct caller /
+    ///      `tx.origin` (an owner EOA executing through its Safe). The `tx.origin` arm is a phishing class: a contract
+    ///      the user calls in that transaction can pass the user's public IT into `approve` or `transfer` and receive
+    ///      decrypt permission. A stranger cannot. Facilitator relays do not take this arm, because the call is
+    ///      forwarded and `tx.origin` is the facilitator.
     function _validateOwnIt(itUint256 memory it) private returns (gtUint256) {
-        require(it.userAddress == _msgSender() || it.userAddress == tx.origin, "IT not owned by caller");
+        require(
+            it.userAddress == _msgSender() || (!_isForwarded() && it.userAddress == tx.origin),
+            "IT not owned by caller"
+        );
         return MpcCore.validateCiphertext(it);
     }
 
-    /// @dev Raw-handle entrypoints: `account` must already hold rights on `value`.
+    /// @dev Raw-handle entrypoints: `account` (the real caller or the signer) must already hold rights on `value`.
     function _requireHandlePermitted(gtUint256 value, address account) private view {
         require(MpcCore.isPermitted(value, account), "Handle not permitted");
     }
@@ -263,7 +341,7 @@ contract PrivateERC20Contract256Gasless is
     }
 
     // ---------------------------------------------------------------------------------------------
-    // User entrypoints attribute the caller with `_msgSender()`.
+    // User entrypoints attribute the caller with `_msgSender()`: the signer on a forwarded call.
     // ---------------------------------------------------------------------------------------------
 
     /// @notice Transfers tokens using an encrypted and signed value

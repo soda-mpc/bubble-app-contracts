@@ -43,9 +43,10 @@ interface IPrivateERC20Gasless {
     /// @notice The token was retired; `amount` of unreserved underlying went to `owner` (may be zero).
     event EmergencyRecovery(address indexed owner, uint256 amount);
     event NativeRecovered(address indexed to, uint256 amount);
+    event TrustedForwarderUpdated(address indexed oldForwarder, address indexed newForwarder);
 
     // ---------------------------------------------------------------------------------------------
-    // Initialization
+    // Initialization and ERC-2771
     // ---------------------------------------------------------------------------------------------
 
     function initialize(
@@ -64,6 +65,11 @@ interface IPrivateERC20Gasless {
         address master_,
         bool underlyingIsWrappedNative_
     ) external;
+
+    function trustedForwarder() external view returns (address);
+    function isTrustedForwarder(address forwarder) external view returns (bool);
+    function setTrustedForwarder(address forwarder) external;
+    function consumeInsertGrant(uint256 insertNonce, bytes calldata insertSignature) external;
 
     // ---------------------------------------------------------------------------------------------
     // Metadata and views

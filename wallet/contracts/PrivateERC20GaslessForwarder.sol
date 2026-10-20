@@ -3,12 +3,8 @@ pragma solidity ^0.8.26;
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
+import {IPrivateERC20Gasless} from "./interfaces/IPrivateERC20Gasless.sol";
 import {IPrivateERC20GaslessForwarder} from "./interfaces/IPrivateERC20GaslessForwarder.sol";
-
-/// @dev The one token entrypoint the forwarder calls itself.
-interface IInsertGrantConsumer {
-    function consumeInsertGrant(uint256 insertNonce, bytes calldata insertSignature) external;
-}
 
 /// @title PrivateERC20GaslessForwarder
 /// @notice ERC-2771 forwarder for one PrivateERC20Contract256Gasless token. A facilitator submits a user's EIP-712
@@ -78,7 +74,7 @@ contract PrivateERC20GaslessForwarder is EIP712, IPrivateERC20GaslessForwarder {
         // The insert grant is not covered by the user's signature. It works only for `from` and only on this token,
         // so a relayer that swaps or strips it can at most make this call revert or burn that grant's nonce.
         if (insertSignature.length != 0) {
-            _call(from, abi.encodeCall(IInsertGrantConsumer.consumeInsertGrant, (insertNonce, insertSignature)));
+            _call(from, abi.encodeCall(IPrivateERC20Gasless.consumeInsertGrant, (insertNonce, insertSignature)));
         }
         bytes memory ret = _call(from, data);
 

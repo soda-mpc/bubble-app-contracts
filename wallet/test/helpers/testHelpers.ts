@@ -56,9 +56,50 @@ export type HardhatRuntime = {
   };
 };
 
+/** GCACL addresses from @sodalabs/bubble-core-contracts BubbleAddresses.sol */
+const GC_ACL_ADDRESSES: Record<number, string> = {
+  1: "0xDaA920259d039410b537959c7E920f58AF8877AD",
+  137: "0xDaA920259d039410b537959c7E920f58AF8877AD",
+  42161: "0xDaA920259d039410b537959c7E920f58AF8877AD",
+  11155111: "0xec8176d47bF788d71215ed4C33fD26Dc89B9121A",
+  50505070: "0xDaA920259d039410b537959c7E920f58AF8877AD",
+  421614: "0x78F7Aa55A2c86D90dd9FDf8F9affE786672a23b6",
+};
+
+export const GCACL_ABI = [
+  "function permit(uint256 handle, address account)",
+  "function permitContractViewAccess(address permittee, address contractAddress, uint64 expirationDate)",
+  "function permitFullInsertAccess(address permittee, uint64 expirationDate)",
+  "function permitContractInsertAccess(address permittee, address contractAddress, uint64 expirationDate)",
+  "function isFullInsertPermitted(address permitter, address permittee) view returns (bool)",
+  "function isPermitted(uint256 handle, address account) view returns (bool)",
+  "function isContractViewPermitted(address permitter, address permittee, address contractAddress) view returns (bool)",
+  "function isPermittedToView(address permitter, address permittee, uint256 handle) view returns (bool)",
+  "function isContractInsertPermitted(address permitter, address permittee, address contractAddress) view returns (bool)",
+  "function transientInsertNonce(address user) view returns (uint256)",
+  "function transientInsertPermission(address user, uint256 nonce, bytes signature)",
+  "function isTransientInsertPermitted(address user, address contractAddress) view returns (bool)",
+] as const;
+
+export function getGcAclAddress(chainId: number): string {
+  const address = GC_ACL_ADDRESSES[chainId];
+  if (!address) {
+    throw new Error(`No GCACL address configured for chain ${chainId}`);
+  }
+  return address;
+}
+
+export async function getGcAclContract(hre: { ethers: { provider: { getNetwork: () => Promise<{ chainId: bigint }> }; getContractAt: (...args: any[]) => Promise<any> } }, signer: Wallet | HDNodeWallet) {
+  const network = await hre.ethers.provider.getNetwork();
+  const address = getGcAclAddress(Number(network.chainId));
+  return hre.ethers.getContractAt([...GCACL_ABI], address, signer);
+}
+
 export const PRIVATE_ERC20_256_FQN = "contracts/PrivateERC20Contract256.sol:PrivateERC20Contract256";
 export const PRIVATE_ERC20_256_GASLESS_FQN =
   "contracts/PrivateERC20Contract256Gasless.sol:PrivateERC20Contract256Gasless";
+export const PRIVATE_ERC20_GASLESS_FORWARDER_FQN =
+  "contracts/PrivateERC20GaslessForwarder.sol:PrivateERC20GaslessForwarder";
 export const ERC1967_PROXY_FQN = "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy";
 
 export const DELAY_SHORT_MS = 2000;
@@ -186,7 +227,7 @@ export async function deployPrivateTokenGasless(
     symbol = "BUB",
     underlyingIsWrappedNative = false,
   } = params;
-  return deployProxyBackedContract({
+  const token = await deployProxyBackedContract({
     hre,
     signer: defaultSigner,
     contractFqn: PRIVATE_ERC20_256_GASLESS_FQN,
@@ -199,6 +240,20 @@ export async function deployPrivateTokenGasless(
       underlyingIsWrappedNative,
     ]),
   });
+  const forwarderFactory = await hre.ethers.getContractFactory(PRIVATE_ERC20_GASLESS_FORWARDER_FQN, defaultSigner);
+  const forwarder = await forwarderFactory.deploy(await token.getAddress());
+  await forwarder.waitForDeployment();
+  await waitForDeploymentConfirmation(forwarder, hre);
+  token.gaslessForwarder = forwarder;
+
+  if ((await defaultSigner.getAddress()).toLowerCase() === ownerAddress.toLowerCase()) {
+    await (await token.setTrustedForwarder(await forwarder.getAddress())).wait();
+  } else {
+    console.warn(
+      `[deployPrivateTokenGasless] owner ${ownerAddress} must call setTrustedForwarder(${await forwarder.getAddress()})`
+    );
+  }
+  return token;
 }
 
 export async function deployPrivateTokenImplementation(
