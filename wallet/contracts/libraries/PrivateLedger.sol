@@ -4,7 +4,7 @@ import "@sodalabs/bubble-core-contracts/contracts/bubble/MpcCore.sol";
 import {PrivateERC20GaslessStorage, gaslessStorage} from "./PrivateERC20GaslessStorage.sol";
 
 /// @title PrivateLedger
-/// @notice Encrypted balance and allowance bookkeeping used by PrivateERC20Contract256Gasless.
+/// @notice Encrypted balance and allowance bookkeeping shared by PrivateERC20Contract256Gasless and PrivateOPRFNotes.
 /// @dev Internal library: compiled into each caller, so it runs in the token's context either way.
 ///      Every write stores the handle and permits the token plus the account that owns it.
 library PrivateLedger {

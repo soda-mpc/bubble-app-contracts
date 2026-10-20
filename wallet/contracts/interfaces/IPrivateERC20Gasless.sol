@@ -2,9 +2,16 @@
 pragma solidity ^0.8.26;
 import "@sodalabs/bubble-core-contracts/contracts/bubble/MpcCore.sol";
 
+/// @notice OPRF note parameters as supplied by the note owner
+struct OPRFToken {
+    itUint128 x;
+    itUint256 q;
+    uint128 y_clear;
+}
+
 /// @title IPrivateERC20Gasless
 /// @notice External API and events of PrivateERC20Contract256Gasless. The token inherits this interface, so its
-///         ABI carries every event.
+///         ABI carries every event; the linked PrivateOPRFNotes library emits the same events by qualified name.
 /// @dev Functions the token inherits from OpenZeppelin (ownership, pausable state, UUPS upgrade) are not repeated
 ///      here; call them through the OpenZeppelin types. Amounts and results are MPC handles, so this is an
 ///      ERC20-like interface, not ERC20.
@@ -32,7 +39,7 @@ interface IPrivateERC20Gasless {
     event Unshield(address indexed to, uint256 amount);
     /// @notice An unshield to `to` was requested; `callbackUnshield` settles it with `Unshield`, `UnshieldParked`
     ///         or `UnshieldFailed`.
-    /// @param amount The requested clear amount.
+    /// @param amount The requested clear amount, or 0 for `redeemManyToUnderlying`, where the amount is encrypted.
     /// @param decryptId The decryption request whose callback pays `to`.
     event UnshieldRequested(address indexed to, uint256 amount, uint256 indexed decryptId);
     event UnshieldFailed(address indexed to, uint256 amount);
@@ -44,6 +51,24 @@ interface IPrivateERC20Gasless {
     event EmergencyRecovery(address indexed owner, uint256 amount);
     event NativeRecovered(address indexed to, uint256 amount);
     event TrustedForwarderUpdated(address indexed oldForwarder, address indexed newForwarder);
+
+    // OPRF Minting Events
+    event OPRFMinted(address indexed user, gtUint128 x, gtUint128 y, gtUint256 q);
+
+    // OPRF Split Events
+    event OPRFSplit(address indexed user, gtUint128 xrRemainder, gtUint256 qRemainder, gtUint128 yRemainder, gtUint128 xrPay, gtUint256 qPay, gtUint128 yPay);
+    event OPRFSplitForRecipient(address indexed user, address indexed recipient, gtUint128 xrRemainder, gtUint256 qRemainder, gtUint128 yRemainder, gtUint128 xrPay, gtUint256 qPay, gtUint128 yPay);
+
+    // OPRF Merge Events
+    event OPRFMerged(address indexed user, gtUint128 xrMerged, gtUint256 qMerged, gtUint128 yMerged);
+
+    // OPRF Transfer/Burn Events
+    event OPRFTransferred(address indexed sender, address indexed recipient, gtUint256 amount);
+    event OPRFBurned(address indexed user, address indexed recipient, gtUint256 burnedAmount);
+
+    // Token Invalidation Events (using encrypted handles instead of IDs)
+    // Reason codes: 1=split, 3=burned (also for notes merged by mergeMany). 2 is unused, kept for the original token's numbering.
+    event OPRFTokenInvalidated(address indexed user, gtUint128 x, gtUint256 q, uint128 y, uint8 reason);
 
     // ---------------------------------------------------------------------------------------------
     // Initialization and ERC-2771
@@ -121,4 +146,38 @@ interface IPrivateERC20Gasless {
     function unshieldForMaster(uint256 privateAmount) external returns (bool);
     function callbackUnshield(uint256 decryptID, bytes[] calldata output, bytes[] calldata signatures) external;
     function claimUnshielded(address to) external;
+
+    // ---------------------------------------------------------------------------------------------
+    // OPRF notes
+    // ---------------------------------------------------------------------------------------------
+
+    function mintOPRFToken(itUint256 memory quantity) external;
+    function shieldAndMint(uint256 amount) external returns (gtUint128 x, gtUint128 y, gtUint256 q);
+    function shieldAndMint(uint256 amount, address recipient) external returns (gtUint128 x, gtUint128 y, gtUint256 q);
+    function splitToken(itUint128 memory x, itUint256 memory q, uint128 y_clear, itUint256 memory qSplit) external;
+    function splitTokenForRecipient(
+        itUint128 memory x,
+        itUint256 memory q,
+        uint128 y_clear,
+        itUint256 memory qSplit,
+        address recipient
+    ) external;
+    function burnToken(itUint128 memory x, itUint256 memory q, uint128 y_clear, address recipient) external;
+    function mergeMany(OPRFToken[] memory tokens) external returns (gtUint128 x, gtUint128 y, gtUint256 qMerged);
+    function transferOPRF(OPRFToken[] memory tokens, itUint256 memory amount, address recipient)
+        external
+        returns (
+            gtUint128 xRecipient,
+            gtUint128 yRecipient,
+            gtUint256 qRecipient,
+            gtUint128 xSender,
+            gtUint128 ySender,
+            gtUint256 qSender
+        );
+    function redeemMany(OPRFToken[] memory tokens, itUint256 memory amount, address recipient)
+        external
+        returns (gtUint128 xRemainder, gtUint128 yRemainder, gtUint256 qRemainder);
+    function redeemManyToUnderlying(OPRFToken[] memory tokens, itUint256 memory amount, address recipient, bool unwrap)
+        external
+        returns (gtUint128 xRemainder, gtUint128 yRemainder, gtUint256 qRemainder);
 }

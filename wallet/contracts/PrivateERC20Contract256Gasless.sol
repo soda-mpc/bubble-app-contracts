@@ -9,10 +9,12 @@ import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@sodalabs/bubble-core-contracts/contracts/bubble/DecryptionCaller.sol";
-import {IPrivateERC20Gasless} from "./interfaces/IPrivateERC20Gasless.sol";
+import {IPrivateERC20Gasless, OPRFToken} from "./interfaces/IPrivateERC20Gasless.sol";
 import {IPrivateERC20GaslessForwarder} from "./interfaces/IPrivateERC20GaslessForwarder.sol";
+import {IWrappedNative} from "./interfaces/IWrappedNative.sol";
 import {PrivateERC20GaslessStorage, UnshieldRequest, gaslessStorage} from "./libraries/PrivateERC20GaslessStorage.sol";
 import {PrivateLedger} from "./libraries/PrivateLedger.sol";
+import {PrivateOPRFNotes} from "./libraries/PrivateOPRFNotes.sol";
 
 /// @title PrivateERC20Contract256Gasless
 /// @notice Private token backed 1:1 by an underlying ERC20, with ERC20-like operations over MPC-encrypted values.
@@ -24,6 +26,8 @@ import {PrivateLedger} from "./libraries/PrivateLedger.sol";
 ///      - This contract: caller identity (ERC-2771), admin, entrypoints, and the underlying lifecycle
 ///        (shield, unshield requests and callbacks, parked claims, emergency recovery).
 ///      - PrivateLedger (internal): encrypted balance and allowance bookkeeping.
+///      - PrivateOPRFNotes (linked): OPRF note issuance and spending. Only the IT owner can route a note's value
+///        away from the IT owner.
 ///
 ///      Gasless calls: a trusted PrivateERC20GaslessForwarder verifies the user's EIP-712 authorization and calls the
 ///      normal entrypoints with the signer appended to calldata; `_msgSender()` returns it. Admin functions ignore
@@ -39,9 +43,8 @@ contract PrivateERC20Contract256Gasless is
 {
     using SafeERC20 for IERC20;
 
-    // The external API and events live in interfaces/IPrivateERC20Gasless.sol. The storage Layout and
-    // UnshieldRequest live in libraries/PrivateERC20GaslessStorage.sol, shared with PrivateLedger.
-    // `_oprfKey` is reserved in that layout so later additions do not move slots.
+    // The external API, events and OPRFToken live in interfaces/IPrivateERC20Gasless.sol. The storage Layout and
+    // UnshieldRequest live in libraries/PrivateERC20GaslessStorage.sol, shared with PrivateLedger and PrivateOPRFNotes.
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -103,18 +106,21 @@ contract PrivateERC20Contract256Gasless is
     ///         ciphertexts for the rest of the transaction. Only the forwarder calls this, right before the
     ///         forwarded operation.
     /// @dev The grant stays live until the transaction ends, also for direct calls into this token after the
-    ///      forwarded one. That is safe only because every ciphertext is validated through `_validateOwnIt`, which
-    ///      ties it to `_msgSender()`. Any new entrypoint that validates a ciphertext must do the same.
+    ///      forwarded one. That is safe only because every ciphertext is held to one of two rules:
+    ///      - balance and allowance ops validate through `_validateOwnIt`, which ties the IT to `_msgSender()`;
+    ///      - note ops (`PrivateOPRFNotes`) accept any IT owner, but every IT in a call must share that owner,
+    ///        and only a caller that is the owner may send the value or new notes anywhere but the owner.
+    ///      Any new entrypoint that validates a ciphertext must keep one of the two.
     function consumeInsertGrant(uint256 insertNonce, bytes calldata insertSignature) external {
         require(_isForwarded(), "Only forwarder");
         MpcCore.transientInsertPermission(_msgSender(), insertNonce, insertSignature);
     }
 
     /// @dev Value ciphertexts must belong to the caller: the signer on a forwarded call, or the direct caller /
-    ///      `tx.origin` (an owner EOA executing through its Safe). The `tx.origin` arm is a phishing class: a contract
-    ///      the user calls in that transaction can pass the user's public IT into `approve` or `transfer` and receive
-    ///      decrypt permission. A stranger cannot. Facilitator relays do not take this arm, because the call is
-    ///      forwarded and `tx.origin` is the facilitator.
+    ///      `tx.origin` (an owner EOA executing through its Safe). With the `tx.origin` arm, a contract the user
+    ///      calls in that transaction can pass the user's public IT into `approve` or `transfer` and receive
+    ///      decrypt permission. A stranger cannot. Facilitator relays do not
+    ///      take this arm, because the call is forwarded and `tx.origin` is the facilitator.
     function _validateOwnIt(itUint256 memory it) private returns (gtUint256) {
         require(
             it.userAddress == _msgSender() || (!_isForwarded() && it.userAddress == tx.origin),
@@ -188,6 +194,15 @@ contract PrivateERC20Contract256Gasless is
         // Initialize OPRF key using MPC's secure random generation
         $._oprfKey = MpcCore.rand128();
         MpcCore.permitThis($._oprfKey);
+    }
+
+    /// @notice Gas forwarded to the recipient of a native unshield payout. Enough for an EOA or a smart wallet's
+    ///         `receive`, not for a recipient that does work on receipt (it gets the wrapped token instead).
+    uint256 public constant NATIVE_PAYOUT_GAS = 50_000;
+
+    receive() external payable {
+        PrivateERC20GaslessStorage.Layout storage $ = gaslessStorage();
+        require($.underlyingIsWrappedNative && msg.sender == address($.underlying), "Unexpected native sender");
     }
     
     /**
@@ -272,7 +287,7 @@ contract PrivateERC20Contract256Gasless is
     }
     
     /// @notice Retires the token and sends the unreserved underlying to the owner.
-    /// @dev Encrypted balances and allowances stay in storage but lose their backing, so the token is
+    /// @dev Encrypted balances, allowances and notes stay in storage but lose their backing, so the token is
     ///      paused for good: `unpause` reverts. Otherwise an old balance could unshield against a later deposit.
     ///      Underlying parked for `claimUnshielded` stays in the contract and can still be claimed. In-flight
     ///      unshield callbacks from before this call are dropped. Calling it again sweeps any later stray deposit.
@@ -461,6 +476,170 @@ contract PrivateERC20Contract256Gasless is
         return _unshieldTo(_msgSender(), privateAmount, gaslessStorage().master);
     }
 
+    /// @notice Mints an OPRF token for the caller using encrypted parameters.
+    /// @param quantity The encrypted quantity/amount for the OPRF token
+    /// @dev The note amount is the transfer result: the full quantity, or zero if the pull did not
+    ///      credit the contract. That is the same mask `PrivateTransfer` already emits.
+    function mintOPRFToken(itUint256 memory quantity) public virtual whenNotPaused {
+        address minter = _msgSender();
+        gtUint256 qGT = _validateOwnIt(quantity);
+        gtBool moved = PrivateLedger.move(minter, address(this), qGT);
+        // Already permitted to this contract, the `PrivateTransfer` recipient.
+        gtUint256 mintedAmount = _permitAndEmitPrivateTransfer(minter, address(this), qGT, MpcCore.not(moved));
+
+        PrivateOPRFNotes.issueNote(minter, mintedAmount);
+    }
+
+    /// @notice Shields a clear amount of underlying and mints an OPRF note for that amount to the caller.
+    function shieldAndMint(uint256 amount)
+        public
+        virtual
+        nonReentrant
+        whenNotPaused
+        returns (gtUint128 x, gtUint128 y, gtUint256 q)
+    {
+        return _shieldAndMint(_msgSender(), amount, _msgSender());
+    }
+
+    /// @notice Shields a clear amount of underlying from the caller and mints the OPRF note to `recipient`.
+    /// @dev The caller's private balance is unchanged. Underlying is escrowed here and this contract's private
+    ///      balance increases by `amount`, which backs the note on a later burn.
+    /// @param amount Clear underlying amount to pull, escrow, and mint. Must be greater than zero.
+    /// @param recipient Account permitted to decrypt the new note.
+    function shieldAndMint(uint256 amount, address recipient)
+        public
+        virtual
+        nonReentrant
+        whenNotPaused
+        returns (gtUint128 x, gtUint128 y, gtUint256 q)
+    {
+        require(recipient != address(0), "Recipient cannot be zero address");
+        require(recipient != address(this), "Recipient cannot be token");
+        return _shieldAndMint(_msgSender(), amount, recipient);
+    }
+
+    /// @notice Splits an OPRF token into remainder and payment portions using encrypted parameters
+    /// @param x The encrypted x value from OPRF minting
+    /// @param q The encrypted quantity from OPRF minting
+    /// @param y_clear The clear (unencrypted) y value for splitting
+    /// @param qSplit The encrypted amount to split off as payment
+    function splitToken(
+        itUint128 memory x,
+        itUint256 memory q,
+        uint128 y_clear,
+        itUint256 memory qSplit
+    ) public virtual whenNotPaused {
+        PrivateOPRFNotes.splitToken(x, q, y_clear, qSplit);
+    }
+
+    /// @notice Splits an OPRF token for anonymous transfer to a recipient
+    /// @dev Unless the caller (`_msgSender()`) is the IT owner, `recipient` must be the IT owner.
+    /// @param x The encrypted x coordinate of the OPRF token
+    /// @param q The encrypted quantity/amount of the OPRF token
+    /// @param y_clear The clear (unencrypted) y coordinate of the OPRF token
+    /// @param qSplit The encrypted amount to split off as payment
+    /// @param recipient The address of the recipient who will receive the split values
+    function splitTokenForRecipient(
+        itUint128 memory x,
+        itUint256 memory q,
+        uint128 y_clear,
+        itUint256 memory qSplit,
+        address recipient
+    ) public virtual whenNotPaused {
+        PrivateOPRFNotes.splitTokenForRecipient(_msgSender(), x, q, y_clear, qSplit, recipient);
+    }
+
+    /// @notice Burns an OPRF token and transfers the burned amount to recipient
+    /// @dev Unless the caller (`_msgSender()`) is the IT owner, `recipient` must be the IT owner.
+    /// @param x The encrypted x value from OPRF minting or split
+    /// @param q The encrypted quantity from OPRF minting or split
+    /// @param y_clear The clear (unencrypted) y value for burning
+    /// @param recipient The address to receive the burned tokens
+    function burnToken(
+        itUint128 memory x,
+        itUint256 memory q,
+        uint128 y_clear,
+        address recipient
+    ) public virtual whenNotPaused {
+        PrivateOPRFNotes.burnToken(_msgSender(), x, q, y_clear, recipient);
+    }
+
+    /// @notice Merges multiple OPRF tokens by burning them all and creating a new token with the total amount
+    /// @param tokens Array of OPRF token parameters to merge
+    function mergeMany(
+        OPRFToken[] memory tokens
+    ) public virtual whenNotPaused returns (gtUint128 x, gtUint128 y, gtUint256 qMerged) {
+        return PrivateOPRFNotes.mergeMany(tokens);
+    }
+
+    /// @notice Transfers OPRF tokens to a recipient by burning input tokens and minting new tokens
+    /// @dev Unless the caller (`_msgSender()`) is the IT owner, `recipient` must be the IT owner.
+    /// @param tokens Array of OPRF token parameters to burn
+    /// @param amount Encrypted amount to transfer to recipient
+    /// @param recipient Address of the recipient who will receive the tokens
+    function transferOPRF(
+        OPRFToken[] memory tokens,
+        itUint256 memory amount,
+        address recipient
+    ) public virtual whenNotPaused returns (
+        gtUint128 xRecipient,
+        gtUint128 yRecipient,
+        gtUint256 qRecipient,
+        gtUint128 xSender,
+        gtUint128 ySender,
+        gtUint256 qSender
+    ) {
+        return PrivateOPRFNotes.transferOPRF(_msgSender(), tokens, amount, recipient);
+    }
+
+    /// @notice Redeems multiple OPRF tokens by burning them all, transferring the specified amount as private tokens to recipient, and minting a leftover OPRF token if there's a remainder
+    /// @dev Unless the caller (`_msgSender()`) is the IT owner, `recipient` must be the IT owner.
+    /// @param tokens Array of OPRF token parameters to burn
+    /// @param amount Encrypted amount to transfer to recipient as private tokens
+    /// @param recipient Address of the recipient who will receive the private tokens
+    function redeemMany(
+        OPRFToken[] memory tokens,
+        itUint256 memory amount,
+        address recipient
+    ) public virtual whenNotPaused returns (
+        gtUint128 xRemainder,
+        gtUint128 yRemainder,
+        gtUint256 qRemainder
+    ) {
+        return PrivateOPRFNotes.redeemMany(_msgSender(), tokens, amount, recipient);
+    }
+
+    /// @notice Redeems multiple OPRF tokens and directly unshields the redeemed amount to underlying tokens for recipient.
+    /// @dev The redeemed amount is debited from the pool and unshielded; `recipient`'s private balance is never touched.
+    /// @dev Unless the caller (`_msgSender()`) is the IT owner, `recipient` must be the IT owner.
+    /// @param tokens Array of OPRF token parameters to burn
+    /// @param amount Encrypted amount to redeem and unshield
+    /// @param recipient Address receiving the underlying tokens after callback
+    /// @param unwrap If true, unwrap wrapped-native underlying and send native token. The payout falls back to the
+    ///        wrapped token when that does not go through: always with a WETH9-style `withdraw` (its 2300-gas
+    ///        stipend cannot reach this proxy), and when `recipient` refuses native token or needs more than
+    ///        `NATIVE_PAYOUT_GAS`.
+    function redeemManyToUnderlying(
+        OPRFToken[] memory tokens,
+        itUint256 memory amount,
+        address recipient,
+        bool unwrap
+    ) public virtual whenNotPaused returns (
+        gtUint128 xRemainder,
+        gtUint128 yRemainder,
+        gtUint256 qRemainder
+    ) {
+        if (unwrap) {
+            require(gaslessStorage().underlyingIsWrappedNative, "Underlying unwrap not configured");
+        }
+        gtUint256 amountToUnshieldGt;
+        (xRemainder, yRemainder, qRemainder, amountToUnshieldGt) =
+            PrivateOPRFNotes.redeemManyToUnderlying(_msgSender(), tokens, amount, recipient);
+        uint256 decryptId = _requestUnshieldFromHandle(amountToUnshieldGt, recipient, unwrap);
+        // The redeemed amount is encrypted, so the event carries 0; the callback's Unshield has the paid amount.
+        emit UnshieldRequested(recipient, 0, decryptId);
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Internal implementations. `sender` is the account whose balance/allowance is used and who is
     // credited.
@@ -497,10 +676,27 @@ contract PrivateERC20Contract256Gasless is
 
         gtUint256 amountToUnshieldGt = PrivateLedger.debitIfSufficient(sender, amountGt);
 
-        uint256 decryptId = _requestUnshieldFromHandle(amountToUnshieldGt, recipient);
+        uint256 decryptId = _requestUnshieldFromHandle(amountToUnshieldGt, recipient, false);
 
         emit UnshieldRequested(recipient, privateAmount, decryptId);
         return true;
+    }
+
+    function _shieldAndMint(address sender, uint256 amount, address recipient)
+        private
+        returns (gtUint128 x, gtUint128 y, gtUint256 q)
+    {
+        _pullUnderlying(sender, amount);
+
+        gtUint256 amountGt = MpcCore.setPublic256(amount);
+        MpcCore.permitThis(amountGt);
+
+        // The pool's private balance backs the note until it is burned.
+        PrivateLedger.credit(address(this), amountGt);
+        emit Shield(sender, amount);
+
+        q = amountGt;
+        (x, y) = PrivateOPRFNotes.issueNote(recipient, q);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -510,9 +706,11 @@ contract PrivateERC20Contract256Gasless is
     /// @notice Emits PrivateTransfer and grants both parties permission to decrypt the credited amount.
     /// @dev The emitted amount is `amount`, or zero when `failed` is true. `MpcCore.mux(bit, a, b)` returns `b` when
     ///      `bit` is true, so callers pass the negated success bit (e.g. `not(result)` of the transfer).
-    function _permitAndEmitPrivateTransfer(address from, address to, gtUint256 amount, gtBool failed) private {
-        PrivateERC20GaslessStorage.Layout storage $ = gaslessStorage();
-        gtUint256 transferredAmount = MpcCore.mux(failed, amount, $.zero);
+    function _permitAndEmitPrivateTransfer(address from, address to, gtUint256 amount, gtBool failed)
+        private
+        returns (gtUint256 transferredAmount)
+    {
+        transferredAmount = MpcCore.mux(failed, amount, gaslessStorage().zero);
         MpcCore.permit(transferredAmount, to);
         MpcCore.permit(transferredAmount, from);
         emit PrivateTransfer(from, to, transferredAmount);
@@ -521,8 +719,9 @@ contract PrivateERC20Contract256Gasless is
     /// @notice Requests unshielding for an encrypted private-token amount handle.
     /// @param amountToUnshieldGt The encrypted private-token amount to decrypt and unshield.
     /// @param recipient Recipient of the underlying token transfer in callback.
+    /// @param unwrapNative If true, unwrap wrapped-native token and send native token.
     /// @return decryptId The decryption request ID; `callbackUnshield` receives it.
-    function _requestUnshieldFromHandle(gtUint256 amountToUnshieldGt, address recipient)
+    function _requestUnshieldFromHandle(gtUint256 amountToUnshieldGt, address recipient, bool unwrapNative)
         internal
         returns (uint256 decryptId)
     {
@@ -535,7 +734,7 @@ contract PrivateERC20Contract256Gasless is
         decryptId = requestDecryption(handles, this.callbackUnshield.selector);
         $.unshieldRequests[decryptId] = UnshieldRequest({
             user: recipient,
-            unwrapNative: false, // native unwrap is not supported by the core token
+            unwrapNative: unwrapNative,
             epoch: $.unshieldEpoch
         });
     }
@@ -548,6 +747,7 @@ contract PrivateERC20Contract256Gasless is
         // output[0] contains the private amount to unshield, denominated like the underlying token.
         uint256 privateAmountToUnshield = abi.decode(output[0], (uint256));
         address user = request.user;
+        bool unwrapNative = request.unwrapNative;
         uint256 epoch = request.epoch;
         delete $.unshieldRequests[decryptID];
 
@@ -557,13 +757,37 @@ contract PrivateERC20Contract256Gasless is
             return;
         }
 
-        if (!$.underlying.trySafeTransfer(user, privateAmountToUnshield)) {
+        // Paid or parked, the amount leaves the private supply. Settle that before any external call.
+        $._totalSupply -= privateAmountToUnshield;
+
+        // `unwrapNative` was only stored when the underlying is wrapped-native (checked at request time). If the
+        // native payout does not go through, pay the wrapped token instead; park only if that fails too.
+        bool paid = unwrapNative && _tryPayNative(user, privateAmountToUnshield);
+        if (!paid && !$.underlying.trySafeTransfer(user, privateAmountToUnshield)) {
             _parkFailedUnshield(user, privateAmountToUnshield);
             return;
         }
-
-        $._totalSupply -= privateAmountToUnshield;
         emit Unshield(user, privateAmountToUnshield);
+    }
+
+    /// @dev Pays `amount` of the wrapped-native underlying to `to` as native token, or returns false with nothing
+    ///      moved: the unwrap and the send run in one self-call, so any failure reverts both. That covers a
+    ///      WETH9-style `withdraw` (its 2300-gas stipend cannot reach this proxy), a refusing `to`, and a `to` that
+    ///      needs more than `NATIVE_PAYOUT_GAS`. The cap leaves the caller gas to pay the wrapped token or park.
+    function _tryPayNative(address to, uint256 amount) private returns (bool) {
+        try this.unwrapAndSend(to, amount) {
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /// @notice Internal step of the native unshield payout. Only this contract may call it.
+    function unwrapAndSend(address to, uint256 amount) external {
+        require(msg.sender == address(this), "Only self");
+        IWrappedNative(address(gaslessStorage().underlying)).withdraw(amount);
+        (bool sent, ) = payable(to).call{value: amount, gas: NATIVE_PAYOUT_GAS}("");
+        require(sent, "Native send failed");
     }
 
     /// @notice Clear underlying parked for `account` after a failed unshield push.
@@ -590,7 +814,6 @@ contract PrivateERC20Contract256Gasless is
         PrivateERC20GaslessStorage.Layout storage $ = gaslessStorage();
         $.claimableUnderlying[user] += amount;
         $.claimableUnderlyingTotal += amount;
-        $._totalSupply -= amount;
         emit UnshieldParked(user, amount);
     }
 }

@@ -11,7 +11,7 @@ struct UnshieldRequest {
     uint256 epoch;
 }
 
-/// @notice Storage of PrivateERC20Contract256Gasless, shared with its PrivateLedger library.
+/// @notice Storage of PrivateERC20Contract256Gasless, shared with its PrivateLedger and PrivateOPRFNotes libraries.
 /// @dev The token inherits this contract so the upgrades plugin sees the annotated namespace and validates it.
 ///      Libraries use the `PrivateERC20GaslessStorage.Layout` type through `gaslessStorage()`. The layout is
 ///      append-only: never reorder, retype or remove a field.
