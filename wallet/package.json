@@ -10,7 +10,7 @@
     "test": "hardhat test",
     "test:gasless": "hardhat test test/PrivateERC20GaslessForwarder.test.ts test/TUSDC.test.ts",
     "test:layout": "hardhat test test/PrivateERC20GaslessStorageLayout.test.ts",
-    "test:gasless:arbitrum-sepolia": "hardhat test test/PrivateERC20GaslessCore.test.ts test/PrivateERC20GaslessSecurity.test.ts --network sepolia-arbitrum",
+    "test:gasless:arbitrum-sepolia": "hardhat test test/PrivateERC20GaslessCore.test.ts test/PrivateERC20Gasless.test.ts test/PrivateERC20GaslessSecurity.test.ts --network sepolia-arbitrum",
     "transfer-ownership": "hardhat run scripts/transfer-ownership-to-safe.ts --network sepolia",
     "verify:environment": "hardhat run scripts/verify-contracts.ts"
   },
