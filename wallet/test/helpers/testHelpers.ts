@@ -67,18 +67,10 @@ const GC_ACL_ADDRESSES: Record<number, string> = {
 };
 
 export const GCACL_ABI = [
-  "function permit(uint256 handle, address account)",
-  "function permitContractViewAccess(address permittee, address contractAddress, uint64 expirationDate)",
   "function permitFullInsertAccess(address permittee, uint64 expirationDate)",
-  "function permitContractInsertAccess(address permittee, address contractAddress, uint64 expirationDate)",
   "function isFullInsertPermitted(address permitter, address permittee) view returns (bool)",
   "function isPermitted(uint256 handle, address account) view returns (bool)",
-  "function isContractViewPermitted(address permitter, address permittee, address contractAddress) view returns (bool)",
-  "function isPermittedToView(address permitter, address permittee, uint256 handle) view returns (bool)",
-  "function isContractInsertPermitted(address permitter, address permittee, address contractAddress) view returns (bool)",
   "function transientInsertNonce(address user) view returns (uint256)",
-  "function transientInsertPermission(address user, uint256 nonce, bytes signature)",
-  "function isTransientInsertPermitted(address user, address contractAddress) view returns (bool)",
 ] as const;
 
 export function getGcAclAddress(chainId: number): string {

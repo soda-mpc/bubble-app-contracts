@@ -79,22 +79,12 @@ contract PrivateERC20Contract256Gasless is
         return isTrustedForwarder(msg.sender) && msg.data.length >= 20;
     }
 
+    /// @dev Only `_msgSender` is overridden: nothing here or in the bases reads `_msgData` or `_contextSuffixLength`.
     function _msgSender() internal view override returns (address) {
         if (_isForwarded()) {
             return address(bytes20(msg.data[msg.data.length - 20:]));
         }
         return msg.sender;
-    }
-
-    function _msgData() internal view override returns (bytes calldata) {
-        if (_isForwarded()) {
-            return msg.data[:msg.data.length - 20];
-        }
-        return msg.data;
-    }
-
-    function _contextSuffixLength() internal view override returns (uint256) {
-        return _isForwarded() ? 20 : 0;
     }
 
     /// @dev Admin functions are never authorized by a forwarded signature.
