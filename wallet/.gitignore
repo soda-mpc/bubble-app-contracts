@@ -19,3 +19,7 @@ yarn.lock
 
 # Hardhat Ignition default folder for deployments against a local node
 ignition/deployments/chain-31337
+
+# Local deploy dry-runs
+scripts/deployments/hardhat.json
+scripts/deployments/localhost.json

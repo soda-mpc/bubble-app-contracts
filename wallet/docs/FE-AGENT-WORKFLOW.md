@@ -6,7 +6,7 @@ Standalone spec for the **FE app** (and the Python facilitator it talks to). Cop
 
 **Product (full path):** issuer turns clear USDC into an anonymous OPRF note, assigns it to a simulated **agent EOA**, and the agent spends a portion **gaslessly** to a destination. The public chain must not show an address edge from issuer (Safe/EOA) to agent.
 
-**Related contracts repo:** `bubble-app-contracts/wallet`: `PrivateERC20Contract256Gasless` (token), its `PrivateOPRFNotes` library and `PrivateERC20GaslessForwarder`, and the Arbitrum Sepolia suites `PrivateERC20Gasless*.test.ts` (`npm run test:gasless:arbitrum-sepolia`). The insert grant is described in [`TRANSIENT-INSERT-GRANT.md`](https://github.com/soda-mpc/bubble-app-contracts/blob/master/wallet/docs/TRANSIENT-INSERT-GRANT.md).
+**Related contracts repo:** `bubble-app-contracts/wallet`: `PrivateERC20Contract256Gasless` (token), its `PrivateOPRFNotes` library, `PrivateERC20GaslessForwarder` and `PrivateERC20GaslessFactory` (creates a token and its forwarder), and the Arbitrum Sepolia suites `PrivateERC20Gasless*.test.ts` (`npm run test:gasless:arbitrum-sepolia`). The insert grant is described in [`TRANSIENT-INSERT-GRANT.md`](https://github.com/soda-mpc/bubble-app-contracts/blob/master/wallet/docs/TRANSIENT-INSERT-GRANT.md); security notes are in [`gasless-security-review.md`](https://github.com/soda-mpc/bubble-app-contracts/blob/master/wallet/docs/gasless-security-review.md).
 
 ---
 
@@ -371,7 +371,7 @@ Inner `redeemManyToUnderlying.recipient` **must** still be the agent so unshield
 |----------|---------|
 | `CHAIN_ID` | e.g. `421614` Arbitrum Sepolia |
 | `RPC_URL` | Read + issuer txs |
-| `PRIVATE_ERC20` | Proxy address |
+| `PRIVATE_ERC20` | Proxy address, from `PrivateERC20GaslessFactory.createToken`. The creator must then call `acceptOwnership()` with its own gas; until then the token's admin functions are unreachable |
 | `FORWARDER` | Per-token forwarder. Transaction target and EIP-712 `verifyingContract` |
 | `UNDERLYING` | USDC or EIP-3009 mock |
 | `GCACL` | Permit insert |

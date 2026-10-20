@@ -8,9 +8,10 @@
     "deploy:upgradable": "hardhat run scripts/deploy-upgradable-private-erc20.ts --network sepolia",
     "prepare-upgrade": "hardhat run scripts/prepare-upgrade.ts --network sepolia",
     "test": "hardhat test",
-    "test:gasless": "hardhat test test/PrivateERC20GaslessForwarder.test.ts test/TUSDC.test.ts",
+    "test:gasless": "hardhat test test/PrivateERC20GaslessForwarder.test.ts test/PrivateERC20GaslessFactory.test.ts test/TUSDC.test.ts",
     "test:layout": "hardhat test test/PrivateERC20GaslessStorageLayout.test.ts",
-    "test:gasless:arbitrum-sepolia": "hardhat test test/PrivateERC20GaslessCore.test.ts test/PrivateERC20Gasless.test.ts test/PrivateERC20GaslessSecurity.test.ts test/PrivateERC20GaslessAnonymity.test.ts test/PrivateERC20GaslessNativeUnwrap.test.ts --network sepolia-arbitrum",
+    "test:gasless:arbitrum-sepolia": "hardhat test test/PrivateERC20GaslessCore.test.ts test/PrivateERC20Gasless.test.ts test/PrivateERC20GaslessSecurity.test.ts test/PrivateERC20GaslessAnonymity.test.ts test/PrivateERC20GaslessNativeUnwrap.test.ts test/PrivateERC20GaslessFactory.test.ts --network sepolia-arbitrum",
+    "deploy:gasless-factory:arbitrum-sepolia": "hardhat run scripts/deploy-private-erc20-gasless-factory.ts --network sepolia-arbitrum",
     "transfer-ownership": "hardhat run scripts/transfer-ownership-to-safe.ts --network sepolia",
     "verify:environment": "hardhat run scripts/verify-contracts.ts"
   },

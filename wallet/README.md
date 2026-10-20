@@ -89,7 +89,8 @@ When bumping any pinned package, re-run `npm install`, `npm run compile`, and th
 | `npm run compile` | Compile contracts |
 | `npm test` | Run Hardhat tests |
 | `npm run test:layout` | Check the gasless token's storage layout against its snapshot |
-| `npm run test:gasless` | Gasless forwarder and test USDC, local |
-| `npm run test:gasless:arbitrum-sepolia` | Gasless token core, gasless, security, anonymity and native-unwrap suites on Arbitrum Sepolia |
+| `npm run test:gasless` | Gasless forwarder, factory input checks and test USDC, local |
+| `npm run test:gasless:arbitrum-sepolia` | Gasless token core, gasless, security, anonymity, native-unwrap and factory suites on Arbitrum Sepolia |
+| `npm run deploy:gasless-factory:arbitrum-sepolia` | Deploy the gasless library, implementation, and factory |
 
 See `package.json` for network-specific deploy, verify, and balance scripts.

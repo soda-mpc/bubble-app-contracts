@@ -1,4 +1,9 @@
-import { ethers } from "hardhat";
+import hre, { ethers } from "hardhat";
+import { saveDeploymentRecord } from "./deployment-io";
+
+// RECORD_AS=gaslessTestToken records the token in scripts/deployments/<network>.json under that key, keeping the
+// file's other sections. Without it the script only prints the address.
+const RECORD_KEYS = ["gaslessTestToken"] as const;
 
 async function main() {
   // Get deployment parameters from command line arguments or use defaults
@@ -48,7 +53,7 @@ async function main() {
   
   if (deployTx) {
     const receipt = await deployTx.wait(2); // Wait for 2 confirmations
-    deploymentBlockNumber = receipt.blockNumber;
+    deploymentBlockNumber = receipt?.blockNumber;
   } else {
     await tusdc.waitForDeployment();
   }
@@ -77,6 +82,33 @@ async function main() {
       console.error(`❌ Failed to set decimals:`, err);
       throw err;
     }
+  }
+
+  const recordAs = process.env.RECORD_AS?.trim();
+  if (recordAs) {
+    if (!(RECORD_KEYS as readonly string[]).includes(recordAs)) {
+      throw new Error(`RECORD_AS must be one of: ${RECORD_KEYS.join(", ")}`);
+    }
+    const network = await ethers.provider.getNetwork();
+    const blockNumber = deploymentBlockNumber ?? (await ethers.provider.getBlockNumber());
+    const written = saveDeploymentRecord(
+      {
+        network: hre.network.name,
+        chainId: Number(network.chainId),
+        gaslessTestToken: {
+          address: contractAddress,
+          name: tokenName,
+          symbol: tokenSymbol,
+          decimals,
+          blockNumber,
+          eip2612: true,
+          eip3009: true,
+          mintWithAuthorization: true,
+        },
+      },
+      hre.network.name
+    );
+    console.log(`📝 Recorded as ${recordAs} in ${written}`);
   }
 
   // Display token information
