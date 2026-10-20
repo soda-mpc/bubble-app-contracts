@@ -74,7 +74,7 @@ Packages that affect **compiled bytecode**, **storage layout**, **compiler outpu
 | `solc` | 0.8.26 | Must match `hardhat.config.ts` `solidity.version` and contract `pragma solidity ^0.8.26` |
 | `hardhat` | 2.27.1 | Compile/deploy/test runner |
 | `soda-bubble-sdk` | 0.0.11 | MPC/crypto integration used in scripts and tests |
-| `@sodalabs/bubble-core-contracts` | git ref `initial-version` | Shared on-chain primitives (commit resolved in lockfile) |
+| `@sodalabs/bubble-core-contracts` | git commit `c2adb88` | Shared on-chain primitives, including the transient insert grant |
 
 When bumping any pinned package, re-run `npm install`, `npm run compile`, and the full test suite. For OpenZeppelin contract bumps, run `prepare-upgrade` / storage checks against live proxy addresses before mainnet Safe transactions.
 
@@ -88,5 +88,6 @@ When bumping any pinned package, re-run `npm install`, `npm run compile`, and th
 | `npm test` | Run Hardhat tests |
 | `npm run test:layout` | Check the gasless token's storage layout against its snapshot |
 | `npm run test:gasless` | Gasless forwarder and test USDC, local |
+| `npm run test:gasless:arbitrum-sepolia` | Gasless token core and security suites on Arbitrum Sepolia |
 
 See `package.json` for network-specific deploy, verify, and balance scripts.

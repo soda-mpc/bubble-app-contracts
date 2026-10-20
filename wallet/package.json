@@ -10,6 +10,7 @@
     "test": "hardhat test",
     "test:gasless": "hardhat test test/PrivateERC20GaslessForwarder.test.ts test/TUSDC.test.ts",
     "test:layout": "hardhat test test/PrivateERC20GaslessStorageLayout.test.ts",
+    "test:gasless:arbitrum-sepolia": "hardhat test test/PrivateERC20GaslessCore.test.ts test/PrivateERC20GaslessSecurity.test.ts --network sepolia-arbitrum",
     "transfer-ownership": "hardhat run scripts/transfer-ownership-to-safe.ts --network sepolia",
     "verify:environment": "hardhat run scripts/verify-contracts.ts"
   },
@@ -18,7 +19,7 @@
     "@grpc/proto-loader": "^0.7.10",
     "@openzeppelin/contracts": "5.4.0",
     "@openzeppelin/contracts-upgradeable": "5.4.0",
-    "@sodalabs/bubble-core-contracts": "0.0.1",
+    "@sodalabs/bubble-core-contracts": "git+https://github.com/soda-mpc/bubble-core-contracts.git#c2adb88d2b3ab5d54fb076141138bef4f84d76e1",
     "@types/node-forge": "^1.3.14",
     "dotenv": "^16.4.5",
     "ethereumjs-util": "^7.1.5",
