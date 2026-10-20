@@ -64,7 +64,12 @@ interface IPrivateERC20Gasless {
 
     // OPRF Transfer/Burn Events
     event OPRFTransferred(address indexed sender, address indexed recipient, gtUint256 amount);
+    /// @notice A note's value left it. From `burnToken`, `recipient` was credited `burnedAmount`. From the burn loop of
+    ///         `mergeMany`, `transferOPRF` and the redeems, `recipient` is the token: the value went to the pool.
     event OPRFBurned(address indexed user, address indexed recipient, gtUint256 burnedAmount);
+    /// @notice `redeemMany` credited `amount` to `recipient`'s private balance, or `redeemManyToUnderlying` requested
+    ///         its unshield to `recipient`. One per redeem; the per-note burns are the `OPRFBurned` events before it.
+    event OPRFRedeemed(address indexed user, address indexed recipient, gtUint256 amount);
 
     // Token Invalidation Events (using encrypted handles instead of IDs)
     // Reason codes: 1=split, 3=burned (also for notes merged by mergeMany). 2 is unused, kept for the original token's numbering.
@@ -73,14 +78,6 @@ interface IPrivateERC20Gasless {
     // ---------------------------------------------------------------------------------------------
     // Initialization and ERC-2771
     // ---------------------------------------------------------------------------------------------
-
-    function initialize(
-        string memory name_,
-        string memory symbol_,
-        address underlying_,
-        address owner_,
-        address master_
-    ) external;
 
     function initializeWithWrappedNative(
         string memory name_,

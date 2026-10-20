@@ -552,16 +552,9 @@ describe("PrivateERC20Contract256Gasless security", function () {
         privateToken.interface.encodeFunctionData("approve(address,uint256)", [attacker.address, 7n]) +
         owner.address.slice(2).toLowerCase();
       const receipt = await (await attacker.sendTransaction({ to: tokenAddress, data })).wait();
-      const approval = receipt.logs
-        .map((log: any) => {
-          try {
-            return privateToken.interface.parseLog(log);
-          } catch {
-            return null;
-          }
-        })
-        .find((e: any) => e?.name === "Approval");
-      expect(approval, "no Approval event found in the direct-call receipt").to.not.equal(undefined);
+      const approvalLog = findParsedLogInReceipt(receipt, privateToken, "Approval");
+      expect(approvalLog, "no Approval event found in the direct-call receipt").to.not.equal(undefined);
+      const approval = privateToken.interface.parseLog(approvalLog);
       expect(approval!.args[0].toLowerCase()).to.equal(attacker.address.toLowerCase());
     });
 
@@ -636,16 +629,9 @@ describe("PrivateERC20Contract256Gasless security", function () {
 
       const grant = await ownerGrant();
       const receipt = await forwardAsOwner(approveIt(), grant);
-      const approval = receipt!.logs
-        .map((log: any) => {
-          try {
-            return privateToken.interface.parseLog(log);
-          } catch {
-            return null;
-          }
-        })
-        .find((e: any) => e?.name === "Approval");
-      expect(approval, "no Approval event in the relayed receipt").to.not.equal(undefined);
+      const approvalLog = findParsedLogInReceipt(receipt, privateToken, "Approval");
+      expect(approvalLog, "no Approval event in the relayed receipt").to.not.equal(undefined);
+      const approval = privateToken.interface.parseLog(approvalLog);
       expect(approval!.args[0]).to.equal(owner.address);
       expect(approval!.args[1]).to.equal(attacker.address);
 

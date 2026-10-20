@@ -32,6 +32,7 @@ import {
   deployPrivateTokenGasless,
   findParsedLogInReceipt,
   findParsedLogInReceiptWhere,
+  findParsedLogsInReceipt,
   getGcAclAddress,
   getGcAclContract,
   getPrivateTokenBalance,
@@ -397,19 +398,22 @@ describe("PrivateERC20Contract256Gasless", function () {
       ]);
       const redeemReceipt = await execAsOwner(redeemData, true);
       // The redeem path announces the payout too: recipient, amount 0 (encrypted), and the decrypt request.
-      const requested = redeemReceipt.logs
-        .map((log: { topics: string[]; data: string }) => {
-          try {
-            return privateToken.interface.parseLog(log);
-          } catch {
-            return null;
-          }
-        })
-        .find((parsed: { name: string } | null) => parsed?.name === "UnshieldRequested");
-      expect(requested, "UnshieldRequested").to.not.be.undefined;
+      const requestedLog = findParsedLogInReceipt(redeemReceipt, privateToken, "UnshieldRequested");
+      expect(requestedLog, "UnshieldRequested").to.not.be.undefined;
+      const requested = privateToken.interface.parseLog(requestedLog);
       expect(requested.args.to).to.equal(destination.address);
       expect(requested.args.amount).to.equal(0n);
       expect(requested.args.decryptId).to.be.a("bigint");
+      // One OPRFRedeemed for the payout; the burn loop's OPRFBurned events credit the pool, not the recipient.
+      const redeemed = findParsedLogsInReceipt(redeemReceipt, privateToken, "OPRFRedeemed");
+      expect(redeemed.length, "OPRFRedeemed").to.equal(1);
+      const redeemedArgs = privateToken.interface.parseLog(redeemed[0]).args;
+      expect(redeemedArgs.user).to.equal(owner.address);
+      expect(redeemedArgs.recipient).to.equal(destination.address);
+      const burns = findParsedLogsInReceipt(redeemReceipt, privateToken, "OPRFBurned").map(
+        (log: any) => privateToken.interface.parseLog(log).args.recipient
+      );
+      expect(burns, "per-note OPRFBurned go to the pool").to.deep.equal([tokenAddress]);
 
       const { successEvents, failedEvents } = await waitForUnshieldOutcome(privateToken, hre, startBlock, {
         timeoutMs: DELAY_MPC_REDEEM_MS * 6,

@@ -134,25 +134,13 @@ contract PrivateERC20Contract256Gasless is
         require(MpcCore.isPermitted(value, account), "Handle not permitted");
     }
 
-    /// @notice Initializes the token contract, assigning the contract owner and setting the underlying ERC20 token
+    /// @notice Initializes the token behind its proxy.
     /// @param name_ The name of the token
     /// @param symbol_ The symbol of the token
     /// @param underlying_ The address of the underlying ERC20 token
     /// @param owner_ The address that will own the token
     /// @param master_ The master address for unshield operations
-    /// @dev Same signature as `PrivateERC20Contract256.initialize`, for deploy tooling that already calls it.
-    ///      `initializeWithWrappedNative` is the same with the wrapped-native flag; the factory uses that one.
-    function initialize(
-        string memory name_,
-        string memory symbol_,
-        address underlying_,
-        address owner_,
-        address master_
-    ) public initializer {
-        _initialize(name_, symbol_, underlying_, owner_, master_, false);
-    }
-
-    /// @notice Initializes the token contract with wrapped-native configuration.
+    /// @param underlyingIsWrappedNative_ Whether the underlying unwraps to native token (WETH style)
     function initializeWithWrappedNative(
         string memory name_,
         string memory symbol_,
@@ -161,17 +149,6 @@ contract PrivateERC20Contract256Gasless is
         address master_,
         bool underlyingIsWrappedNative_
     ) public initializer {
-        _initialize(name_, symbol_, underlying_, owner_, master_, underlyingIsWrappedNative_);
-    }
-
-    function _initialize(
-        string memory name_,
-        string memory symbol_,
-        address underlying_,
-        address owner_,
-        address master_,
-        bool underlyingIsWrappedNative_
-    ) internal {
         require(underlying_ != address(0), "Underlying cannot be zero address");
         require(owner_ != address(0), "Owner cannot be zero address");
         require(master_ != address(0), "Master cannot be zero address");
@@ -483,9 +460,9 @@ contract PrivateERC20Contract256Gasless is
     function mintOPRFToken(itUint256 memory quantity) public virtual whenNotPaused {
         address minter = _msgSender();
         gtUint256 qGT = _validateOwnIt(quantity);
-        gtBool moved = PrivateLedger.move(minter, address(this), qGT);
-        // Already permitted to this contract, the `PrivateTransfer` recipient.
-        gtUint256 mintedAmount = _permitAndEmitPrivateTransfer(minter, address(this), qGT, MpcCore.not(moved));
+        gtUint256 mintedAmount = PrivateLedger.movedAmount(PrivateLedger.move(minter, address(this), qGT), qGT);
+        // Permitted to this contract as the `PrivateTransfer` recipient.
+        _permitAndEmitPrivateTransfer(minter, address(this), mintedAmount);
 
         PrivateOPRFNotes.issueNote(minter, mintedAmount);
     }
@@ -648,13 +625,13 @@ contract PrivateERC20Contract256Gasless is
     /// @dev `_value` must already be usable by this contract (validated IT or a handle `sender` was checked against).
     function _contractTransfer(address sender, address _to, gtUint256 _value) private returns (gtBool) {
         gtBool result = PrivateLedger.move(sender, _to, _value);
-        _permitAndEmitPrivateTransfer(sender, _to, _value, MpcCore.not(result));
+        _permitAndEmitPrivateTransfer(sender, _to, PrivateLedger.movedAmount(result, _value));
         return result;
     }
 
     function _contractTransferFrom(address spender, address _from, address _to, gtUint256 _value) private returns (gtBool) {
         gtBool result = PrivateLedger.moveWithAllowance(spender, _from, _to, _value);
-        _permitAndEmitPrivateTransfer(_from, _to, _value, MpcCore.not(result));
+        _permitAndEmitPrivateTransfer(_from, _to, PrivateLedger.movedAmount(result, _value));
         return result;
     }
 
@@ -704,16 +681,11 @@ contract PrivateERC20Contract256Gasless is
     // ---------------------------------------------------------------------------------------------
 
     /// @notice Emits PrivateTransfer and grants both parties permission to decrypt the credited amount.
-    /// @dev The emitted amount is `amount`, or zero when `failed` is true. `MpcCore.mux(bit, a, b)` returns `b` when
-    ///      `bit` is true, so callers pass the negated success bit (e.g. `not(result)` of the transfer).
-    function _permitAndEmitPrivateTransfer(address from, address to, gtUint256 amount, gtBool failed)
-        private
-        returns (gtUint256 transferredAmount)
-    {
-        transferredAmount = MpcCore.mux(failed, amount, gaslessStorage().zero);
-        MpcCore.permit(transferredAmount, to);
-        MpcCore.permit(transferredAmount, from);
-        emit PrivateTransfer(from, to, transferredAmount);
+    /// @param credited The amount that actually moved (`PrivateLedger.movedAmount`).
+    function _permitAndEmitPrivateTransfer(address from, address to, gtUint256 credited) private {
+        MpcCore.permit(credited, to);
+        MpcCore.permit(credited, from);
+        emit PrivateTransfer(from, to, credited);
     }
 
     /// @notice Requests unshielding for an encrypted private-token amount handle.
@@ -722,7 +694,7 @@ contract PrivateERC20Contract256Gasless is
     /// @param unwrapNative If true, unwrap wrapped-native token and send native token.
     /// @return decryptId The decryption request ID; `callbackUnshield` receives it.
     function _requestUnshieldFromHandle(gtUint256 amountToUnshieldGt, address recipient, bool unwrapNative)
-        internal
+        private
         returns (uint256 decryptId)
     {
         PrivateERC20GaslessStorage.Layout storage $ = gaslessStorage();

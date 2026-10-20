@@ -13,6 +13,7 @@ import { signExecuteWithAuthorization } from "./helpers/gaslessAuth";
 import {
   deployMockToken,
   deployPrivateOPRFNotesLibrary,
+  findParsedLogInReceipt,
   PRIVATE_ERC20_256_GASLESS_FQN,
   PRIVATE_OPRF_NOTES_FQN,
   skipUnlessBubbleNetwork,
@@ -43,17 +44,9 @@ describe("PrivateERC20GaslessFactory", function () {
 
   /** The `TokenCreated` event in `receipt`; fails the test if it is missing. */
   function tokenCreated(receipt: any) {
-    const created = receipt.logs
-      .map((log: any) => {
-        try {
-          return factory.interface.parseLog(log);
-        } catch {
-          return null;
-        }
-      })
-      .find((parsed: any) => parsed?.name === "TokenCreated");
-    expect(created, "TokenCreated").to.not.equal(undefined);
-    return created;
+    const log = findParsedLogInReceipt(receipt, factory, "TokenCreated");
+    expect(log, "TokenCreated").to.not.equal(undefined);
+    return factory.interface.parseLog(log);
   }
 
   describe("input checks", function () {

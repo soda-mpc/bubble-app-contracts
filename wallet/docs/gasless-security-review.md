@@ -100,8 +100,8 @@ PrivateERC20Contract256Gasless
 
 | Contract | Size (bytes, with revert strings and metadata) |
 |---|---|
-| `PrivateERC20Contract256Gasless` | 22,824 |
-| `PrivateOPRFNotes` | 6,327 |
+| `PrivateERC20Contract256Gasless` | 21,687 |
+| `PrivateOPRFNotes` | 6,328 |
 | `PrivateERC20GaslessForwarder` | 4,269 |
 | `PrivateERC20GaslessFactory` | 9,032 |
 
@@ -190,7 +190,7 @@ A second architectural review moved logic to where it belongs and fixed what it 
 | `redeemManyToUnderlying` debits the pool directly | It credited and then debited the recipient, which once burned the recipient's own balance |
 | Emergency recovery retires the token | Recovery zeroed supply but kept encrypted balances, and `unpause` was open, so an old balance could unshield against later deposits |
 | Self-transfers follow OpenZeppelin ERC20 | Encrypted self-transfer returned true while emitting zero; self-`transferFrom` never checked the balance or spent the allowance |
-| Revert strings and CBOR metadata are back | After the refactor the token fits under the limit with both (22,824 bytes now), so the strip override in `hardhat.config.ts` is gone |
+| Revert strings and CBOR metadata are back | After the refactor the token fits under the limit with both (21,687 bytes now), so the strip override in `hardhat.config.ts` is gone |
 | One storage namespace, shared events interface, SafeERC20, fewer wrappers | Simpler layout and ABI; non-standard underlying tokens supported |
 | Own ERC-7201 namespace `bubble.storage.PrivateERC20Gasless`, annotated in an inherited abstract contract | The struct shared the old token's `bubble.storage.PrivateERC20Contract256` ID without the annotation, so the upgrades plugin never checked it. In-place upgrades from old token proxies are not supported |
 
@@ -201,5 +201,6 @@ Breaking changes for the indexer and frontend:
 - `redeemManyToUnderlying` no longer emits `PrivateTransfer(token → recipient)`.
 - In `splitToken`, `OPRFSplit` now comes after the two `OPRFMinted` logs (their order is unchanged).
 - An encrypted self-transfer the balance cannot cover returns false.
-- `initialize(string,string,address,address,address,bool)` is removed; use `initializeWithWrappedNative`.
+- Both `initialize` overloads are removed (the 6-argument one, and later the 5-argument one nothing called); use `initializeWithWrappedNative`.
+- `redeemMany` and `redeemManyToUnderlying` no longer emit a second `OPRFBurned(owner, recipient, totalBurned)` after the per-note ones. They emit `OPRFRedeemed(owner, recipient, amount)` with the redeemed amount instead, so summing `OPRFBurned` no longer counts a redeem twice. The per-note `OPRFBurned(owner, token, amount)` events are unchanged.
 - Token reverts carry their reason strings again.

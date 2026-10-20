@@ -171,8 +171,6 @@ library PrivateOPRFNotes {
     // Authorization helpers
     // ---------------------------------------------------------------------------------------------
 
-    /// @dev Only the IT owner may choose where a note's value goes. Anyone else (a relayer, or a signer who is not
-    ///      the owner) may only credit the owner.
     /// @dev Zero strands the value. The token address makes `_transferFromContract` credit the pool twice,
     ///      because the pool is both the sender and the recipient of that transfer.
     function _rejectBadRecipient(address recipient) private view {
@@ -180,6 +178,8 @@ library PrivateOPRFNotes {
         require(recipient != address(this), "Recipient cannot be token");
     }
 
+    /// @dev Only the IT owner may choose where a note's value goes. Any other caller (a relayer, or a signer who is
+    ///      not the owner) may only credit the owner.
     function _requireDest(address owner, address caller, address recipient) private pure {
         if (caller != owner) {
             require(recipient == owner, "Relayer dest must be IT owner");
@@ -303,23 +303,24 @@ library PrivateOPRFNotes {
         remainderAmount = MpcCore.mux(overflowBit, remainder, totalBurned);
     }
 
+    /// @dev Lets the owner read what was redeemed and burned, and issues the owner a note for the rest.
     function _mintRemainder(
         address owner,
         address recipient,
         gtUint256 totalBurned,
         gtUint256 recipientAmount,
-        gtUint256 senderRemainder
+        gtUint256 qRemainder
     ) private returns (
         gtUint128 xRemainder,
         gtUint128 yRemainder,
-        gtUint256 qRemainder
+        gtUint256
     ) {
         MpcCore.permit(recipientAmount, owner);
         MpcCore.permit(totalBurned, owner);
-        emit IPrivateERC20Gasless.OPRFBurned(owner, recipient, totalBurned);
+        emit IPrivateERC20Gasless.OPRFRedeemed(owner, recipient, recipientAmount);
 
-        qRemainder = senderRemainder;
         (xRemainder, yRemainder) = _issueNote(owner, qRemainder);
+        return (xRemainder, yRemainder, qRemainder);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -329,13 +330,9 @@ library PrivateOPRFNotes {
     /// @notice Moves `amount` from the token's pooled balance to `recipient`.
     /// @dev Only the recipient (and the token) may decrypt the credited amount. The caller is deliberately not
     ///      permitted: on relayed calls it is not the note owner, who is permitted separately by the entry point.
-    function _transferFromContract(address recipient, gtUint256 amount) private returns (gtUint256 transferredAmount) {
-        gtBool result = PrivateLedger.move(address(this), recipient, amount);
-
-        // `amount` is masked to zero when the transfer did not credit it.
-        transferredAmount = MpcCore.mux(MpcCore.not(result), amount, gaslessStorage().zero);
-        MpcCore.permitThis(transferredAmount);
-        MpcCore.permit(transferredAmount, recipient);
-        emit IPrivateERC20Gasless.PrivateTransfer(address(this), recipient, transferredAmount);
+    function _transferFromContract(address recipient, gtUint256 amount) private {
+        gtUint256 credited = PrivateLedger.movedAmount(PrivateLedger.move(address(this), recipient, amount), amount);
+        MpcCore.permit(credited, recipient);
+        emit IPrivateERC20Gasless.PrivateTransfer(address(this), recipient, credited);
     }
 }
