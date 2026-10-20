@@ -15,7 +15,7 @@ import {
   getUserKeyViaProxy,
 } from "./helpers/bubbleCryptoTransport";
 import { signExecuteWithAuthorization, signTransientInsertPermission } from "./helpers/gaslessAuth";
-import { encodeEncryptedTransfer, encodeShield } from "./helpers/safeInformedSign";
+import { encodeEncryptedTransfer, encodeShield } from "./helpers/gaslessCalldata";
 import {
   buildUnsignedItUint256,
   DELAY_BALANCE_SYNC_MS,
@@ -23,8 +23,12 @@ import {
   delay,
   deployMockToken,
   deployPrivateTokenGasless,
+  findParsedLogInReceipt,
+  findParsedLogInReceiptWhere,
   getGcAclAddress,
   getGcAclContract,
+  getPrivateTokenBalance,
+  getPrivateTransferAmountHandle,
   mintAndApprove,
   waitForUnshieldOutcome,
 } from "./helpers/testHelpers";
@@ -138,6 +142,11 @@ describe("PrivateERC20Contract256Gasless", function () {
         insert.nonce,
         insert.signature
       );
+  }
+
+  async function ownerPrivateBalance(): Promise<bigint> {
+    await delay(DELAY_BALANCE_SYNC_MS);
+    return getPrivateTokenBalance({ privateToken, address: owner.address, signer: owner, aesKey: ownerAesKey, proxyUrl: PROXY_URL });
   }
 
   async function execAsOwner(data: string, withInsertGrant = false) {
@@ -283,6 +292,7 @@ describe("PrivateERC20Contract256Gasless", function () {
     expect(shieldReceipt.from.toLowerCase()).to.equal(facilitator.address.toLowerCase());
     await delay(DELAY_BALANCE_SYNC_MS);
     expect(await mockToken.balanceOf(owner.address)).to.equal(underlyingBefore - shieldAmount);
+    const privateBefore = await ownerPrivateBalance();
 
     const clearData = privateToken.interface.encodeFunctionData("transfer(address,uint256)", [
       destination.address,
@@ -291,6 +301,8 @@ describe("PrivateERC20Contract256Gasless", function () {
     await expect(submitAsOwner(clearData))
       .to.emit(privateToken, "Transfer")
       .withArgs(owner.address, destination.address, moveAmount);
+    // `Transfer` carries the requested amount even if nothing moved, so check the balance.
+    expect(await ownerPrivateBalance(), "clear transfer debit").to.equal(privateBefore - moveAmount);
 
     const amountIt = buildUnsignedItUint256({
       value: moveAmount,
@@ -299,35 +311,32 @@ describe("PrivateERC20Contract256Gasless", function () {
       contractAddress: tokenAddress,
     });
     const privateReceipt = await execAsOwner(encodeEncryptedTransfer(destination.address, amountIt), true);
-    const privateTransfer = privateReceipt.logs
-      .map((log: { topics: string[]; data: string }) => {
-        try {
-          return privateToken.interface.parseLog(log);
-        } catch {
-          return null;
-        }
-      })
-      .find((parsed: { name: string } | null) => parsed?.name === "PrivateTransfer");
+    const privateTransferLog = findParsedLogInReceipt(privateReceipt, privateToken, "PrivateTransfer");
+    expect(privateTransferLog, "Expected PrivateTransfer event").to.not.equal(undefined);
+    const privateTransfer = privateToken.interface.parseLog(privateTransferLog);
     expect(privateTransfer.args.from).to.equal(owner.address);
     expect(privateTransfer.args.to).to.equal(destination.address);
+    await delay(DELAY_BALANCE_SYNC_MS);
+    const movedHandle = getPrivateTransferAmountHandle(privateReceipt, privateToken);
+    expect(await decryptValueViaProxy(movedHandle, owner, ownerAesKey, PROXY_URL), "encrypted transfer amount").to.equal(
+      moveAmount
+    );
+    expect(await ownerPrivateBalance(), "encrypted transfer debit").to.equal(privateBefore - 2n * moveAmount);
 
     const approveData = privateToken.interface.encodeFunctionData("approve(address,uint256)", [
       destination.address,
       moveAmount,
     ]);
     const approveReceipt = await execAsOwner(approveData);
-    const approval = approveReceipt.logs
-      .map((log: { topics: string[]; data: string }) => {
-        try {
-          return privateToken.interface.parseLog(log);
-        } catch {
-          return null;
-        }
-      })
-      .find(
-        (parsed: { name: string; args: { length: number } } | null) =>
-          parsed?.name === "Approval" && parsed.args.length === 3
-      );
+    // `Approval` is overloaded; the clear approve emits the 3-argument one.
+    const approvalLog = findParsedLogInReceiptWhere(
+      approveReceipt,
+      privateToken,
+      "Approval",
+      (parsed) => parsed.args?.length === 3
+    );
+    expect(approvalLog, "Expected the 3-argument Approval event").to.not.equal(undefined);
+    const approval = privateToken.interface.parseLog(approvalLog);
     expect(approval.args[0]).to.equal(owner.address);
     expect(approval.args[1]).to.equal(destination.address);
     expect(approval.args[2]).to.equal(moveAmount);
@@ -336,15 +345,17 @@ describe("PrivateERC20Contract256Gasless", function () {
     const unshieldTx = await submitAsOwner(privateToken.interface.encodeFunctionData("unshield", [moveAmount]));
     const unshieldReceipt = await unshieldTx.wait();
     expect(unshieldReceipt.from.toLowerCase()).to.equal(facilitator.address.toLowerCase());
-    const { successEvents, failedEvents } = await waitForUnshieldOutcome(privateToken, hre, startBlock, {
+    const { successEvents, failedEvents, parkedEvents } = await waitForUnshieldOutcome(privateToken, hre, startBlock, {
       timeoutMs: DELAY_MPC_REDEEM_MS * 6,
       pollIntervalMs: 3000,
     });
-    expect(failedEvents.length).to.equal(0);
+    expect(failedEvents.length, "unshield failed").to.equal(0);
+    expect(parkedEvents.length, "unshield payout parked").to.equal(0);
     expect(successEvents.length).to.be.greaterThan(0);
     const unshieldTo = (successEvents[0].args?.to ?? successEvents[0].args?.[0]) as string;
     expect(unshieldTo.toLowerCase()).to.equal(owner.address.toLowerCase());
     expect(await mockToken.balanceOf(owner.address)).to.equal(underlyingBefore - shieldAmount + moveAmount);
+    expect(await ownerPrivateBalance(), "unshield debit").to.equal(privateBefore - 3n * moveAmount);
   });
   });
 });
