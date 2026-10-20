@@ -8,6 +8,7 @@
     "deploy:upgradable": "hardhat run scripts/deploy-upgradable-private-erc20.ts --network sepolia",
     "prepare-upgrade": "hardhat run scripts/prepare-upgrade.ts --network sepolia",
     "test": "hardhat test",
+    "test:gasless": "hardhat test test/PrivateERC20GaslessForwarder.test.ts test/TUSDC.test.ts",
     "test:layout": "hardhat test test/PrivateERC20GaslessStorageLayout.test.ts",
     "transfer-ownership": "hardhat run scripts/transfer-ownership-to-safe.ts --network sepolia",
     "verify:environment": "hardhat run scripts/verify-contracts.ts"
