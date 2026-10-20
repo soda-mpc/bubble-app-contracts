@@ -15,6 +15,13 @@
  *       the owner's note ITs could self-sign an authorization and burn the note to itself.
  *       Now: only a caller (`_msgSender()`) equal to the IT owner may choose a recipient other than the owner.
  *
+ *   C3  A stranger passed the owner's public value IT (calldata is public) into `approve(spender, it)` or `transfer`
+ *       and so got decrypt permission on the owner's amount. Now: value ITs must belong to `_msgSender()` (or, on
+ *       a direct call, to `tx.origin`).
+ *
+ *   M1  A relayer that burned the owner's note to the owner was permitted on the burned amount and could read it.
+ *       Now: only the owner (and the token) are permitted on it.
+ *
  * Run: npx hardhat test test/PrivateERC20GaslessSecurity.test.ts --network sepolia-arbitrum
  */
 import { expect } from "chai";
@@ -37,6 +44,7 @@ import {
   deployMockToken,
   deployPrivateOPRFNotesLibrary,
   deployPrivateTokenGasless,
+  findParsedLogInReceipt,
   GCACL_ABI,
   getGcAclAddress,
   getGcAclContract,
@@ -306,7 +314,7 @@ describe("PrivateERC20Contract256Gasless security", function () {
     });
   });
 
-  describe("C2: relayer bypasses the OPRF dest lock via a self-signed authorization", function () {
+  describe("C2 / C3 / M1: a relayer holding the owner's note ITs while the owner grants full insert access", function () {
     let tokenInput: any[];
 
     before(async function () {
@@ -331,7 +339,7 @@ describe("PrivateERC20Contract256Gasless security", function () {
       expect(q).to.equal(NOTE_AMOUNT);
 
       // Unsigned-relay setup: the victim hands its note ITs to a relayer and grants the token contract
-      // full insert access (same as test/integration/safe-oprf-facilitator*.test.ts).
+      // full insert access, so the token accepts the owner's ITs whoever submits them.
       tokenInput = [
         {
           x: buildUnsignedItUint128({
@@ -370,37 +378,6 @@ describe("PrivateERC20Contract256Gasless security", function () {
       ).to.be.revertedWith("Relayer dest must be IT owner");
     });
 
-    it("self-signed authorized burnToken must not pay the relayer from the owner's note", async function () {
-      const attackerBalanceBefore = await getPrivateTokenBalance({
-        privateToken,
-        address: attacker.address,
-        signer: attacker,
-        aesKey: attackerAesKey,
-        proxyUrl: PROXY_URL,
-      });
-
-      const { x, q, y_clear } = tokenInput[0];
-      const result = await executeAsAttacker(
-        privateToken.interface.encodeFunctionData("burnToken", [x, q, y_clear, attacker.address])
-      );
-
-      if (result.ok) {
-        await delay(DELAY_MPC_EXTENDED_MS);
-        const attackerBalanceAfter = await getPrivateTokenBalance({
-          privateToken,
-          address: attacker.address,
-          signer: attacker,
-          aesKey: attackerAesKey,
-          proxyUrl: PROXY_URL,
-        });
-        expect.fail(
-          `VULNERABLE: relayer burned the owner's note to itself; attacker private balance ` +
-            `${attackerBalanceBefore} -> ${attackerBalanceAfter} (note amount ${NOTE_AMOUNT})`
-        );
-      }
-      expect(result.ok, "authorized burn of a foreign note to the relayer should revert").to.equal(false);
-    });
-
     it("C3: a stranger must not decrypt the owner's amount IT via approve(spender, it)", async function () {
       // Owner has granted the token full insert access (needed for unsigned relay). The IT is any amount the owner
       // submitted before (calldata is public), here a fresh one for a secret value.
@@ -414,8 +391,9 @@ describe("PrivateERC20Contract256Gasless security", function () {
       let approved = true;
       try {
         await (await privateToken.connect(attacker)["approve(address,(address,(uint256,uint256)))"](attacker.address, ownerIt)).wait();
-      } catch {
+      } catch (error) {
         approved = false;
+        expect((error as Error).message).to.contain("IT not owned by caller");
       }
       if (approved) {
         const handle: bigint = await privateToken.connect(attacker).allowance(attacker.address, attacker.address);
@@ -437,7 +415,7 @@ describe("PrivateERC20Contract256Gasless security", function () {
       }
     });
 
-    it("C2: the self-signed burnToken revert is the dest lock", async function () {
+    it("C2: a self-signed burnToken of the owner's note to the relayer reverts at the dest lock", async function () {
       const { x, q, y_clear } = tokenInput[0];
       await expect(
         signAndForward(attacker, privateToken.interface.encodeFunctionData("burnToken", [x, q, y_clear, attacker.address]))
@@ -454,11 +432,16 @@ describe("PrivateERC20Contract256Gasless security", function () {
       await expect(privateToken.connect(attacker).mintOPRFToken(it)).to.be.revertedWith("IT not owned by caller");
     });
 
-    it("C3: approve / transfer / mintOPRFToken reject the owner's IT when the stranger signs (forwarded)", async function () {
+    it("C3: approve / transfer / transferFrom / mintOPRFToken reject the owner's IT when the stranger signs (forwarded)", async function () {
       const it = ownerIt256(1n);
       const calls = [
         privateToken.interface.encodeFunctionData("approve(address,(address,(uint256,uint256)))", [attacker.address, it]),
         privateToken.interface.encodeFunctionData("transfer(address,(address,(uint256,uint256)))", [attacker.address, it]),
+        privateToken.interface.encodeFunctionData("transferFrom(address,address,(address,(uint256,uint256)))", [
+          attacker.address,
+          attacker.address,
+          it,
+        ]),
         privateToken.interface.encodeFunctionData("mintOPRFToken", [it]),
       ];
       for (const data of calls) {
@@ -482,11 +465,16 @@ describe("PrivateERC20Contract256Gasless security", function () {
         await privateToken.connect(attacker).burnToken(ownerIt128(x), ownerIt256(q), y, owner.address)
       ).wait();
       await delay(DELAY_MPC_EXTENDED_MS);
-      const amountHandle = getPrivateTransferAmountHandle(burnReceipt, privateToken);
+      const creditedHandle = getPrivateTransferAmountHandle(burnReceipt, privateToken);
+      const burnedLog = findParsedLogInReceipt(burnReceipt, privateToken, "OPRFBurned");
+      expect(burnedLog, "OPRFBurned").to.not.equal(undefined);
+      const burnedHandle = privateToken.interface.parseLog(burnedLog).args[2] as bigint;
 
       const gcAcl = gcAclAsOwner.connect(attacker);
-      expect(await gcAcl.isPermitted(amountHandle, attacker.address), "relayer must not be permitted").to.equal(false);
-      expect(await decryptValueViaProxy(amountHandle, owner, ownerAesKey, PROXY_URL)).to.equal(amount);
+      for (const [label, handle] of [["credited", creditedHandle], ["burned", burnedHandle]] as const) {
+        expect(await gcAcl.isPermitted(handle, attacker.address), `relayer must not be permitted on the ${label} amount`).to.equal(false);
+        expect(await decryptValueViaProxy(handle, owner, ownerAesKey, PROXY_URL), `${label} amount`).to.equal(amount);
+      }
     });
 
     it("owner-signed burnToken can pay a third party (library path via forwarder)", async function () {
@@ -740,11 +728,26 @@ describe("PrivateERC20Contract256Gasless security", function () {
     });
 
     it("owner upgrade to an implementation linked to a fresh library keeps state, the forwarder and notes", async function () {
+      // A note minted through the old implementation and library, spent after the upgrade.
+      const noteAmount = 1000n + BigInt(Math.floor(Math.random() * 1000));
+      const mintReceipt = await (await privateToken.connect(owner)["shieldAndMint(uint256)"](noteAmount)).wait();
+      await delay(DELAY_MPC_EXTENDED_MS);
+      const handles = getOprfMintedHandlesFromReceipt(mintReceipt, privateToken)!;
+      const [x, y, q] = await decryptMultipleValuesViaProxy(
+        [handles.xHandle, handles.yHandle, handles.qHandle],
+        owner,
+        ownerAesKey,
+        PROXY_URL
+      );
+      expect(q).to.equal(noteAmount);
+
       const balanceBefore: bigint = await privateToken["balanceOf(address)"](owner.address);
       const supplyBefore: bigint = await privateToken.totalSupply();
+      const oprfKeyBefore = await hre.ethers.provider.getStorage(tokenAddress, OPRF_KEY_SLOT);
       // Each implementation is linked to a library deployed from the same commit, never a stale address.
+      const oldLibrary: string = privateToken.oprfNotesLibrary;
+      expect(oldLibrary).to.be.properAddress;
       const library = await deployPrivateOPRFNotesLibrary(hre, owner);
-      expect(library).to.not.equal(privateToken.oprfNotesLibrary);
       const factory = await hre.ethers.getContractFactory(PRIVATE_ERC20_256_GASLESS_FQN, {
         signer: owner,
         libraries: { [PRIVATE_OPRF_NOTES_FQN]: library },
@@ -764,11 +767,20 @@ describe("PrivateERC20Contract256Gasless security", function () {
       expect(await privateToken.name()).to.equal(TOKEN_NAME);
       expect(await privateToken["balanceOf(address)"](owner.address)).to.equal(balanceBefore);
       expect(await privateToken.totalSupply()).to.equal(supplyBefore);
+      expect(await hre.ethers.provider.getStorage(tokenAddress, OPRF_KEY_SLOT), "OPRF key").to.equal(oprfKeyBefore);
+
+      // The pre-upgrade note burns through the new library for its full amount.
+      const burnReceipt = await (
+        await privateToken.connect(owner).burnToken(ownerIt128(x), ownerIt256(q), y, owner.address)
+      ).wait();
+      await delay(DELAY_MPC_EXTENDED_MS);
+      const credited = getPrivateTransferAmountHandle(burnReceipt, privateToken);
+      expect(await decryptValueViaProxy(credited, owner, ownerAesKey, PROXY_URL), "pre-upgrade note").to.equal(noteAmount);
 
       // Gasless still works after the upgrade.
       const { tx } = await signAndForward(owner, privateToken.interface.encodeFunctionData("approve(address,uint256)", [attacker.address, 2n]));
       await expect(tx).to.emit(forwarder, "AuthorizationExecuted");
-      // Note issuance runs through the new library, against the token's existing OPRF key.
+      // New issuance runs through the new library too.
       await expect(privateToken.connect(owner)["shieldAndMint(uint256)"](1n)).to.emit(privateToken, "OPRFMinted");
     });
   });
