@@ -12,6 +12,26 @@ import {
   prepareMessageForBubble256,
   retryWithBackoff,
 } from "./bubbleCryptoTransport";
+import {
+  deployPrivateOPRFNotesLibrary,
+  ERC1967_PROXY_FQN,
+  PRIVATE_ERC20_256_GASLESS_FQN,
+  PRIVATE_ERC20_GASLESS_FORWARDER_FQN,
+  PRIVATE_OPRF_NOTES_FQN,
+  waitForContractCode,
+  waitForDeploymentConfirmation,
+} from "../../scripts/gasless-deploy-utils";
+
+// Deployment building blocks live in scripts/ so deploy scripts need nothing from test/. Re-exported for tests.
+export {
+  deployPrivateOPRFNotesLibrary,
+  ERC1967_PROXY_FQN,
+  PRIVATE_ERC20_256_GASLESS_FQN,
+  PRIVATE_ERC20_GASLESS_FORWARDER_FQN,
+  PRIVATE_OPRF_NOTES_FQN,
+  waitForContractCode,
+  waitForDeploymentConfirmation,
+};
 
 export async function expectReverted(txPromise: Promise<any>): Promise<void> {
   try {
@@ -88,12 +108,6 @@ export async function getGcAclContract(hre: { ethers: { provider: { getNetwork: 
 }
 
 export const PRIVATE_ERC20_256_FQN = "contracts/PrivateERC20Contract256.sol:PrivateERC20Contract256";
-export const PRIVATE_ERC20_256_GASLESS_FQN =
-  "contracts/PrivateERC20Contract256Gasless.sol:PrivateERC20Contract256Gasless";
-export const PRIVATE_OPRF_NOTES_FQN = "contracts/libraries/PrivateOPRFNotes.sol:PrivateOPRFNotes";
-export const PRIVATE_ERC20_GASLESS_FORWARDER_FQN =
-  "contracts/PrivateERC20GaslessForwarder.sol:PrivateERC20GaslessForwarder";
-export const ERC1967_PROXY_FQN = "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy";
 
 export const DELAY_SHORT_MS = 2000;
 export const DELAY_STANDARD_MS = 3000;
@@ -106,44 +120,6 @@ export const DELAY_MPC_REDEEM_MS = 30000;
 
 export async function delay(ms: number): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, ms));
-}
-
-export async function waitForContractCode(
-  address: string,
-  hre: HardhatRuntime,
-  timeoutMs = 5000,
-  pollIntervalMs = 500
-): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const code = await hre.ethers.provider.getCode(address);
-    if (code && code !== "0x") {
-      return code;
-    }
-    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
-  }
-  throw new Error(`Contract at ${address} still has no code after ${timeoutMs}ms`);
-}
-
-/**
- * After deployment, wait for the deployment tx (if present), then poll until `getCode` is non-empty
- * (helps with RPC propagation). Same pattern as restriction-list integration tests.
- */
-export async function waitForDeploymentConfirmation(
-  contract: {
-    deploymentTransaction?: () => { wait?: () => Promise<unknown> } | null | undefined;
-    getAddress: () => Promise<string>;
-  },
-  hre: HardhatRuntime,
-  options?: { pollIntervalMs?: number; maxAttempts?: number }
-): Promise<void> {
-  const tx = typeof contract.deploymentTransaction === "function" ? contract.deploymentTransaction() : null;
-  if (tx && typeof tx.wait === "function") {
-    await tx.wait();
-  }
-  const address = await contract.getAddress();
-  const { pollIntervalMs = 2000, maxAttempts = 10 } = options ?? {};
-  await waitForContractCode(address, hre, maxAttempts * pollIntervalMs, pollIntervalMs);
 }
 
 async function deployProxyBackedContract(params: {
@@ -257,15 +233,6 @@ export async function deployPrivateTokenGasless(
     );
   }
   return token;
-}
-
-/** Deploys the PrivateOPRFNotes library linked by PrivateERC20Contract256Gasless. Returns its address. */
-export async function deployPrivateOPRFNotesLibrary(hre: HardhatRuntime, signer: any): Promise<string> {
-  const factory = await hre.ethers.getContractFactory(PRIVATE_OPRF_NOTES_FQN, signer);
-  const library = await factory.deploy();
-  await library.waitForDeployment();
-  await waitForDeploymentConfirmation(library, hre);
-  return library.getAddress();
 }
 
 export async function deployPrivateTokenImplementation(
@@ -527,6 +494,26 @@ export function findParsedLogInReceipt(
   eventName: string
 ): any | undefined {
   return parseReceiptLogs(receipt, contract).find((entry) => entry.name === eventName)?.log;
+}
+
+/** First `eventName` event in the receipt, already parsed (`name`, `args`), or undefined. */
+export function findEventInReceipt(
+  receipt: Parameters<typeof findParsedLogInReceipt>[0],
+  contract: Parameters<typeof findParsedLogInReceipt>[1],
+  eventName: string
+): any | undefined {
+  return parseReceiptLogs(receipt, contract).find((entry) => entry.name === eventName)?.parsed;
+}
+
+/** Every `eventName` event in the receipt, already parsed. */
+export function findEventsInReceipt(
+  receipt: Parameters<typeof findParsedLogInReceipt>[0],
+  contract: Parameters<typeof findParsedLogInReceipt>[1],
+  eventName: string
+): any[] {
+  return parseReceiptLogs(receipt, contract)
+    .filter((entry) => entry.name === eventName)
+    .map((entry) => entry.parsed);
 }
 
 /** `PrivateTransfer` amount handle (`args[2]`) from a transfer receipt. */

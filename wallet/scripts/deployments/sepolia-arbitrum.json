@@ -27,11 +27,11 @@
     "blockNumber": 283047812
   },
   "gaslessFactory": {
-    "library": "0x996d2d2977E0FbbAAF09DE9E4e5c5748ABc05e1C",
-    "implementation": "0xeA390B51b6Fb568939fBdDfaB75843e124619D55",
-    "factory": "0x0422d7D8D0F6bBDF94FB9637EFcd850f8e3d6a25",
-    "blockNumber": 321076979,
-    "deployedAt": "2026-10-20T13:51:47.705Z"
+    "library": "0x74Bb80ac63a87d4853d5ABa935ef159e38ee9C69",
+    "implementation": "0xd4572F5C23F5bB278d421d80809Bf37630334981",
+    "factory": "0xc86F46e8c5F1F429E80879f715de37fAb3F0670e",
+    "blockNumber": 321117740,
+    "deployedAt": "2026-10-20T16:44:28.381Z"
   },
   "gaslessTestToken": {
     "address": "0x4Ed6d719D16C157F90331dd438F70C9119056876",

@@ -44,7 +44,7 @@ import {
   deployMockToken,
   deployPrivateOPRFNotesLibrary,
   deployPrivateTokenGasless,
-  findParsedLogInReceipt,
+  findEventInReceipt,
   GCACL_ABI,
   getGcAclAddress,
   getGcAclContract,
@@ -466,9 +466,9 @@ describe("PrivateERC20Contract256Gasless security", function () {
       ).wait();
       await delay(DELAY_MPC_EXTENDED_MS);
       const creditedHandle = getPrivateTransferAmountHandle(burnReceipt, privateToken);
-      const burnedLog = findParsedLogInReceipt(burnReceipt, privateToken, "OPRFBurned");
-      expect(burnedLog, "OPRFBurned").to.not.equal(undefined);
-      const burnedHandle = privateToken.interface.parseLog(burnedLog).args[2] as bigint;
+      const burned = findEventInReceipt(burnReceipt, privateToken, "OPRFBurned");
+      expect(burned, "OPRFBurned").to.not.equal(undefined);
+      const burnedHandle = burned.args[2] as bigint;
 
       const gcAcl = gcAclAsOwner.connect(attacker);
       for (const [label, handle] of [["credited", creditedHandle], ["burned", burnedHandle]] as const) {
@@ -552,15 +552,7 @@ describe("PrivateERC20Contract256Gasless security", function () {
         privateToken.interface.encodeFunctionData("approve(address,uint256)", [attacker.address, 7n]) +
         owner.address.slice(2).toLowerCase();
       const receipt = await (await attacker.sendTransaction({ to: tokenAddress, data })).wait();
-      const approval = receipt.logs
-        .map((log: any) => {
-          try {
-            return privateToken.interface.parseLog(log);
-          } catch {
-            return null;
-          }
-        })
-        .find((e: any) => e?.name === "Approval");
+      const approval = findEventInReceipt(receipt, privateToken, "Approval");
       expect(approval, "no Approval event found in the direct-call receipt").to.not.equal(undefined);
       expect(approval!.args[0].toLowerCase()).to.equal(attacker.address.toLowerCase());
     });
@@ -636,15 +628,7 @@ describe("PrivateERC20Contract256Gasless security", function () {
 
       const grant = await ownerGrant();
       const receipt = await forwardAsOwner(approveIt(), grant);
-      const approval = receipt!.logs
-        .map((log: any) => {
-          try {
-            return privateToken.interface.parseLog(log);
-          } catch {
-            return null;
-          }
-        })
-        .find((e: any) => e?.name === "Approval");
+      const approval = findEventInReceipt(receipt, privateToken, "Approval");
       expect(approval, "no Approval event in the relayed receipt").to.not.equal(undefined);
       expect(approval!.args[0]).to.equal(owner.address);
       expect(approval!.args[1]).to.equal(attacker.address);

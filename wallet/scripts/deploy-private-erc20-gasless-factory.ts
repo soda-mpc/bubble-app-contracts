@@ -18,7 +18,7 @@ import {
   PRIVATE_OPRF_NOTES_FQN,
   deployPrivateOPRFNotesLibrary,
   waitForDeploymentConfirmation,
-} from "../test/helpers/testHelpers";
+} from "./gasless-deploy-utils";
 import { saveDeploymentRecord } from "./deployment-io";
 
 async function main() {

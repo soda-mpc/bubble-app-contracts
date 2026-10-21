@@ -13,7 +13,7 @@ library PrivateLedger {
     // ---------------------------------------------------------------------------------------------
 
     /// @notice Balance handle of `account`, or the stored zero handle if it was never set.
-    function balanceOf(address account) internal view returns (gtUint256 balance) {
+    function balanceOf(address account) private view returns (gtUint256 balance) {
         PrivateERC20GaslessStorage.Layout storage $ = gaslessStorage();
         balance = $.balances[account];
         if (gtUint256.unwrap(balance) == 0) {
@@ -21,7 +21,7 @@ library PrivateLedger {
         }
     }
 
-    function setBalance(address account, gtUint256 balance) internal {
+    function setBalance(address account, gtUint256 balance) private {
         gaslessStorage().balances[account] = balance;
         MpcCore.permitThis(balance);
         if (account != address(this)) {
@@ -122,6 +122,12 @@ library PrivateLedger {
         require(from != to, "Ledger self-move");
         setBalance(from, newFrom);
         setBalance(to, newTo);
+    }
+
+    /// @notice What a move actually credited: `amount` when `ok`, otherwise the zero handle.
+    function movedAmount(gtBool ok, gtUint256 amount) internal returns (gtUint256) {
+        // mux(bit, a, b) returns b when bit is true; not(ok) is true when nothing moved.
+        return MpcCore.mux(MpcCore.not(ok), amount, gaslessStorage().zero);
     }
 
     // ---------------------------------------------------------------------------------------------

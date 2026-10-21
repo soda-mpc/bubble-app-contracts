@@ -7,7 +7,7 @@ Developed on the `gasless` branch (review first done on `shield-and-mint`) and m
 - The pre-staging review of the gasless token found **two critical bugs** in the gasless path (C1, C2) and later **one high-severity privacy leak** (C3). All three were reproduced on Arbitrum Sepolia before being fixed.
 - The gasless path was redesigned: the token no longer calls itself. A separate **ERC-2771 forwarder** verifies the user's EIP-712 signature and relays the call; OPRF note logic moved into a **linked library**, first to stay under the 24 KB contract size limit.
 - A follow-up refactor (section 8) split the code by responsibility, made emergency recovery retire the token, fixed self-transfer semantics and restored revert strings.
-- 63 tests in the gasless suites pass on Arbitrum Sepolia, including a regression test for every finding: core 9, gasless and original contract 13, security 28, anonymity 4, native unwrap 3, factory 6. The local suites (`npx hardhat test`) cover the forwarder, the factory's input checks and the storage layout.
+- 64 tests in the gasless suites pass on Arbitrum Sepolia, including a regression test for every finding: core 9, gasless and original contract 14, security 28, anonymity 4, native unwrap 3, factory 6. The local suites (`npx hardhat test`) cover the forwarder, the factory's input checks and the storage layout.
 
 ## 1. Findings
 
@@ -100,8 +100,8 @@ PrivateERC20Contract256Gasless
 
 | Contract | Size (bytes, with revert strings and metadata) |
 |---|---|
-| `PrivateERC20Contract256Gasless` | 22,824 |
-| `PrivateOPRFNotes` | 6,327 |
+| `PrivateERC20Contract256Gasless` | 21,687 |
+| `PrivateOPRFNotes` | 6,350 |
 | `PrivateERC20GaslessForwarder` | 4,269 |
 | `PrivateERC20GaslessFactory` | 9,032 |
 
@@ -144,7 +144,7 @@ PrivateERC20Contract256Gasless
 | `tx.origin` on notes | A contract the owner calls directly cannot burn the owner's note to itself |
 | C3 | Foreign ciphertext rejected in approve / transfer / transferFrom / mintOPRFToken, direct and forwarded |
 | M1 | Relayer not permitted on the credited or the burned amount; owner decrypts exact value |
-| Notes | Split, merge (the same note twice counts once), transferOPRF to a third party, burn; value conserved |
+| Notes | Split, merge (the same note twice counts once), transferOPRF to a third party, burn, redeemMany to a third party (decrypted amounts, remainder and recipient balance); value conserved |
 | Native unwrap | Call-based withdraw pays native; WETH9-style withdraw and a gas-burning recipient fall back to the wrapped token; nothing parked |
 | Events | Self-transfer amount correct when sufficient, zero when not; `UnshieldRequested` on the redeem-to-underlying path |
 | Self-transfers | Balance unchanged; clear, encrypted and raw-handle self-`transferFrom` spend the allowance only when balance and allowance cover it |
@@ -190,7 +190,7 @@ A second architectural review moved logic to where it belongs and fixed what it 
 | `redeemManyToUnderlying` debits the pool directly | It credited and then debited the recipient, which once burned the recipient's own balance |
 | Emergency recovery retires the token | Recovery zeroed supply but kept encrypted balances, and `unpause` was open, so an old balance could unshield against later deposits |
 | Self-transfers follow OpenZeppelin ERC20 | Encrypted self-transfer returned true while emitting zero; self-`transferFrom` never checked the balance or spent the allowance |
-| Revert strings and CBOR metadata are back | After the refactor the token fits under the limit with both (22,824 bytes now), so the strip override in `hardhat.config.ts` is gone |
+| Revert strings and CBOR metadata are back | After the refactor the token fits under the limit with both (21,687 bytes now), so the strip override in `hardhat.config.ts` is gone |
 | One storage namespace, shared events interface, SafeERC20, fewer wrappers | Simpler layout and ABI; non-standard underlying tokens supported |
 | Own ERC-7201 namespace `bubble.storage.PrivateERC20Gasless`, annotated in an inherited abstract contract | The struct shared the old token's `bubble.storage.PrivateERC20Contract256` ID without the annotation, so the upgrades plugin never checked it. In-place upgrades from old token proxies are not supported |
 
@@ -201,5 +201,7 @@ Breaking changes for the indexer and frontend:
 - `redeemManyToUnderlying` no longer emits `PrivateTransfer(token → recipient)`.
 - In `splitToken`, `OPRFSplit` now comes after the two `OPRFMinted` logs (their order is unchanged).
 - An encrypted self-transfer the balance cannot cover returns false.
-- `initialize(string,string,address,address,address,bool)` is removed; use `initializeWithWrappedNative`.
+- Both `initialize` overloads are removed (the 6-argument one, and later the 5-argument one nothing called); use `initializeWithWrappedNative`.
+- `redeemMany` and `redeemManyToUnderlying` no longer emit a second `OPRFBurned(owner, recipient, totalBurned)` after the per-note ones. They emit `OPRFRedeemed(owner, recipient, amount)` with the amount that actually moved (credited, or debited from the pool for unshield) instead, so summing `OPRFBurned` no longer counts a redeem twice. The per-note `OPRFBurned(owner, token, amount)` events are unchanged.
+- Event amount handles are decrypt-only: the token keeps no persistent rights on them, so pass a balance handle or a fresh IT to `contractTransfer` / `contractTransferFrom` / `contractApprove`. This was already true for `PrivateTransfer` from transfers; the note pool transfer (burn, `redeemMany`) no longer differs.
 - Token reverts carry their reason strings again.
